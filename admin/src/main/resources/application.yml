@@ -1,0 +1,64 @@
+
+server:
+  port: 8083
+  servlet:
+    context-path: /
+
+
+swagger:
+    enabled: true
+    base-package:
+      - com.yulinlin.admin
+    contact:
+        name: 雨霖霖
+        email:
+    description: 管理系统
+
+
+spring:
+  boot:
+    admin:
+      client:
+        url: http://localhost:8082
+
+  cache:
+    type: ehcache  #指定缓存类型
+    ehcache:
+      config: classpath:ehcache.xml #缓存加载配置文件
+  servlet:
+    multipart:
+      max-request-size: 20MB
+      max-file-size: 100MB
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+  main:
+    allow-bean-definition-overriding: true
+  profiles:
+    active: dev
+
+
+      # 差异性配置 一般是  数据库地址  swagger 配置 框架配置
+    include:
+  application:
+    name: yulinlin
+  redis:
+    database: 0
+    port: 6379
+    password:
+    host: 127.0.0.1
+  session:
+    store-type: redis
+  aop:
+    auto: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+
+
+
+

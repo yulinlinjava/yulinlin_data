@@ -42,6 +42,11 @@ public class SysUserEntity extends SuperEntity<SysUserEntity> implements IInitEv
         @JoinField
         private String password;
 
+    @NotEmpty(message = "必填")
+    @ApiModelProperty("金币")
+    @JoinWhere
+    @JoinField
+        private Integer gold;
 
         private ListString data;
 

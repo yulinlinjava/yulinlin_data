@@ -48,16 +48,11 @@ public class SysUserEntity extends SuperEntity<SysUserEntity> implements IInitEv
     @JoinField
         private Integer gold;
 
-        private ListString data;
+
+        private Map<String,Object> data;
 
 
 
-   /*     @NotEmpty(message = "必填")
-        @ApiModelProperty("角色集合")
-        @JoinWhere
-        @JoinField
-        private ListString<String> sysRoleIds;
-*/
 
         @Override
         public void init() {

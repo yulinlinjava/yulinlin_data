@@ -151,69 +151,150 @@ public class SysUserEntity   extends SuperEntity<SysUserEntity>  {
 }
 
 
+package com.yulinlin.admin;
+
+
+import com.yulinlin.common.model.ModelDeleteWrapper;
+import com.yulinlin.common.model.ModelInsertWrapper;
+import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.common.model.ModelUpdateWrapper;
+import com.yulinlin.data.lang.util.Page;
+import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.Arrays;
+import java.util.List;
+
+//
+@Slf4j
+@SpringBootTest
+public class CrudApplicationTests {
+
+
+
+    @SneakyThrows
     @Test
     public void insert(){
 
+        SysUserEntity sysUserEntity = new SysUserEntity();
 
-        //创建用户对象
-        SysUserEntity e =  new SysUserEntity();
-        e.setUsername("admin");
-        e.setPassword("admin");
+        sysUserEntity.setNickname("随机账号");
+        sysUserEntity.setPassword("随机密码");
 
-        //获得插入构造器
-        ModelInsertWrapper wrappper =ModelInsertWrapper.newInstance(e);
+        //返回插入结果。可能抛出异常
+        int execute = ModelInsertWrapper.newInstance(sysUserEntity)
+                .execute();
 
-        //查看sql
-        String sql = wrappper
-                //获取sql
-                .getSql();
+        int a = 0;
+    }
 
-        //insert into  sys_user ( username , email , password , id )  values  ( #{0} , #{1} , #{2} , #{3} ) 
- 
-        //数据库执行
-        //int total = wrappper.execute();
+    @SneakyThrows
+    @Test
+    public void select(){
+        //查询列表
+        List<SysUserEntity> execute = ModelSelectWrapper.newInstance(SysUserEntity.class)
+                //相等 =
+                .eq(SysUserEntity::getId,1)
+                //属于  id in (1,2,3)
+                .in(SysUserEntity::getId, Arrays.asList(1,2,3))
+                //模糊 like
+                .like(SysUserEntity::getNickname,"11")
 
+                //大于 >
+                .gt(SysUserEntity::getId,1)
+                //大于等于 >=
+                .gte(SysUserEntity::getId,1)
+
+                //排序
+                .orderByAsc(SysUserEntity::getId)
+                //逆序
+                .orderByDesc(SysUserEntity::getId)
+                //分页参数
+                .page(1,100)
+                //执行查询 selectOne 是查询一个
+
+                .selectList();
+
+    }
+
+    @SneakyThrows
+    @Test
+    public void selectPage(){
+        /**
+         * @Getter
+         * public class Page<E>  implements Iterable<E>{
+         *
+         *
+         *     private List<E> list;
+         *
+         *     private int total;
+         *
+         *     private Map<String,Object> extra;
+         *
+         *
+         *     public Page() {
+         *     }
+         */
+        Page<SysUserEntity> execute = ModelSelectWrapper.newInstance(SysUserEntity.class)
+                //相等 =
+                .eq(SysUserEntity::getId,1)
+                //大于 >
+                .gt(SysUserEntity::getId,1)
+                //大于等于 >=
+                .gte(SysUserEntity::getId,1)
+                //模糊 like
+                .like(SysUserEntity::getNickname,"11")
+                //排序
+                .orderByAsc(SysUserEntity::getId)
+                //逆序
+                .orderByDesc(SysUserEntity::getId)
+                //分页查询
+
+
+                .selectPage(1,100);
+
+    }
+
+    @SneakyThrows
+    @Test
+    public void update(){
+
+
+        //返回修改结果。
+        int execute = ModelUpdateWrapper.newInstance(SysUserEntity.class)
+                //字段赋值
+                .field(SysUserEntity::getNickname,1)
+                //金币自增 gold = gold + 1
+                .inc(SysUserEntity::getGold,1)
+                //金币自减  gold = gold - 1
+                .dec(SysUserEntity::getGold,1)
+                .execute();
 
     }
 
 
+    @SneakyThrows
     @Test
     public void delete(){
 
-        SysUserEntity e = new SysUserEntity();
-        e.setId("1");
-        //解析实体类 主键字段会作为删除条件，
-        ModelDeleteWrapper wrapper =  ModelDeleteWrapper.newInstance(e);
-        //查看sql
-        String sql =  wrapper.getSql();
-        //delete from  sys_user where id = #{0}
-        //数据库执行
-      	//int total =  wrapper.execute();
 
-        //和上面等价，编程写法
-         ModelDeleteWrapper.newInstance(SysUserEntity.class)
-                //删除id = 1
-                .eq("id",1)
-                //获取sql
-                .getSql();
-     }
+        //返回删除结果。   条件和查询一样用法
+        int execute = ModelDeleteWrapper.newInstance(SysUserEntity.class)
+                //相等 =
+                .eq(SysUserEntity::getId,1)
+                //属于  id in (1,2,3)
+                .in(SysUserEntity::getId, Arrays.asList(1,2,3))
+                //模糊 like
+                .like(SysUserEntity::getNickname,"11")
 
-@Test
-public void update(){
+                .execute();
 
-    SysUserEntity e = new SysUserEntity();
-    e.setId("1");
-    e.setEmail("123@qq.com");
-    e.setUsername("admin");
-    e.setPassword("admin");
-    //解析实体类 主键字段会作为更新条件，其他作为值字段
-    ModelUpdateWrapper wrapper =  ModelUpdateWrapper.newInstance(e);
-    //查看sql
-    String sql =  wrapper.getSql();
-    //update  sys_user set username = #{0} , email = #{1} , password = #{2} where id = #		{3}
-
+    }
 
 }
 
-**
+
+***
 

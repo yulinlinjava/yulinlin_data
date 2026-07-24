@@ -2,21 +2,18 @@
 
 ### 依赖导入
 
-***
+
+``` 依赖导入
 <dependency>
-<groupId>com.yulinlin</groupId>
-<artifactId>mysql</artifactId>
-<version>2.0</version>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>mysql</artifactId>
+    <version>2.0</version>
 </dependency>
-***
-
-
+```
 #### 定义数据模型
 
-**
-
 这个是orm框架提供的内置复用对象，提供必备id字段的类
-
+``` 
 public class IdEntity<E extends IdEntity<E>>   implements Serializable , AbstractModel<E>{
 
     @JoinWhere
@@ -52,9 +49,10 @@ public class IdEntity<E extends IdEntity<E>>   implements Serializable , Abstrac
         this.id = id;
     }
 }
-
+``` 
 
 这个是orm框架提供的内置复用对象，提供必备时间字段的类
+``` 
 public abstract class SuperEntity<E extends SuperEntity<E>> extends IdEntity<E>  {
 
 
@@ -104,9 +102,10 @@ public abstract class SuperEntity<E extends SuperEntity<E>> extends IdEntity<E> 
         this.uptTime = uptTime;
     }
 }
-
+``` 
 
 使用
+``` 
 import com.yulinlin.common.domain.SuperEntity;
 import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinTable;
@@ -296,5 +295,5 @@ public class CrudApplicationTests {
 }
 
 
-***
+``` 
 

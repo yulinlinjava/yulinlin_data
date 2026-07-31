@@ -34,6 +34,9 @@ public class CrudApplicationTests {
         int execute = ModelInsertWrapper.newInstance(sysUserEntity)
                 .execute();
 
+        //批量插入
+        int execute2 = ModelInsertWrapper.newInstance(Arrays.asList(sysUserEntity))
+                .execute();
         int a = 0;
     }
 
@@ -108,7 +111,10 @@ public class CrudApplicationTests {
     @Test
     public void update(){
 
+        SysUserEntity sysUserEntity = new SysUserEntity();
 
+        sysUserEntity.setNickname("随机账号");
+        sysUserEntity.setPassword("随机密码");
         //返回修改结果。
         int execute = ModelUpdateWrapper.newInstance(SysUserEntity.class)
                 //字段赋值
@@ -117,6 +123,22 @@ public class CrudApplicationTests {
                 .inc(SysUserEntity::getGold,1)
                 //金币自减  gold = gold - 1
                 .dec(SysUserEntity::getGold,1)
+                .execute();
+
+    }
+
+    @SneakyThrows
+    @Test
+    public void update2(){
+        SysUserEntity sysUserEntity = new SysUserEntity();
+
+        sysUserEntity.setNickname("随机账号");
+        sysUserEntity.setPassword("随机密码");
+        sysUserEntity.setId("111");
+
+        //批量更新 等于sql语句 set nickname = #{nickname} where id = #{id}
+        int execute = ModelUpdateWrapper.newInstance(Arrays.asList(sysUserEntity))
+
                 .execute();
 
     }

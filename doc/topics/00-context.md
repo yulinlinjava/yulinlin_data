@@ -8,7 +8,7 @@
 2. 优先使用本文明确列出的入口、包名和签名。未列出的高级功能应查当前源码，不根据其他框架同名方法猜测。
 3. 主键用 `@JoinMeta(primaryKey = true)`；不要沿用旧文档中的 `@JoinPrimary`。
 4. 先确认表结构、实体基类、主键、筛选条件及会话，再生成写入代码。不要生成无条件更新或删除，也不要假设框架有全表写入拦截。
-5. ORM 需要 Spring 上下文初始化完成、可用数据库会话与已存在的表；不要在静态初始化块中查询数据库。框架不负责根据下文实体自动建表。
+5. ORM 需要 Spring 上下文初始化完成、可用数据库会话与已存在的表；不要在静态初始化块中查询数据库。SQLite 可显式开启实体扫描创建缺失表（见 SQLite 专题）；其他路径不要假设自动建表。
 6. 深克隆与 Bean 到 DTO 的类型映射不是同一能力。HTTP 的“不是 404”与“请求成功”也不是同一含义。
 7. 编码之前确认实际依赖包含接口；如果缺少类或方法，先核对版本和运行时类路径，不用反射或异常吞掉掩盖版本错配。
 
@@ -17,6 +17,7 @@
 | 需求 | 模块 | 准确入口 |
 | --- | --- | --- |
 | Spring Boot + MySQL ORM | starter + mysql | `com.yulinlin.common.domain.IdEntity` / `SuperEntity` |
+| Spring Boot + SQLite ORM | starter + sqlite | `yulinlin.sqlite.file`，沿用相同实体与 Wrapper |
 | 实体映射 | core | `com.yulinlin.data.core.anno.JoinTable`、`JoinField`、`JoinMeta`、`JoinWhere` |
 | 数据库分页结果 | lang | `com.yulinlin.data.lang.util.Page`，不是 Spring Data Page |
 | HTTP | core | `com.yulinlin.data.core.http.HttpRequestClient`、`HttpUtil` |

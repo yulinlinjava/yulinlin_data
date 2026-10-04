@@ -14,5 +14,10 @@ public interface TransactionSession   {
 
     boolean isOpenTransaction();
 
+    /** Marks the current transaction as failed without prematurely closing its resources. */
+    default void setRollbackOnly() { }
+
+    default boolean isRollbackOnly() { return false; }
+
 
 }

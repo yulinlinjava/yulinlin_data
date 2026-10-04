@@ -35,7 +35,7 @@ public class SqlNodeList {
     public SqlNodeList add(SqlNode node){
         List<SqlNode> nodes =   map.get(node.getSql());
         if(nodes == null){
-            nodes = new LinkedList<>();
+            nodes = new ArrayList<>();
             map.put(node.getSql(),nodes);
         }
         nodes.add(node);

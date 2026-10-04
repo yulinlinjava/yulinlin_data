@@ -18,6 +18,7 @@
         <module>lang</module>
 
         <module>mysql</module>
+        <module>sqlite</module>
         <module>mongodb</module>
         <module>oracle</module>
         <module>generate</module>

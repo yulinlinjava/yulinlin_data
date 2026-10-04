@@ -1,11 +1,13 @@
 package com.yulinlin.jdbc.session;
 
 
+import com.zaxxer.hikari.HikariDataSource;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.coder.IDataBuffer;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.parse.SimpParamsContext;
+import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.session.AbstractSession;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.RequestType;
@@ -13,6 +15,8 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.JdbcProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.datasource.DataSourceUtils;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
@@ -30,7 +34,10 @@ import java.util.concurrent.Future;
 public abstract class AbstractJdbcSession extends AbstractSession implements EntitySession {
 
 
-   private JdbcProperties properties;
+    private JdbcProperties properties = new JdbcProperties();
+    private volatile int parallelConnections = ConnectionUtil.DEFAULT_PARALLEL_CONNECTIONS;
+    private volatile int executeBatchSize = 256;
+    private final ThreadLocal<ConnectionPool> transactionPools = new ThreadLocal<>();
 
     protected DataSource dataSource;
 
@@ -113,12 +120,16 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     protected CompletableFuture<Integer> executeUpdateAsync(List<ParseResult> results, RequestType requestType) {
-        ConnectionPool pool = ConnectionUtil.pool(dataSource);
+        // Capture the owning session's context, not a worker-thread ThreadLocal or global route.
+        ConnectionPool pool = transactionConnections();
 
         CompletableFuture<Integer> future =   CompletableFuture.supplyAsync(() -> {
             Connection connection  =  pool.getConnection();
             try {
                 return executeUpdateNode(connection,results);
+            } catch (Throwable error) {
+                pool.setRollbackOnly();
+                throw error;
             }finally {
                 pool.releaseConnection(connection);
             }
@@ -140,13 +151,15 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     protected Integer executeUpdate(List<ParseResult> list,RequestType requestType) {
 
 
-            Connection connection =  ConnectionUtil.getSpringConnection(dataSource);
+            ConnectionPool pool = isOpenTransaction() ? transactionConnections() : null;
+            Connection connection = pool == null ? DataSourceUtils.getConnection(dataSource) : pool.getConnection();
 
             try {
                 Integer value =  executeUpdateNode(connection,list);
                 return value;
             }finally {
-                ConnectionUtil.releaseSpringConnection(dataSource,connection);
+                if (pool == null) DataSourceUtils.releaseConnection(connection, dataSource);
+                else pool.releaseConnection(connection);
             }
 
 
@@ -166,14 +179,16 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
         SqlNode sqlNode = (SqlNode)request.getRequest();
 
 
-        Connection connection =  ConnectionUtil.getSpringConnection(dataSource);
+        ConnectionPool pool = isOpenTransaction() ? transactionConnections() : null;
+        Connection connection = pool == null ? DataSourceUtils.getConnection(dataSource) : pool.getConnection();
 
         try {
             List<IDataBuffer> value =  executeSelectNode(connection,sqlNode);
 
             return value;
         }finally {
-            ConnectionUtil.releaseSpringConnection(dataSource,connection);
+            if (pool == null) DataSourceUtils.releaseConnection(connection, dataSource);
+            else pool.releaseConnection(connection);
         }
 
     }
@@ -194,34 +209,98 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     public void startTransaction() {
-        ConnectionUtil.startTransaction();
         super.startTransaction();
 
     }
 
     @Override
     public void commitTransaction() {
-
-        boolean ok = isOpenTransaction();
-        super.commitTransaction();
-
-
-        if(ok && !isOpenTransaction()){
-            ConnectionUtil.commitTransaction();
-        }
+        finishTransaction(false);
     }
 
     @Override
     public void rollbackTransaction() {
-        boolean ok = isOpenTransaction();
-        super.rollbackTransaction();
-        if(ok && !isOpenTransaction()){
-            ConnectionUtil.rollbackTransaction();
-        }
+        finishTransaction(true);
+    }
 
+    private void finishTransaction(boolean rollback) {
+        if (!isOpenTransaction()) return;
+        if (rollback) setRollbackOnly();
+        boolean mustRollback = isRollbackOnly();
+        if (rollback) super.rollbackTransaction(); else super.commitTransaction();
+        if (isOpenTransaction()) return;
+        ConnectionPool pool = transactionPools.get();
+        transactionPools.remove();
+        if (pool != null) {
+            if (mustRollback) pool.setRollbackOnly();
+            pool.finish(rollback);
+        } else if (!rollback && mustRollback) {
+            throw new IllegalStateException("JDBC transaction was marked rollback-only");
+        }
+    }
+
+    @Override public void setRollbackOnly() {
+        super.setRollbackOnly();
+        ConnectionPool pool = transactionPools.get();
+        if (pool != null) pool.setRollbackOnly();
+    }
+
+    @Override public boolean isRollbackOnly() {
+        ConnectionPool pool = transactionPools.get();
+        return super.isRollbackOnly() || (pool != null && pool.isRollbackOnly());
+    }
+
+    protected final ConnectionPool transactionConnections() {
+        if (!isOpenTransaction()) throw new IllegalStateException("No JDBC session transaction is active");
+        ConnectionPool pool = transactionPools.get();
+        if (pool == null) {
+            pool = ConnectionUtil.createPool(dataSource, parallelConnections);
+            transactionPools.set(pool);
+        }
+        return pool;
+    }
+
+    @Override protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results) {
+        if (!super.isOpenAsync(request, results)) return false;
+        // Never send a Spring thread-bound Connection to workers or fork its transaction.
+        ConnectionPool pool = transactionConnections();
+        return !pool.isSpringManaged() && pool.getLimit() > 1;
+    }
+
+    @Override public boolean supportsParallelWrites() {
+        if (parallelWriteGroupCount() <= 1) return false;
+        // A Spring-bound connection must never be shared with workers or forked into another transaction.
+        if (TransactionSynchronizationManager.hasResource(dataSource)) return false;
+        ConnectionPool pool = transactionPools.get();
+        return pool == null || !pool.isSpringManaged();
+    }
+
+    @Override protected int parallelWriteGroupCount() {
+        ConnectionPool pool = transactionPools.get();
+        if (pool != null) return pool.getLimit();
+        return dataSource instanceof HikariDataSource hikari
+                ? Math.min(parallelConnections, Math.max(1, hikari.getMaximumPoolSize())) : parallelConnections;
+    }
+
+    public int getParallelConnections() { return parallelConnections; }
+
+    public void setParallelConnections(int parallelConnections) {
+        if (parallelConnections < 1) throw new IllegalArgumentException("parallelConnections must be positive");
+        if (isOpenTransaction()) throw new IllegalStateException("Cannot reconfigure an active JDBC transaction");
+        this.parallelConnections = parallelConnections;
+    }
+
+    public int getExecuteBatchSize() { return executeBatchSize; }
+
+    public void setExecuteBatchSize(int executeBatchSize) {
+        if (executeBatchSize < 1) throw new IllegalArgumentException("executeBatchSize must be positive");
+        if (isOpenTransaction()) throw new IllegalStateException("Cannot reconfigure an active JDBC transaction");
+        this.executeBatchSize = executeBatchSize;
     }
 
     public void setProperties(JdbcProperties properties) {
+        setParallelConnections(properties.getParallelConnections());
+        setExecuteBatchSize(properties.getExecuteBatchSize());
         this.properties = properties;
     }
 }

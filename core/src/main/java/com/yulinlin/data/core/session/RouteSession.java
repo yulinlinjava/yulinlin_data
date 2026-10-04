@@ -247,11 +247,6 @@ public class RouteSession  extends  RegisterSession{
         EntitySession session =  session(request.getSession(),request.getCluster());
         request.setSession(session.group());
         request.setCluster(session.cluster());
-        if(isOpenTransaction()){
-            if(!session.isOpenTransaction()){
-                session.startTransaction();
-            }
-        }
         return session;
     }
 
@@ -262,32 +257,71 @@ public class RouteSession  extends  RegisterSession{
 
     @SneakyThrows
     public <V> V transaction(Callable<V> callable){
+        int previousDepth = transactionDepth();
         startTransaction();
         try {
             V v =  callable.call();
             commitTransaction();
             return v;
-        }catch (Exception  e){
-            rollbackTransaction();
+        }catch (Throwable e){
+            setRollbackOnly();
+            try { if (transactionDepth() > previousDepth) rollbackTransaction(); }
+            catch (Throwable cleanup) { if (e != cleanup) e.addSuppressed(cleanup); }
             throw e;
         }
     }
+    @SneakyThrows
     public void startTransaction(){
         super.startTransaction();
-        transactionListenerManager.startTransaction();
+        try {
+            if (transactionListenerManager != null) transactionListenerManager.startTransaction();
+        } catch (Throwable error) {
+            try { rollbackTransaction(); }
+            catch (Throwable cleanup) { if (error != cleanup) error.addSuppressed(cleanup); }
+            throw error;
+        }
     }
 
+    @SneakyThrows
     public void commitTransaction(){
-        transactionListenerManager.commitTransaction();
+        if (!isOpenTransaction()) return;
+        if (isRollbackOnly()) {
+            Throwable failure = null;
+            try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
+            catch (Throwable error) { failure = error; }
+            try { super.commitTransaction(); }
+            catch (Throwable cleanup) {
+                if (failure == null) failure = cleanup;
+                else if (failure != cleanup) failure.addSuppressed(cleanup);
+            }
+            if (failure != null) throw failure;
+            return;
+        }
+        try {
+            if (transactionListenerManager != null) transactionListenerManager.commitTransaction();
+        } catch (Throwable error) {
+            try { rollbackTransaction(); }
+            catch (Throwable cleanup) { if (error != cleanup) error.addSuppressed(cleanup); }
+            throw error;
+        }
         super.commitTransaction();
 
 
     }
 
+    @SneakyThrows
     public void rollbackTransaction(){
-        transactionListenerManager.rollbackTransaction();
-        super.rollbackTransaction();
-
+        if (!isOpenTransaction()) return;
+        Throwable failure = null;
+        try {
+            if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction();
+        } catch (Throwable error) { failure = error; }
+        try { super.rollbackTransaction(); }
+        catch (Throwable cleanup) {
+            if (failure == null) failure = cleanup;
+            else if (failure != cleanup) failure.addSuppressed(cleanup);
+        }
+        if (failure != null) throw failure;
     }
 /*
 

@@ -1,8 +1,5 @@
 package com.yulinlin.jdbc.mysql.parse.predicate;
 
-import com.yulinlin.data.core.node.predicate.And;
-
-public class AndParse extends PredicatesParse<And> {
-
-
+/** Compatibility facade; implementation shared by JDBC SQL dialects. */
+public class AndParse extends com.yulinlin.jdbc.sql.parse.predicate.AndParse {
 }

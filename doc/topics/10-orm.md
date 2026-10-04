@@ -1,5 +1,7 @@
 # ORM 接入与 CRUD
 
+多个数据库的配置、`JdbcSessionFactory.create` 注册及选库，见同目录 `15-datasources.md`（单文件指南已包含该专题）。
+
 > 状态：当前使用文档；来源核对基线：2026-10-01，2026-10-04 整理。
 > 适用：制品版本 3.0 / JDK 25 / Spring Boot 3.5。示例未全部编译或集成验证，不等于运行测试通过。
 > 源码定位：`common/.../domain/IdEntity.java`、`SuperEntity.java`；`core/.../model/`；`mysql/.../MysqlParseAutoConfig.java`。若与实际安装版本冲突，以该版本源码为准。

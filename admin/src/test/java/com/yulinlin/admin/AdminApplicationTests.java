@@ -61,6 +61,10 @@ public class AdminApplicationTests {
     @Test
     public void test() throws Exception{
 
+        ModelSelectWrapper.newInstance("oss", SysUserVo.class)
+                .selectList();
+
+
 
         List<SysUserEntity> all = userDao.findAll();
 
@@ -81,6 +85,7 @@ public class AdminApplicationTests {
     @SneakyThrows
     @Test
     public void selectOne(){
+
 
 
         List<SysMenuEntity> sysMenuEntities = ModelSelectWrapper.newInstance(SysMenuEntity.class)

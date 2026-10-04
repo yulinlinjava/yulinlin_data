@@ -1,137 +1,76 @@
 package com.yulinlin.jdbc.session;
 
-import com.yulinlin.data.core.session.SessionUtil;
-import com.yulinlin.data.core.transaction.TransactionListener;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.datasource.DataSourceUtils;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
 
 @Slf4j
-public class ConnectionUtil  {
+public class ConnectionUtil {
+    public static final int DEFAULT_PARALLEL_CONNECTIONS = 4;
+    private static volatile int core = DEFAULT_PARALLEL_CONNECTIONS;
+    private static volatile boolean debug;
+    private static final ThreadLocal<Map<DataSource, ConnectionPool>> legacyPools =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+    private static final ThreadLocal<Integer> legacyDepth = ThreadLocal.withInitial(() -> 0);
 
+    public static void setDebug(boolean debug) { ConnectionUtil.debug = debug; }
 
-
-    private static boolean debug = false;
-
-
-    public static void setDebug(boolean debug) {
-        ConnectionUtil.debug = debug;
+    /** Stateless helper; JdbcSession owns and captures the returned pool. */
+    public static ConnectionPool createPool(DataSource source, int parallelConnections) {
+        return new ConnectionPool(source, parallelConnections).initialize();
     }
 
+    // Retained for legacy callers. These no longer inspect SessionUtil or the number of route groups.
+    public static ConnectionPool pool(DataSource source) {
+        return legacyPools.get().computeIfAbsent(source, key -> createPool(key, core));
+    }
 
+    public static Connection getSpringConnection(DataSource source) {
+        if (legacyDepth.get() > 0 || legacyPools.get().containsKey(source)) {
+            return pool(source).getConnection();
+        }
+        return DataSourceUtils.getConnection(source);
+    }
 
+    public static void releaseSpringConnection(DataSource source, Connection connection) {
+        ConnectionPool pool = legacyPools.get().get(source);
+        if (pool != null) pool.releaseConnection(connection);
+        else DataSourceUtils.releaseConnection(connection, source);
+    }
+
+    public static void startTransaction() { legacyDepth.set(legacyDepth.get() + 1); }
+    public static void commitTransaction() { finish(false); }
+    public static void rollbackTransaction() { finish(true); }
 
     @SneakyThrows
-    public static Connection getSpringConnection(DataSource dataSource){
-        Connection connection ;
-
-        if(SessionUtil.route().loadBalanceList().size() > 1){
-            return pool(dataSource).getConnection();
-        }else {
-            connection = DataSourceUtils.getConnection(dataSource);
-
-        }
-
-
-
-        return connection;
-
-    }
-
-   static ThreadLocal<Map<DataSource,ConnectionPool>> threadLocal =
-           ThreadLocal.withInitial(() -> new HashMap<>());
-
-   static int core = (Runtime.getRuntime().availableProcessors() / 2) + 1 ;
-
-    public static ConnectionPool pool(DataSource dataSource){
-        Map<DataSource, ConnectionPool> poolMap = threadLocal.get();
-        return poolMap.computeIfAbsent(dataSource,(data) -> {
-            return new ConnectionPool(data,core);
-        });
-    }
-
-
-
-
-    public static void startTransaction() {
-        if(debug){
-            log.info("开始事务");
-        }
-
-    }
-
-    @SneakyThrows
-    public static void releaseSpringConnection(DataSource dataSource,Connection connection){
-
-        if(SessionUtil.route().loadBalanceList().size() > 1){
-            pool(dataSource).releaseConnection(connection);
-        }else {
-            DataSourceUtils.releaseConnection(connection, dataSource);
-        }
-
-    }
-
-
-
-    public static void commitTransaction() {
-        int size =0 ;
-        for (Map.Entry<DataSource, ConnectionPool> entry : threadLocal.get().entrySet()) {
-            ConnectionPool pool = entry.getValue();
-            for (Connection connection : pool.getConnections()) {
-                try {
-                    connection.commit();
-
-                }catch (Exception e){
-                    log.error("提交事务异常",e);
-
+    private static void finish(boolean rollback) {
+        int depth = legacyDepth.get();
+        if (rollback) legacyPools.get().values().forEach(ConnectionPool::setRollbackOnly);
+        if (depth > 1) { legacyDepth.set(depth - 1); return; }
+        Throwable failure = null;
+        try {
+            for (ConnectionPool pool : legacyPools.get().values()) {
+                try { pool.finish(rollback || failure != null); }
+                catch (Throwable error) {
+                    if (failure == null) failure = error;
+                    else if (failure != error) failure.addSuppressed(error);
                 }
             }
-            size+=pool.getConnections().size();
-            pool.clear();
+        } finally {
+            legacyPools.remove();
+            legacyDepth.remove();
+            if (debug) log.debug("Legacy JDBC transaction completed, rollback={}", rollback);
         }
-
-
-        if(debug){
-            log.info("事务提交,使用链接：{}",size);
-        }
-        threadLocal.get().clear();
+        if (failure != null) throw failure;
     }
-
-    public static void rollbackTransaction() {
-
-        int size =0 ;
-        for (Map.Entry<DataSource, ConnectionPool> entry : threadLocal.get().entrySet()) {
-            ConnectionPool pool = entry.getValue();
-            for (Connection connection : pool.getConnections()) {
-                try {
-                    connection.rollback();
-
-                }catch (Exception e){
-                    log.error("事务回滚异常",e);
-
-                }
-            }
-            size+=pool.getConnections().size();
-            pool.clear();
-        }
-
-
-        if(debug){
-            log.info("事务回滚,使用链接：{}",size);
-
-        }
-        threadLocal.get().clear();
-    }
-
-
-
 
     public static void setCore(int core) {
+        if (core < 1) throw new IllegalArgumentException("parallelConnections must be positive");
         ConnectionUtil.core = core;
     }
 }

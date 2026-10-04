@@ -46,18 +46,21 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
     public JdbcSession create(DataSource dataSource,String group){
 
 
-        JdbcSession sqlSession =  new JdbcSession(dataSource);
+        JdbcSession sqlSession = newSession(dataSource);
         sqlSession.setCacheManager(dbCacheManager);
         sqlSession.setProperties(properties);
         sqlSession.setCoderManager(jdbcCoderManager);
         sqlSession.setGroup(group);
         sqlSession.setLogManager(logManager);
         sqlSession.setParseManager(parseManager);
-        sqlSession.setParseManager(parseManager);
 
         sqlSession.setFilterManager(filterManager);
         sqlSession.setProxyService(entityProxyService);
         return sqlSession;
+    }
+
+    protected JdbcSession newSession(DataSource dataSource) {
+        return new JdbcSession(dataSource);
     }
 
     public JdbcSession create(DataSourceProperties dataSourceProperties, String group){

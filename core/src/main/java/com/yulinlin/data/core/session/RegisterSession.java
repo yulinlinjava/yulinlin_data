@@ -7,6 +7,7 @@ import lombok.SneakyThrows;
 
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -23,13 +24,15 @@ public class RegisterSession extends BaseTransactionSession{
         return wrapperFactory;
     }
 
-    private static ThreadLocal<HashMap<String,EntitySession>> cacheSession= ThreadLocal.withInitial(()  -> {
+    private final ThreadLocal<HashMap<String,EntitySession>> cacheSession= ThreadLocal.withInitial(()  -> {
         return  new HashMap<>();
     });
 
-    private  static ThreadLocal<LinkedList<EntitySession>> threadLocal= ThreadLocal.withInitial(()  -> {
+    private final ThreadLocal<LinkedList<EntitySession>> threadLocal= ThreadLocal.withInitial(()  -> {
         return  new LinkedList<>();
     });
+
+    private final ThreadLocal<Set<EntitySession>> participants = ThreadLocal.withInitial(LinkedHashSet::new);
 
 
     public  void registerSession(List<EntitySession> list){
@@ -48,15 +51,11 @@ public class RegisterSession extends BaseTransactionSession{
     @Override
     public void commitTransaction() {
         boolean ok = isOpenTransaction();
+        boolean rollback = isRollbackOnly();
         super.commitTransaction();
         if(ok && !isOpenTransaction()){
-            HashMap<String, EntitySession> data = cacheSession.get();
-
-            for (EntitySession session : data.values()) {
-                session.commitTransaction();
-            }
-
-            clear();
+            finishParticipants(rollback);
+            if (rollback) throw new IllegalStateException("Route transaction was marked rollback-only");
         }
 
     }
@@ -64,15 +63,56 @@ public class RegisterSession extends BaseTransactionSession{
     @Override
     public void rollbackTransaction() {
         boolean ok = isOpenTransaction();
+        setRollbackOnly();
         super.rollbackTransaction();
         if(ok && !isOpenTransaction()){
-            for (EntitySession session : cacheSession.get().values()) {
-                session.rollbackTransaction();
-            }
-
-            clear();
+            finishParticipants(true);
         }
 
+    }
+
+    @Override
+    public void setRollbackOnly() {
+        super.setRollbackOnly();
+        for (EntitySession session : participants.get()) session.setRollbackOnly();
+    }
+
+    @Override
+    public boolean isRollbackOnly() {
+        return super.isRollbackOnly() || participants.get().stream().anyMatch(EntitySession::isRollbackOnly);
+    }
+
+    protected EntitySession enlist(EntitySession session) {
+        if (isOpenTransaction() && !participants.get().contains(session)) {
+            // Nest once even when an independently started session transaction already exists.
+            session.startTransaction();
+            participants.get().add(session);
+            if (isRollbackOnly()) session.setRollbackOnly();
+        }
+        return session;
+    }
+
+    @SneakyThrows
+    private void finishParticipants(boolean rollback) {
+        Throwable failure = null;
+        try {
+            for (EntitySession session : participants.get()) {
+                try {
+                    if (rollback || failure != null) session.rollbackTransaction();
+                    else session.commitTransaction();
+                } catch (Throwable error) {
+                    if (failure == null) failure = error;
+                    else if (failure != error) failure.addSuppressed(error);
+                    // A third-party participant may leave resources open after commit fails.
+                    try { session.rollbackTransaction(); }
+                    catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
+                }
+            }
+        } finally {
+            participants.remove();
+            clear();
+        }
+        if (failure != null) throw failure;
     }
 
     @SneakyThrows
@@ -97,7 +137,7 @@ public class RegisterSession extends BaseTransactionSession{
     }
 
     public  void clear(){
-        cacheSession.get().clear();
+        cacheSession.remove();
     }
 
 
@@ -114,7 +154,7 @@ public class RegisterSession extends BaseTransactionSession{
 
         if(code == null || code.isEmpty()){
             if(threadLocal.get().size() > 0){
-               return threadLocal.get().getFirst();
+               return enlist(threadLocal.get().getFirst());
             }else {
                 code = master;
             }
@@ -127,11 +167,11 @@ public class RegisterSession extends BaseTransactionSession{
         JoinCluster cluster = tag;
         HashMap<String, EntitySession> map = cacheSession.get();
 
-        EntitySession session =  map.computeIfAbsent(code,k -> {
+        EntitySession session =  map.computeIfAbsent(code + ":" + cluster.name(),k -> {
            return loadBalance.loadBalance(group,cluster);
         });
 
-        return session;
+        return enlist(session);
 
     }
 

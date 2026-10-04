@@ -9,7 +9,9 @@
 - [项目上下文与包名](doc/topics/00-context.md)：必读；版本、模块、生成代码约定。
 - [ORM](doc/topics/10-orm.md)：依赖、配置、实体、配套表和完整 CRUD 服务；同时读取事务专题。
 - [事务](doc/topics/20-transactions.md)：已支持 Spring @Transactional；连接路径和高级行为边界。
+- [多数据源](doc/topics/15-datasources.md)：JdbcSessionFactory.create、DataSource Bean、会话注册和 @JoinSession 选库；同时读取事务专题。
 - [HTTP](doc/topics/30-http.md)：同步请求、JSON、表单、文件、超时、404 和错误处理。
+- [SQLite](doc/topics/16-sqlite.md)：本地文件、WAL、实体扫描自动建表、类型规则、复用 CRUD、与 MySQL 共存、事务与限制。
 - [反射与克隆](doc/topics/40-reflection.md)：浅/深复制、null、引用关系与类型限制。
 - [其他工具](doc/topics/50-utilities.md)：JSON、字符串、日期、树、ID、分页和响应包装。
 - [排障与检查](doc/topics/90-troubleshooting.md)：遇到错误或准备交付时读取。

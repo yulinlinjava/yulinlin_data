@@ -1,12 +1,5 @@
 package com.yulinlin.jdbc.mysql.parse.predicate;
 
-import com.yulinlin.data.core.node.predicate.Or;
-
-public class OrParse extends PredicatesParse<Or> {
-    private static String key=" or ";
-
-    @Override
-    public String getSeparator() {
-        return key;
-    }
+/** Compatibility facade; implementation shared by JDBC SQL dialects. */
+public class OrParse extends com.yulinlin.jdbc.sql.parse.predicate.OrParse {
 }

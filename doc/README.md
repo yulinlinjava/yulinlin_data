@@ -13,7 +13,9 @@
 | --- | --- | --- |
 | 所有任务 | [00-context](topics/00-context.md) | 版本、准确包名、约定、模块范围 |
 | ORM CRUD | [10-orm](topics/10-orm.md) + [20-transactions](topics/20-transactions.md) | 依赖、配置、实体、配套表、完整 Service、Spring 事务 |
+| 多数据源 | [15-datasources](topics/15-datasources.md) + [20-transactions](topics/20-transactions.md) | JdbcSessionFactory.create、自动注册、primary/oss 路由、完整配置 |
 | Spring 事务排查 | [20-transactions](topics/20-transactions.md) | 支持路径与多路由/异步边界 |
+| 本地 SQLite | [16-sqlite](topics/16-sqlite.md) + [10-orm](topics/10-orm.md) | 文件配置、WAL、扫描建表、类型规则、通用 CRUD、多库路由与事务 |
 | HTTP 请求/文件 | [30-http](topics/30-http.md) | JSON、表单、上传下载、超时、404、异常 |
 | 反射/复制 | [40-reflection](topics/40-reflection.md) | API、null、引用关系、DTO 与克隆区别 |
 | JSON/常用工具 | [50-utilities](topics/50-utilities.md) | JSON、字符串、日期、树、ID、响应包装 |

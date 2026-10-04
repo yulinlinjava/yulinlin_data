@@ -20,10 +20,8 @@ import com.yulinlin.data.lang.util.SegmentLock;
 import lombok.SneakyThrows;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
@@ -92,41 +90,31 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     protected  abstract  IDataBuffer executeCount(ParseResult request);
 
-  public   static int groupLen = 128;
+    /** @deprecated Execution groups are now bounded by parallelWriteGroupCount(), not a row chunk size. */
+    @Deprecated
+    public static int groupLen = 128;
+
+    protected int parallelWriteGroupCount() {
+        return 4;
+    }
 
     protected  List<List<ParseResult>> parseNodesAndGroup(
             RequestType requestType,
             Object root, List<INode> nodes, Class clazz){
 
-         List<ParseResult> collect = parseNodes(requestType,root,nodes, clazz);
-
-         if(collect .size() < groupLen){
-             return Arrays.asList(collect);
-         }
-
-        int x = 0,y=0;
-
-        List<List<ParseResult>> value = new ArrayList<>();
-
-
-        while (true){
-            x = y;
-            y=x+groupLen;
-            if(y>nodes.size()){
-                y = nodes.size() ;
-            }
-            if(x >= y){
-                break;
-            }
-            List<ParseResult> parseTypes = collect.subList(x, y);
-            value.add(parseTypes);
+        List<ParseResult> results = parseNodes(requestType, root, nodes, clazz);
+        if (!supportsParallelWrites() || results.isEmpty()) return List.of(results);
+        int groups = Math.min(results.size(), Math.max(1, parallelWriteGroupCount()));
+        List<List<ParseResult>> value = new ArrayList<>(groups);
+        int baseSize = results.size() / groups;
+        int remainder = results.size() % groups;
+        int offset = 0;
+        for (int i = 0; i < groups; i++) {
+            int end = offset + baseSize + (i < remainder ? 1 : 0);
+            value.add(results.subList(offset, end));
+            offset = end;
         }
-
-
-
         return value;
-
-
     }
 
 
@@ -169,13 +157,9 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
     protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results){
-        boolean ok =  threadPoolExecutor != null && results.size() > request.getBatchSize();
-        if(ok){
-
-            return request.isBatch();
-        }
-        return false;
-
+        // The threshold is checked against the whole request, not each worker's share.
+        return threadPoolExecutor != null && request.isBatch() && !results.isEmpty()
+                && supportsParallelWrites();
     }
 
     @SneakyThrows
@@ -212,11 +196,12 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             }
 
             return call;
-        }catch (Exception e){
+        }catch (Throwable e){
+            setRollbackOnly();
             if(!transaction){
-                rollbackTransaction();
+                try { rollbackTransaction(); }
+                catch (Throwable rollbackFailure) { e.addSuppressed(rollbackFailure); }
             }
-
             throw e;
         }
 
@@ -264,80 +249,67 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     public <E> Integer  execute(ExecuteRequest<E> request,RequestType requestType) {
 
-        List<List<ParseResult>> lists = parseNodesAndGroup(
-                requestType,
-                request.getRoot(),
-                request.getWrappers(), request.getFromClass());
-
-
-      Integer val =    transaction(() -> {
-
-          int total = 0;
-                ArrayList<CompletableFuture<Integer>> futures = null;
-
-
-                for (List<ParseResult> results :lists) {
-
-
-                        //执行异步任务
-                        if(isOpenAsync(request,results)){
-                            if(futures == null){
-                                futures = new ArrayList<>();
-                            }
-                            long x = System.currentTimeMillis();
-                            CompletableFuture<Integer> submit = executeUpdateAsync(results,requestType);
-
-                            submit
-                            .thenApply((res) -> {
-
-                                    long time = (System.currentTimeMillis()-x) / results.size() ;
-                                    for (ParseResult result : results) {
-                                        logManager.success(time,result);
-                                    }
-
-                                return res;
-                            })
-                            .exceptionally(e -> {
-                                for (ParseResult result : results) {
-                                    logManager.error(e,result);
-                                }
-                                throw new RuntimeException(e);
-                            });
-                            futures.add(submit);
-                        }else {
-
-                            try{
-                                long x = System.currentTimeMillis();
-                                Integer data = executeUpdate(results, requestType);
-                                long time = (System.currentTimeMillis()-x) / results.size() ;
-                                for (ParseResult result : results) {
-                                    logManager.success(time,result);
-                                }
-
-                                total+=data;
-                            }catch (Exception e){
-                                for (ParseResult result : results) {
-                                    logManager.error(e,result);
-                                }
-                                throw e;
-                            }
-
+        Integer val = transaction(() -> {
+            // Decide on the owner thread, inside the actual transaction context (including Spring).
+            boolean parallel = request.isBatch() && threadPoolExecutor != null && supportsParallelWrites();
+            List<List<ParseResult>> lists = parallel
+                    ? parseNodesAndGroup(requestType, request.getRoot(), request.getWrappers(), request.getFromClass())
+                    : List.of(parseNodes(requestType, request.getRoot(), request.getWrappers(), request.getFromClass()));
+            int rows = lists.stream().mapToInt(List::size).sum();
+            if (rows < Math.max(1, request.getBatchSize())) {
+                parallel = false;
+                if (lists.size() > 1) {
+                    List<ParseResult> combined = new ArrayList<>(rows);
+                    lists.forEach(combined::addAll);
+                    lists = List.of(combined);
+                }
+            }
+            int total = 0;
+            Throwable failure = null;
+            List<CompletableFuture<Integer>> futures = new ArrayList<>();
+            try {
+                for (List<ParseResult> results : lists) {
+                    if (results.isEmpty()) continue;
+                    long started = System.currentTimeMillis();
+                    if (parallel && isOpenAsync(request, results)) {
+                        CompletableFuture<Integer> future = executeUpdateAsync(results, requestType)
+                                .whenComplete((count, error) -> logBatch(results, started, error));
+                        futures.add(future);
+                    } else {
+                        try {
+                            total += executeUpdate(results, requestType);
+                            logBatch(results, started, null);
+                        } catch (Throwable error) {
+                            logBatch(results, started, error);
+                            throw error;
                         }
-
-                }
-
-
-                if(total > 0){
-                    return total;
-                }
-                if(futures != null && futures.size() > 0){
-                    for (CompletableFuture<Integer> future : futures) {
-                        total+=future.get();
                     }
                 }
+            } catch (Throwable error) {
+                failure = error;
+            }
 
-              return total;
-
+            // Even after a synchronous/submission/task failure, drain EVERY submitted task.
+            // join() deliberately does not abandon workers when the calling thread is interrupted.
+            CompletableFuture.allOf(futures.stream()
+                    .map(future -> future.handle((count, error) -> null))
+                    .toArray(CompletableFuture[]::new)).join();
+            for (CompletableFuture<Integer> future : futures) {
+                try {
+                    total += future.join();
+                } catch (CompletionException error) {
+                    Throwable cause = error.getCause() == null ? error : error.getCause();
+                    if (failure == null) failure = cause;
+                    else if (failure != cause) failure.addSuppressed(cause);
+                }
+            }
+            if (failure != null) {
+                setRollbackOnly();
+                if (failure instanceof Error error) throw error;
+                if (failure instanceof Exception error) throw error;
+                throw new IllegalStateException(failure);
+            }
+            return total;
         });
 
         if(request.isCache()){
@@ -484,36 +456,22 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         return coderManager.createDecoderBuffer();
     }
 
-    private static ThreadLocal<LongAdder> transactionLocal = ThreadLocal.withInitial(() -> {
-        return new LongAdder();
-    });
+    private final TransactionScope transactions = new TransactionScope();
 
+    @Override public void startTransaction() { transactions.start(); }
+    @Override public void commitTransaction() { transactions.finish(false); }
+    @Override public void rollbackTransaction() { transactions.finish(true); }
+    @Override public boolean isOpenTransaction() { return transactions.isOpen(); }
+    @Override public void setRollbackOnly() { transactions.setRollbackOnly(); }
+    @Override public boolean isRollbackOnly() { return transactions.isRollbackOnly(); }
 
-    @Override
-    public void startTransaction() {
-        transactionLocal.get().increment();
-
-    }
-
-    @Override
-    public void commitTransaction() {
-        if(isOpenTransaction()){
-            transactionLocal.get().decrement();
+    private void logBatch(List<ParseResult> results, long started, Throwable error) {
+        if (logManager == null) return;
+        long time = (System.currentTimeMillis() - started) / results.size();
+        for (ParseResult result : results) {
+            if (error == null) logManager.success(time, result);
+            else logManager.error(error, result);
         }
-
-    }
-
-    @Override
-    public void rollbackTransaction() {
-        if(isOpenTransaction()){
-            transactionLocal.get().decrement();
-        }
-
-    }
-
-    @Override
-    public boolean isOpenTransaction() {
-        return  transactionLocal.get().intValue() > 0;
     }
 
     public void setCoderManager(ICoderManager coderManager) {

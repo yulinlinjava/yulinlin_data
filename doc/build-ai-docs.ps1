@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $docRoot = $PSScriptRoot
 $repoRoot = Split-Path $docRoot -Parent
 $topicFiles = @(
-    '00-context.md', '10-orm.md', '20-transactions.md', '30-http.md',
+    '00-context.md', '10-orm.md', '15-datasources.md', '16-sqlite.md', '20-transactions.md', '30-http.md',
     '40-reflection.md', '50-utilities.md', '90-troubleshooting.md'
 )
 $parts = @(

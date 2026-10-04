@@ -66,13 +66,6 @@
 
 
 
-
-        <dependency>
-            <groupId>com.github.xiaoymin</groupId>
-            <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
-            <!--在引用时请在maven中央仓库搜索3.X最新版本号-->
-
-        </dependency>
         <dependency>
             <groupId>com.yulinlin</groupId>
             <artifactId>repository</artifactId>

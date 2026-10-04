@@ -1,29 +1,103 @@
-# Spring 事务兼容与边界
+# JDBC 事务：独立 Session、路由协调与 Spring 接入
 
-> 状态：当前使用文档；来源核对基线：2026-10-01，2026-10-04 整理。
-> 适用：制品版本 3.0 / JDK 25 / Spring Boot 3.5。示例未全部编译或集成验证，不等于运行测试通过。
-> 源码定位：`jdbc/src/main/java/com/yulinlin/jdbc/aop/SpringTransactionAop.java`；`jdbc/src/main/java/com/yulinlin/jdbc/session/ConnectionUtil.java`。若与实际安装版本冲突，以该版本源码为准。
+> 基线：2026-10-04 / JDK 25 / 制品版本 3.0 / Spring Boot 3.5。
+> 源码：core 的 AbstractSession、RegisterSession、RouteSession；jdbc 的 AbstractJdbcSession、ConnectionPool、SpringTransactionAop。
 
-框架已接入 Spring `org.springframework.transaction.annotation.Transactional`，不要求业务只能使用 `@JoinTransaction`。Spring Boot 常规单数据源、同步 JDBC 场景优先按上例使用 Spring 注解，并保证事务管理器管理同一个 DataSource。
+## 推荐选择
 
-源码依据：jdbc 自动配置 `DataJdbcApplication` 注册 `SpringTransactionAop`，识别方法或类上的 Spring `@Transactional`，同步调用 route 的 start/commit/rollback；同步 JDBC 调用经 `ConnectionUtil` 获取和释放连接，在其单路由分支使用 `DataSourceUtils`，参与 Spring 绑定的连接事务。
+- 多数据源或多连接批处理：使用框架 `@JoinTransaction` 或 `SessionUtil.route().transaction(...)`。
+- 已有 Spring 管理的单数据源业务：继续使用 Spring `@Transactional`；检测到同一 DataSource 的绑定连接时，框架复用它，在原线程顺序执行，由 Spring 完成物理事务。
+- 严格单库原子性：`parallel-connections: 1`，不要把多连接批处理当作单个数据库事务。
+- SQLite：使用通用 JdbcSession、单连接，默认组 local；无需注册 DataSource 或 sqliteTransactionManager Bean。
 
-需要 Spring 代理生效；`new Service()` 或同对象内部直接调用不能当作有效代理事务示例。不要同时叠加两种事务注解作为默认用法。
+不要默认同时叠加两种事务注解。代理注解需要 Spring 管理的对象并经代理调用，同类自调用或 `new Service()` 不会生效。
 
-兼容边界：当前框架切面本身不解析 propagation、isolation、rollbackFor 等注解属性；Spring 事务拦截器会负责其自身事务属性，但不能据此保证框架自管连接路径与 Spring 的所有语义一致。`ConnectionUtil` 在 `loadBalanceList().size() > 1` 时使用自有连接池，异步更新也走自有连接路径。多路由、异步、REQUIRES_NEW/嵌套事务、noRollbackFor 等场景需另做集成验证，不承诺自动跨数据源原子提交。
+## 框架事务示例
 
-另外保留框架注解 `com.yulinlin.data.core.anno.JoinTransaction`。其 `String[] value()` 当前没有被切面读取，不要依靠该参数选择事务会话。两种注解不是可以无条件互换的全部事务语义实现。
+```java
+import com.yulinlin.data.core.anno.JoinTransaction;
 
-## 标准业务方法写法
+@JoinTransaction
+public void saveBusinessData() {
+    ModelInsertWrapper.newInstance("primary", mysqlUsers).batch().execute();
+    ModelInsertWrapper.newInstance("local", localUsers).execute();
+    // 任何未捕获的异常都触发回滚协调。
+}
+```
+
+也可以直接使用回调：
+
+```java
+SessionUtil.route().transaction(() -> {
+    ModelInsertWrapper.newInstance("oss", usersToInsert).batch().execute();
+    return null;
+});
+```
+
+单次 CRUD 请求没有外层事务时也会自动开始、完成自己的事务；多个独立请求不会自动组成一个业务事务。
+
+RouteSession 按实际访问加入参与者，每个 Session 只加入一次；最终正常结束逐个提交，异常逐个回滚。状态按路由实例、会话实例及调用线程隔离，不再由静态计数或已注册组数决定。路由只结束自己加入的事务层，不代替业务关闭一个预先独立开启的外层 Session 事务。
+
+## 独立 Session
+
+配置好的 JdbcSession 可以不通过路由直接执行已构造的请求：
+
+```java
+// 方法体片段，所在方法声明 throws Exception。
+// jdbcSession 是工厂已配置的对象；insertRequest 是已构造的 ExecuteRequest。
+jdbcSession.startTransaction();
+try {
+    jdbcSession.insert(insertRequest);
+    jdbcSession.update(updateRequest);
+    jdbcSession.commitTransaction();
+} catch (Exception | Error error) {
+    try { jdbcSession.rollbackTransaction(); }
+    catch (Exception | Error cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+    throw error;
+}
+```
+
+也可以直接 `jdbcSession.insert(insertRequest)`，让这一请求自动管理事务。事务必须在开启它的同一线程结束。这里的独立能力指请求执行不依赖全局 RouteSession；工厂仍需注入编码器、解析器等组件，现有 Model Wrapper 的构造/execute 快捷入口仍依赖框架路由。
+
+## 并发批处理与异常
+
+默认并发连接上限为 4，外围配置为 `yulinlin.datasource.jdbc.parallel-connections`，按会话覆盖用 `session.setParallelConnections(n)`；完整配置和 `.batch()` 示例见多数据源专题。
+
+支持并发写入时，上层分成最多连接上限数量的大组，一组一个任务/连接；`supportsParallelWrites()` 为 false 时不分组。底层每次 JDBC batch 默认 256 条，可用 `yulinlin.datasource.jdbc.execute-batch-size` 或 `session.setExecuteBatchSize(n)` 调整。`executeBatch()` 仅执行语句，不 commit，不缩小业务事务的回滚范围。
+
+未绑定 Spring 事务时，异步任务明确捕获所属 Session 的连接上下文，不依赖工作线程的 ThreadLocal。每个物理连接互斥使用；等待所有已提交任务结束后，才提交、回滚或回收连接。同步/异步混合批次累加所有结果，不能因为同步批次已产生结果就提前返回。失败和连接清理异常向调用方传播，次要异常保留为 suppressed。
+
+嵌套回滚，以及已有事务中的 JDBC 请求执行失败，会标记 rollback-only。即使业务捕获异常，外层也不能继续正常提交；外层结束实际回滚并抛出异常。嵌套是共享外层事务的计数，不是保存点回滚。
+
+## Spring 注解：支持范围与限制
 
 ```java
 import org.springframework.transaction.annotation.Transactional;
 
-// 放在 Spring 管理的 Service public 方法上，并通过代理调用。
 @Transactional(rollbackFor = Exception.class)
-public void saveBusinessData() {
-    // 在这里执行本次业务需要的 ORM 操作
+public void saveOneDatabase() {
+    ModelInsertWrapper.newInstance("primary", usersToInsert).execute();
 }
 ```
 
-本专题核对了注解与连接接入路径，没有执行事务回滚集成测试。验收应至少覆盖正常提交、异常回滚、同类自调用，以及项目实际使用的传播行为。
+jdbc 自动配置注册 SpringTransactionAop，识别类/方法的 Spring注解，开启和结束框架路由事务。若存在 Spring 原生事务管理器，其事务拦截器仍负责自己的属性。框架借用 DataSourceUtils 的绑定连接，不跨工作线程使用，也不自行提交/关闭 Spring 拥有的连接。执行失败会立即标记对应的 Spring ConnectionHolder 为 rollback-only，避免业务捕获异常后原生 Spring 先提交。
+
+仅有 SQLite 时没有原生 JDBC 事务管理器也能使用这个注解，由框架切面管理会话；这不代表实现了 Spring 的全部事务语义。
+
+框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性；`@JoinTransaction.value()` 也不用于选择参与数据源。框架嵌套计数不等价于 REQUIRES_NEW、NESTED 或保存点；异步业务线程不会自动继承事务。高级传播、同步代理自动更新、Spring 与非 Spring 管理的多个库交叉参与，仍需针对实际代理顺序和业务做集成验证，不承诺透明兼容。
+
+## 原子性边界
+
+多数据源和多物理连接都是**本地事务的协调**，不是 XA/分布式原子事务。所有任务成功只是进入提交阶段，不能保证所有连接一起提交成功；中途提交失败时尝试回滚后续连接并清理全部资源，但已经成功提交的数据无法撤销。
+
+同一 Session 使用多个连接时，提交前的跨连接查询也不保证读到其他连接的未提交写入。原子业务使用单连接；需要跨库强一致性应另选分布式事务或设计补偿，不要依据同名注解推定保证。
+
+## 已验证与未验证
+
+专项测试覆盖：Session 独立事务与实例隔离、默认 4/配置 2 连接限流、10 万条均匀四组、PreparedStatement 复用、256 条分批及尾批、能力关闭时不分组、后续批次失败回滚、同步/异步混合结果、失败任务排空、拒绝提交、嵌套 rollback-only、连接提交/回滚/关闭失败清理、获取连接等待不阻塞其他借用者归还、真实 Spring AOP 顺序及绑定连接复用；SQLite 真实临时文件 CRUD、512 行批次和整批失败回滚、多会话协调及编解码/建表。
+
+JDBC 并发/错误注入测试使用模拟连接；SQLite 使用真实本地文件。未连接外部 MySQL，也未执行业务吞吐量或高级 Spring 传播行为基准。
+
+```shell
+mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
+```

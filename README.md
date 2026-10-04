@@ -12,6 +12,7 @@
 | AI 能读取整个仓库 | [llms.txt](llms.txt)，按任务加载专题 |
 | 给外部 AI 上传一个文件 | [AI 接入指南](doc/AI接入指南.md)，自动生成的完整上下文 |
 | ORM 接入 | [依赖、实体、CRUD](doc/topics/10-orm.md) + [Spring 事务](doc/topics/20-transactions.md) |
+| 本地 SQLite | [文件配置、WAL、实体扫描建表、CRUD 与多库路由](doc/topics/16-sqlite.md) |
 | HTTP | [JSON、表单、上传下载、超时与 404](doc/topics/30-http.md) |
 | 工具类 | [反射与深克隆](doc/topics/40-reflection.md)、[JSON 与其他工具](doc/topics/50-utilities.md) |
 | 报错排查 | [排障与交付检查](doc/topics/90-troubleshooting.md) |
@@ -21,6 +22,7 @@
 | 需求 | 模块 |
 | --- | --- |
 | Spring Boot + MySQL ORM | `com.yulinlin:starter:3.0` + `com.yulinlin:mysql:3.0` |
+| Spring Boot + 本地 SQLite | `com.yulinlin:starter:3.0` + `com.yulinlin:sqlite:3.0` |
 | HTTP | `core`，引入 starter 时已传递提供 |
 | 反射、深克隆、JSON | `lang` |
 | 实体基类与公共模型 | `common` |

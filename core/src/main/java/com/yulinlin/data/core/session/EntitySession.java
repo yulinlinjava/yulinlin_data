@@ -10,6 +10,10 @@ import java.util.concurrent.CompletableFuture;
 
 public interface EntitySession extends LoadBalanceNode,TransactionSession {
 
+    /** Whether this session can use independent connections for concurrent writes in the current context. */
+    default boolean supportsParallelWrites() {
+        return false;
+    }
 
 
     <E> Integer insert(ExecuteRequest<E> request );

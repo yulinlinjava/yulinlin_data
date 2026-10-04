@@ -13,7 +13,6 @@ import javax.sql.DataSource;
 import java.io.InputStream;
 import java.sql.*;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 循环依赖解决
@@ -35,8 +34,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         SqlNodeList nodeList = SqlNodeList.newUpdate();
 
         try {
-            List<SqlNode> collect = (List)list.stream().map(row -> row.getRequest()).collect(Collectors.toList());
-            nodeList.addAll(collect);
+            for (ParseResult result : list) nodeList.add((SqlNode) result.getRequest());
             return syncExecuteUpdateNode(connection,nodeList);
         }finally {
             nodeList.close();
@@ -64,15 +62,15 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
     private int syncExecuteUpdateNode (Connection connection, String sql , List<SqlNode> nodeList) throws SQLException {
 
         int total = 0;
+        int pending = 0;
+        int batchSize = getExecuteBatchSize();
         try (  PreparedStatement preparedStatement =  connection.prepareStatement(sql)){
 
 
-            //for (List<SqlNode> group : dataGroup(entry.getValue())) {
             for (SqlNode node : nodeList) {
                 int index = 1;
-
-
-                for (Object row : node.getList()) {
+                preparedStatement.clearParameters();
+                if (node.getList() != null) for (Object row : node.getList()) {
                     if(row instanceof InputStream){
                         preparedStatement.setBlob(index,(InputStream)row );
                     }else {
@@ -82,18 +80,32 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
 
                 }
                 preparedStatement.addBatch();
+                if (++pending == batchSize) {
+                    total += executeBatch(preparedStatement);
+                    pending = 0;
+                }
             }
-            int[] vals = preparedStatement.executeBatch();
-
-            for (int val : vals) {
-                total += val;
-            }
+            if (pending > 0) total += executeBatch(preparedStatement);
 
         }
 
 
             return total;
 
+    }
+
+    private int executeBatch(PreparedStatement statement) throws SQLException {
+        int[] counts = statement.executeBatch();
+        statement.clearBatch();
+        int total = 0;
+        for (int count : counts) {
+            if (count == Statement.EXECUTE_FAILED) {
+                throw new BatchUpdateException("JDBC batch reported a failed command", counts);
+            }
+            // Some drivers cannot report affected rows: count one successful command, not a negative row count.
+            total += count == Statement.SUCCESS_NO_INFO ? 1 : count;
+        }
+        return total;
     }
 
 

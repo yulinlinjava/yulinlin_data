@@ -25,7 +25,7 @@
 2. 优先使用本文明确列出的入口、包名和签名。未列出的高级功能应查当前源码，不根据其他框架同名方法猜测。
 3. 主键用 `@JoinMeta(primaryKey = true)`；不要沿用旧文档中的 `@JoinPrimary`。
 4. 先确认表结构、实体基类、主键、筛选条件及会话，再生成写入代码。不要生成无条件更新或删除，也不要假设框架有全表写入拦截。
-5. ORM 需要 Spring 上下文初始化完成、可用数据库会话与已存在的表；不要在静态初始化块中查询数据库。框架不负责根据下文实体自动建表。
+5. ORM 需要 Spring 上下文初始化完成、可用数据库会话与已存在的表；不要在静态初始化块中查询数据库。SQLite 可显式开启实体扫描创建缺失表（见 SQLite 专题）；其他路径不要假设自动建表。
 6. 深克隆与 Bean 到 DTO 的类型映射不是同一能力。HTTP 的“不是 404”与“请求成功”也不是同一含义。
 7. 编码之前确认实际依赖包含接口；如果缺少类或方法，先核对版本和运行时类路径，不用反射或异常吞掉掩盖版本错配。
 
@@ -34,6 +34,7 @@
 | 需求 | 模块 | 准确入口 |
 | --- | --- | --- |
 | Spring Boot + MySQL ORM | starter + mysql | `com.yulinlin.common.domain.IdEntity` / `SuperEntity` |
+| Spring Boot + SQLite ORM | starter + sqlite | `yulinlin.sqlite.file`，沿用相同实体与 Wrapper |
 | 实体映射 | core | `com.yulinlin.data.core.anno.JoinTable`、`JoinField`、`JoinMeta`、`JoinWhere` |
 | 数据库分页结果 | lang | `com.yulinlin.data.lang.util.Page`，不是 Spring Data Page |
 | HTTP | core | `com.yulinlin.data.core.http.HttpRequestClient`、`HttpUtil` |
@@ -50,6 +51,8 @@ MySQL 是本文完整示例路径。仓库存在其他数据库模块，不代�
 
 <!-- source: doc/topics/10-orm.md -->
 ## ORM 接入与 CRUD
+
+多个数据库的配置、`JdbcSessionFactory.create` 注册及选库，见同目录 `15-datasources.md`（单文件指南已包含该专题）。
 
 > 状态：当前使用文档；来源核对基线：2026-10-01，2026-10-04 整理。
 > 适用：制品版本 3.0 / JDK 25 / Spring Boot 3.5。示例未全部编译或集成验证，不等于运行测试通过。
@@ -225,36 +228,501 @@ public class DemoUserService {
 
 ---
 
+<!-- source: doc/topics/15-datasources.md -->
+## 多数据源：创建、注册与选择 JDBC 会话
+
+> 状态：2026-10-04 按当前源码核对，未连接真实数据库运行多数据源集成测试。
+> 适用：JDK 25、制品版本 3.0、Spring Boot 3.5；本例两个数据源均为 MySQL。
+> 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
+
+### 1. create 与注册不是同一步
+
+```java
+JdbcSession create(DataSource dataSource, String group)
+JdbcSession create(DataSourceProperties properties, String group)
+```
+
+`group` 是路由使用的会话组名，不是数据库名，也不是 Spring Bean 名。工厂会设置解析器、编码器、缓存、过滤器等依赖并返回会话，但 **create 本身不注册路由**。
+
+Spring 推荐路径：将返回对象声明成 `@Bean`。core 自动配置注入 `List<EntitySession>`，然后执行 `routeSession.registerSession(list)`。因此通常无需自己再 registerSession。
+
+| Spring DataSource Bean | Spring 会话 Bean | 会话组 | 生成方式 |
+| --- | --- | --- | --- |
+| `dataSource`（@Primary） | `jdbcSession` | `primary` | MySQL 自动配置创建 |
+| `ossDataSource` | `ossSession` | `oss` | 自定义 Bean 调用 factory.create |
+
+`@Primary` 解决 Spring 注入歧义；字符串 `primary` 是框架默认路由组。这两个概念不同。
+
+### 2. 完整配置：保留自动 primary，再新增 oss
+
+前提：已引入 starter + mysql，配置类在应用组件扫描范围内。此例替代原单数据源手工配置；不要再保留另一份同名 DataSource Bean。
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/main_db
+    username: ${MAIN_DB_USERNAME}
+    password: ${MAIN_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+oss:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/oss_db
+    username: ${OSS_DB_USERNAME}
+    password: ${OSS_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+```
+
+```java
+package demo.config;
+
+import com.yulinlin.jdbc.session.JdbcSession;
+import com.yulinlin.jdbc.session.JdbcSessionFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import javax.sql.DataSource;
+
+@Configuration(proxyBeanMethods = false)
+public class MultiDataSourceConfig {
+    @Bean("mainDataSourceProperties")
+    @Primary
+    @ConfigurationProperties("spring.datasource")
+    public DataSourceProperties mainProperties() {
+        return new DataSourceProperties();
+    }
+
+    @Bean("dataSource")
+    @Primary
+    public DataSource mainDataSource(
+            @Qualifier("mainDataSourceProperties") DataSourceProperties properties) {
+        return properties.initializeDataSourceBuilder().build();
+    }
+
+    @Bean("ossDataSourceProperties")
+    @ConfigurationProperties("oss.datasource")
+    public DataSourceProperties ossProperties() {
+        return new DataSourceProperties();
+    }
+
+    @Bean("ossDataSource")
+    public DataSource ossDataSource(
+            @Qualifier("ossDataSourceProperties") DataSourceProperties properties) {
+        return properties.initializeDataSourceBuilder().build();
+    }
+
+    @Bean("ossSession")
+    public JdbcSession ossSession(@Qualifier("mysqlSessionFactory") JdbcSessionFactory factory,
+            @Qualifier("ossDataSource") DataSource dataSource) {
+        return factory.create(dataSource, "oss");
+    }
+}
+```
+
+为什么主数据源也显式定义：应用新增 DataSource Bean 会影响 Boot 默认数据源的条件装配；不要只定义第二个数据源，却假定主数据源一定仍会自动创建。本例明确提供两个数据源，并用 @Primary 指定自动 `jdbcSession` 应注入哪一个。
+
+不要额外声明 `factory.create(mainDataSource, "primary")` 的会话 Bean：当前 MySQL 自动配置按 Bean 名 `jdbcSession` 条件创建主会话。两个不同会话对象使用同一组名会作为同组节点注册，不是按组名覆盖。与 SQLite 共存时，工厂必须用 `@Qualifier("mysqlSessionFactory")` 指定，不能把 SQLite 解析器用于 MySQL。
+
+工厂应使用 Spring 注入的实例，不能直接 `new JdbcSessionFactory(...)` 后就调用 create，因为其内部依赖需要注入。当前 MySQL 工厂使用 MySQL 解析器，不能用它直接承诺连接 PostgreSQL/Oracle 后 SQL 方言也正确。
+
+### 3. 如何指定使用 oss
+
+#### 方式 A：业务方法上的 @JoinSession
+
+```java
+package demo.service;
+
+import com.yulinlin.data.core.anno.JoinSession;
+import demo.domain.DemoUser;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+
+@Service
+public class OssUserService {
+    @JoinSession("oss")
+    @Transactional(rollbackFor = Exception.class)
+    public List<DemoUser> findEnabled() {
+        return new DemoUser().createSelectWrapper()
+                .eq(DemoUser::getStatus, 1).selectList();
+    }
+}
+```
+
+DemoUser 定义在 ORM 专题中，本例假设 oss_db 也有该实体对应的表。调用必须经过 Spring 代理；不能靠同类自调用切换数据源。注解也可放在 Service 类上，方法注解优先于 Service 类注解。
+
+#### 方式 B：实体固定会话组
+
+在已有实体类上添加 `@com.yulinlin.data.core.anno.JoinSession("oss")`。RouteSession 在请求未显式指定组时读取模型注解；这不是 DataSource Bean 的 qualifier。
+
+#### 方式 C：模型包装器显式指定
+
+```java
+import com.yulinlin.common.model.ModelSelectWrapper;
+import demo.domain.DemoUser;
+
+// 放在业务方法中；事务边界按下节说明设置
+var query = ModelSelectWrapper.newInstance("oss", new DemoUser());
+var users = query.selectList();
+```
+
+主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认 primary。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
+
+### 4. 事务与生命周期限制
+
+- Spring `@Transactional` 已接入框架切面，但 `@JoinSession` 不是 Spring 事务管理器选择器，不会自动创建或切换 PlatformTransactionManager。
+- JdbcSession 自己管理事务和连接，不再根据已注册的组数切换连接模式。没有外层事务时，每次 ORM 请求自动完成自己的事务；Session 也能直接执行已准备的 ExecuteRequest/QueryRequest，不依赖 RouteSession。
+- RouteSession 在事务中按需加入会话，只结束自己加入的那一层事务；独立 Session 已有的外层事务仍由调用方结束。业务需要合并多个请求时，使用框架事务注解或 route.transaction。
+- 检测到同一个 DataSource 已由 Spring 绑定事务连接时，保持调用线程上的单连接执行，由 Spring 完成物理提交/回滚，不再另开并发连接绕过 Spring。
+- 跨库提交不是 XA/分布式原子事务；Propagation、隔离、noRollbackFor、异步等语义不能仅凭同名注解推定完全一致。详细边界见事务专题。
+- DataSource 单独声明成 Bean 有利于容器管理连接池生命周期。`create(DataSourceProperties, group)` 内部会新建 DataSource；不要默认它等价于单独的、由容器销毁的 DataSource Bean。
+
+### 5. 手动注册与验收
+
+非 Bean 动态会话可以在路由初始化完成后调用：
+
+```java
+// factory、route 和 dataSource 均为已配置好的对象
+JdbcSession session = factory.create(dataSource, "reporting");
+route.registerSession(session);
+```
+
+这里 route 类型为 `com.yulinlin.data.core.session.RouteSession`。不要在创建会话 Bean 的方法中反向注入 RouteSession 来注册，可能形成初始化循环。已经作为 EntitySession Bean 自动注册的会话无需再次注册。
+
+当前注册表没有提供完整的并发动态管理保证；不要将这个片段当作运行时随意增加/移除租户库的生产方案。
+
+启动后检查 `SessionUtil.route().loadBalanceList()` 是否包含 primary、oss。两个库预置不同标记数据，通过代理调用上述 Service 确认选库；分别验证正常提交、异常回滚和跨库失败行为。此文档没有替你执行这些数据库操作。
+
+### 6. 大集合：最多 4 个连接，每次 JDBC batch 默认 256 条
+
+普通集合 execute 本身已经使用 JDBC batch；增加 `.batch()` 才申请多连接并发写入，不需要修改原业务 API。先检查实际 Session 的 `supportsParallelWrites()`，不支持时**不做并发分组**，在调用线程用一个连接处理整批数据。
+
+支持时，将全部解析结果均匀分成最多 x 个大组，每组提交一个任务，在整个任务内持续使用一个连接。同一 SQL 模板复用一个 PreparedStatement，每满 256 条执行一次 `executeBatch()`，最后执行不足 256 条的尾批。比如 10 万条、4 个连接：最多 4 个任务，每组 2.5 万条，而不是提交数百个 128 条任务。
+
+`ExecuteRequest.batchSize` 仍是启用异步执行的**整次请求最小条数**，默认 128；不等于 JDBC batch 大小。整次请求不足阈值时合为一组同步执行；达到阈值后，即使某个工作组不足 128 条也可并发。未调用 `.batch()` 或未提供执行器时不并发分组。解析仍会持有整个输入集合，不是流式导入。
+
+```java
+ModelInsertWrapper.newInstance("oss", usersToInsert).batch().execute();
+// 更新、删除也保留现有的 .batch() 入口。
+```
+
+默认值可省略；用户在应用外围配置：
+
+```yaml
+yulinlin:
+  datasource:
+    jdbc:
+      parallel-connections: 4
+      execute-batch-size: 256
+```
+
+两项均要求正整数，独立控制并发连接数和一次 `executeBatch()` 的行数。`parallel-connections: 1` 表示不并发分组。连接数是**每个 Session、每个框架事务的物理连接上限**，不是整个应用的并发上限，也不是连接池的 maximumPoolSize。连接按需创建，不会每次请求固定打开 4 个；HikariDataSource 下还会限制为池的 maximumPoolSize，实际并行度也受数据量和执行器线程数限制。
+
+可以按会话覆盖，在会话未开启事务时调用：
+
+```java
+JdbcSession session = factory.create(dataSource, "reporting");
+session.setParallelConnections(2);
+session.setExecuteBatchSize(512);
+boolean parallelAllowed = session.supportsParallelWrites();
+// Spring Bean 或手动注册均沿用前文方式。
+```
+
+`supportsParallelWrites()` 是与当前线程事务上下文有关的能力查询，不会为了查询而打开连接；它不表示连接池当前还有多少空闲连接，也不保证数据库性能收益。SQLite 内置会话固定使用 1 个连接，返回 false，不受通用默认值 4 影响；Spring 已绑定事务连接或 Hikari 最大连接数为 1 时也返回 false。上层统一通过这个函数决定是否分组，不另建 SQLite Session 子类。要用多连接批处理，用框架 `@JoinTransaction`/route.transaction，避免同时用 Spring 事务管理器绑定同一数据源。
+
+**执行 JDBC batch 不等于提交事务。**每 256 条只发送一批参数，所有组执行完成后才沿用 Session/RouteSession 的事务提交边界；后续批次失败，单连接事务中之前执行的批次一起回滚。驱动返回 `SUCCESS_NO_INFO` 时按一条成功命令计数，不代表精确受影响行数；`EXECUTE_FAILED` 或 BatchUpdateException 都使请求失败。
+
+批次提交或同步执行中途失败时，框架仍等待**所有已提交任务**结束，再处理回滚和释放连接；不会因为最后一批是同步任务而提前返回。内层回滚或执行失败被业务捕获，也会标记 rollback-only，不能继续把外层 JDBC 事务正常提交。
+
+多连接拥有各自的数据库事务，逐个提交，不是一个原子数据库事务：提交中途失败时，已经提交的连接无法撤销；提交前跨连接查询也不保证读到其他连接的未提交写入。需要单库严格原子性和事务内读己之写，配置 `parallel-connections: 1`。外围连接池需给其他请求预留容量；多个批量事务同时占用连接仍可能等待或超时，不应把并发值等同于无成本加速。未连接真实 MySQL 做吞吐量测试，不承诺 4 倍性能。
+
+---
+
+<!-- source: doc/topics/16-sqlite.md -->
+## SQLite：本地文件数据库
+
+> 适用：JDK 25 / 制品版本 3.0。实现位于 `sqlite/`；通用 SQL 解析位于 `jdbc/.../sql/`。
+> SQLite 与 MySQL 复用普通 CRUD 解析器和现有 Model Wrapper API，不需要另一套实体或 DAO。
+
+### 最小接入
+
+Spring Boot 项目添加依赖；已有 starter 时不用重复添加。
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>starter</artifactId>
+    <version>3.0</version>
+</dependency>
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>sqlite</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+仅使用 SQLite 时不需要 mysql 模块、数据库服务器、用户名或密码：
+
+```yaml
+yulinlin:
+  sqlite:
+    file: data/local.db
+```
+
+相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时不启用本模块。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
+
+默认会话组是 `local`，请求时使用 `newInstance("local", ...)`。框架未指定会话时仍默认选择 `primary`；仅使用 SQLite 且希望省略会话参数时，可显式配置 `group: primary`。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
+
+### CRUD 完全沿用现有用法
+
+#### 可选：扫描实体自动建表
+
+```yaml
+yulinlin:
+  sqlite:
+    file: data/local.db
+    schema:
+      enabled: true
+      packages:
+        - com.example.local.entity
+```
+
+自动扫描指定包及子包中带 `@JoinTable("表名")` 的具体实体，在 SQLite 会话创建前完成建表。不实例化实体，不注册成 Spring Bean；仅操作模块内置的 SQLite 连接池，不操作 MySQL。默认关闭；开启却未指定包、没有扫描到物理表实体时启动失败，避免配置错误被忽略。
+
+复用现有继承字段、`@JoinField(name=...)`、`@JoinMeta(primaryKey=true)` 和 JDBC 驼峰列名配置。跳过静态/transient 字段、`exist=false`、计算字段以及 JOIN 查询模型。建议扫描专用实体包，不要混入查询投影 DTO。表名必须是普通名称，不支持别名、SQL 表达式或限定名称；不自动创建索引、外键或复合主键。主键值继续按原框架方式提供，不新增生成主键回填机制。
+
+| 实体字段类型 | 自动建表列类型 |
+| --- | --- |
+| byte/short/int/long 及包装类、boolean/Boolean | `INTEGER` |
+| float/double 及包装类 | `REAL` |
+| 日期时间、枚举、BigDecimal、BigInteger | `TEXT` |
+| String、字符、JSON 对象、Map、集合 | `TEXT` |
+| byte[] | `TEXT`，现有 ByteArrayCoder 输出 Base64 |
+
+编解码继续使用现有 SQL 编解码器，不新增转换层。自定义编码器必须与上述存储约定兼容；建表不保证任何任意 Java 类型都可以被现有编码器正确读写。
+
+`BigDecimal` 存 TEXT 可保留现有字符串编码精度，但数据库直接排序、范围比较是文本语义，**不等于数值大小比较**。日期统一 `yyyy-MM-dd HH:mm:ss` 且时区一致时可做文本范围查询；当前 DateCoder 只有秒精度。
+
+也可以注入管理器手动执行（方法体片段）：
+
+```java
+// 注入 com.yulinlin.jdbc.sqlite.SqliteSchemaManager schemaManager
+var result = schemaManager.scanAndCreate("com.example.local.entity");
+// 或只处理明确指定的实体：
+schemaManager.createTables(SysUserVo.class, LocalConfig.class);
+// result.entities() / result.created() / result.existing()
+```
+
+手动入口即使自动扫描关闭也可使用；应在业务事务外、没有并发迁移时调用。每批 DDL 使用一个事务，失败全部回滚。不存在的表创建，已有表检查列类型亲和性和主键；缺列、类型不兼容或同表映射冲突会报错，不自动补列、删表或改数据。额外普通列允许保留，但额外列自身的 NOT NULL、CHECK、触发器等约束仍由数据库执行，本工具不是完整迁移/约束验证器。
+
+以下是方法体片段，假设 `SysUserVo` 是现有框架实体、对应业务表已创建：
+
+```java
+import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.common.model.ModelInsertWrapper;
+
+// SQLite 默认会话组为 local。
+var users = ModelSelectWrapper.newInstance("local", SysUserVo.class).selectList();
+
+// 批量插入：一次传入集合，内部使用事务和 JDBC batch。
+ModelInsertWrapper.newInstance("local", usersToInsert).execute();
+```
+
+条件、排序、分页、更新和删除继续使用原 Wrapper，不要自行拼接用户输入。批量插入要使用待插入的新数据，不要将查询结果直接重复插入。框架不自动阻止无条件更新或删除。
+
+### 与 MySQL 同时使用
+
+保留 mysql 模块与原 `spring.datasource`，SQLite 默认使用独立的 `local` 组，以下 `group: local` 可省略：
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/app
+    username: app
+    password: ${DB_PASSWORD}
+yulinlin:
+  sqlite:
+    file: data/local.db
+    group: local
+```
+
+```java
+// 第一个参数就是数据源会话组，与 oss 的选择方式相同。
+var localUsers = ModelSelectWrapper.newInstance("local", SysUserVo.class).selectList();
+var mysqlUsers = ModelSelectWrapper.newInstance("primary", SysUserVo.class).selectList();
+```
+
+`spring.datasource.hikari` 仍用于主库。SQLite 使用模块内置的连接池，不继承 MySQL URL 或连接池设置，也不注册 `DataSource` Bean。连接池由 `SqliteDatabase` 创建并在应用关闭时释放；业务无需声明或注入 SQLite DataSource。自定义主 DataSource Bean 时，多主库按 Spring 的规则选择 `@Primary`；SQLite 组保持 `local` 即可，不会参与 DataSource Bean 的选择。不要将不同数据库注册在同一个组下做随机路由。
+
+### 默认值与性能取舍
+
+| 配置/行为 | 默认值 | 含义 |
+| --- | --- | --- |
+| `file` | 必填 | 本地数据库文件路径 |
+| `group` | `local` | Wrapper 第一个参数指定的会话组 |
+| `busy-timeout` | `5000` | 等待 SQLite 锁的毫秒数，不是查询超时 |
+| `synchronous` | `NORMAL` | 可选 `FULL`；不提供关闭同步的默认方案 |
+| 日志模式 | WAL | 启动时启用并验证，失败则启动失败 |
+| 外键 | ON | 每个物理连接启用外键检查 |
+| 连接池 | 1 个连接 | 本模块池内操作串行，减少写连接争抢 |
+
+```yaml
+yulinlin:
+  sqlite:
+    file: data/local.db
+    busy-timeout: 5000
+    synchronous: FULL
+```
+
+WAL 不代表多个写事务可以同时执行。单连接方案偏向简单可靠的本地写入，不是最大化读并发；长事务会占用唯一连接。连接池等待上限为 `max(1000, busy-timeout + 1000)` 毫秒，超时抛异常，不会无限等待。
+
+`NORMAL` 是性能与持久性的折中，断电或操作系统崩溃时最近已提交的数据可能丢失；更重视持久性使用 `FULL`。批量写入优先一次提交集合，不要每行单独开事务。没有针对你的业务负载跑性能基准，因此不承诺吞吐量。
+
+### 事务
+
+不写事务注解也能执行 CRUD；这不等于禁用 SQLite 事务。单次 ORM 请求内部提交，批量失败回滚，多个独立调用不会自动合并成一个业务事务。
+
+SQLite 直接参与框架的会话事务，不自动注册 `sqliteTransactionManager`，也无需业务注册。框架会记录事务中使用的会话，在正常结束时逐个提交、异常时逐个回滚。
+
+```java
+// 放在 Spring 管理的 Service public 方法上，通过代理调用。
+@com.yulinlin.data.core.anno.JoinTransaction
+public void saveLocal() {
+    ModelInsertWrapper.newInstance("local", usersToInsert).execute();
+    // 同一事务内继续执行其他框架 ORM 操作
+}
+```
+
+也可以使用框架已兼容的 Spring `@Transactional` 注解，或直接调用 `SessionUtil.route().transaction(() -> { ... })`。仅有 SQLite 时，不需要为此额外创建 Spring JDBC 事务管理器，注解由框架事务切面管理会话。与 MySQL 共存时，Spring 自身的事务拦截器可能仍管理主库；跨框架会话的事务边界推荐使用 `@JoinTransaction`。
+
+SQLite 直接使用通用 `JdbcSession` 和 `JdbcSessionFactory`，不另建 SqliteSession 子类；只配置 SQLite 解析器和单连接上限。各 JdbcSession 都保持自己的连接与事务状态，SQLite 的 `.batch()` 仍在同一连接同步执行。多数据源事务逐个提交，并非分布式原子提交；中途提交失败不能保证其他已经提交的数据回滚。`REQUIRES_NEW`、保存点、`noRollbackFor` 等 Spring 高级事务属性不属于框架切面的完整语义。
+
+SQLite 的 `session.supportsParallelWrites()` 返回 false：整批请求不做并发分组，不投递写入工作线程，减少 SQLite 单一写入者限制下的锁竞争。底层仍默认每 256 条执行一次 JDBC batch，并复用同一个连接和同一 SQL 模板的 PreparedStatement；这不是每 256 条 commit。可通过 `yulinlin.datasource.jdbc.execute-batch-size` 调整批次大小，不改变事务边界；`parallel-connections` 的通用配置不覆盖 SQLite 的单连接限制。
+
+### 方言与运维边界
+
+- 普通 CRUD、条件、排序和分页复用 JDBC 通用解析；MySQL 原解析器类名保留兼容入口。
+- SQLite 不支持 `SELECT FOR UPDATE`，底层 `SelectWrapper.lock()` 解析时明确报错，不静默忽略锁；这不是 ModelSelectWrapper 的方法。
+- MySQL 的日期/时间间隔分组不直接复用；SQLite 当前对此明确报不支持。自定义 SQL、函数、JSON 和复杂 JOIN 的语义需要按 SQLite 验证，不保证所有 MySQL SQL 等价。
+- WAL 文件需要可写的本地目录，不要把数据库放在网络共享盘。运行期间不要单独删除 `-wal`、`-shm` 或只复制主文件作为可靠备份。
+- JDK 25 的 SQLite 原生库可能提示 native-access 警告，启动时可添加 `--enable-native-access=ALL-UNNAMED`。
+
+### 验证范围
+
+集成测试位置：`sqlite/src/test/java/com/yulinlin/jdbc/sqlite/SqliteIntegrationTest.java`。覆盖真实临时文件、WAL/同步/外键设置、CRUD、分页、批量失败回滚、Spring 注解的框架回滚、多会话提交与回滚、重开文件，以及 MySQL/SQLite 独立会话路由。共存测试不连接外部 MySQL，不等于 MySQL 服务器回归测试。
+
+```shell
+mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+---
+
 <!-- source: doc/topics/20-transactions.md -->
-## Spring 事务兼容与边界
+## JDBC 事务：独立 Session、路由协调与 Spring 接入
 
-> 状态：当前使用文档；来源核对基线：2026-10-01，2026-10-04 整理。
-> 适用：制品版本 3.0 / JDK 25 / Spring Boot 3.5。示例未全部编译或集成验证，不等于运行测试通过。
-> 源码定位：`jdbc/src/main/java/com/yulinlin/jdbc/aop/SpringTransactionAop.java`；`jdbc/src/main/java/com/yulinlin/jdbc/session/ConnectionUtil.java`。若与实际安装版本冲突，以该版本源码为准。
+> 基线：2026-10-04 / JDK 25 / 制品版本 3.0 / Spring Boot 3.5。
+> 源码：core 的 AbstractSession、RegisterSession、RouteSession；jdbc 的 AbstractJdbcSession、ConnectionPool、SpringTransactionAop。
 
-框架已接入 Spring `org.springframework.transaction.annotation.Transactional`，不要求业务只能使用 `@JoinTransaction`。Spring Boot 常规单数据源、同步 JDBC 场景优先按上例使用 Spring 注解，并保证事务管理器管理同一个 DataSource。
+### 推荐选择
 
-源码依据：jdbc 自动配置 `DataJdbcApplication` 注册 `SpringTransactionAop`，识别方法或类上的 Spring `@Transactional`，同步调用 route 的 start/commit/rollback；同步 JDBC 调用经 `ConnectionUtil` 获取和释放连接，在其单路由分支使用 `DataSourceUtils`，参与 Spring 绑定的连接事务。
+- 多数据源或多连接批处理：使用框架 `@JoinTransaction` 或 `SessionUtil.route().transaction(...)`。
+- 已有 Spring 管理的单数据源业务：继续使用 Spring `@Transactional`；检测到同一 DataSource 的绑定连接时，框架复用它，在原线程顺序执行，由 Spring 完成物理事务。
+- 严格单库原子性：`parallel-connections: 1`，不要把多连接批处理当作单个数据库事务。
+- SQLite：使用通用 JdbcSession、单连接，默认组 local；无需注册 DataSource 或 sqliteTransactionManager Bean。
 
-需要 Spring 代理生效；`new Service()` 或同对象内部直接调用不能当作有效代理事务示例。不要同时叠加两种事务注解作为默认用法。
+不要默认同时叠加两种事务注解。代理注解需要 Spring 管理的对象并经代理调用，同类自调用或 `new Service()` 不会生效。
 
-兼容边界：当前框架切面本身不解析 propagation、isolation、rollbackFor 等注解属性；Spring 事务拦截器会负责其自身事务属性，但不能据此保证框架自管连接路径与 Spring 的所有语义一致。`ConnectionUtil` 在 `loadBalanceList().size() > 1` 时使用自有连接池，异步更新也走自有连接路径。多路由、异步、REQUIRES_NEW/嵌套事务、noRollbackFor 等场景需另做集成验证，不承诺自动跨数据源原子提交。
+### 框架事务示例
 
-另外保留框架注解 `com.yulinlin.data.core.anno.JoinTransaction`。其 `String[] value()` 当前没有被切面读取，不要依靠该参数选择事务会话。两种注解不是可以无条件互换的全部事务语义实现。
+```java
+import com.yulinlin.data.core.anno.JoinTransaction;
 
-### 标准业务方法写法
+@JoinTransaction
+public void saveBusinessData() {
+    ModelInsertWrapper.newInstance("primary", mysqlUsers).batch().execute();
+    ModelInsertWrapper.newInstance("local", localUsers).execute();
+    // 任何未捕获的异常都触发回滚协调。
+}
+```
+
+也可以直接使用回调：
+
+```java
+SessionUtil.route().transaction(() -> {
+    ModelInsertWrapper.newInstance("oss", usersToInsert).batch().execute();
+    return null;
+});
+```
+
+单次 CRUD 请求没有外层事务时也会自动开始、完成自己的事务；多个独立请求不会自动组成一个业务事务。
+
+RouteSession 按实际访问加入参与者，每个 Session 只加入一次；最终正常结束逐个提交，异常逐个回滚。状态按路由实例、会话实例及调用线程隔离，不再由静态计数或已注册组数决定。路由只结束自己加入的事务层，不代替业务关闭一个预先独立开启的外层 Session 事务。
+
+### 独立 Session
+
+配置好的 JdbcSession 可以不通过路由直接执行已构造的请求：
+
+```java
+// 方法体片段，所在方法声明 throws Exception。
+// jdbcSession 是工厂已配置的对象；insertRequest 是已构造的 ExecuteRequest。
+jdbcSession.startTransaction();
+try {
+    jdbcSession.insert(insertRequest);
+    jdbcSession.update(updateRequest);
+    jdbcSession.commitTransaction();
+} catch (Exception | Error error) {
+    try { jdbcSession.rollbackTransaction(); }
+    catch (Exception | Error cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+    throw error;
+}
+```
+
+也可以直接 `jdbcSession.insert(insertRequest)`，让这一请求自动管理事务。事务必须在开启它的同一线程结束。这里的独立能力指请求执行不依赖全局 RouteSession；工厂仍需注入编码器、解析器等组件，现有 Model Wrapper 的构造/execute 快捷入口仍依赖框架路由。
+
+### 并发批处理与异常
+
+默认并发连接上限为 4，外围配置为 `yulinlin.datasource.jdbc.parallel-connections`，按会话覆盖用 `session.setParallelConnections(n)`；完整配置和 `.batch()` 示例见多数据源专题。
+
+支持并发写入时，上层分成最多连接上限数量的大组，一组一个任务/连接；`supportsParallelWrites()` 为 false 时不分组。底层每次 JDBC batch 默认 256 条，可用 `yulinlin.datasource.jdbc.execute-batch-size` 或 `session.setExecuteBatchSize(n)` 调整。`executeBatch()` 仅执行语句，不 commit，不缩小业务事务的回滚范围。
+
+未绑定 Spring 事务时，异步任务明确捕获所属 Session 的连接上下文，不依赖工作线程的 ThreadLocal。每个物理连接互斥使用；等待所有已提交任务结束后，才提交、回滚或回收连接。同步/异步混合批次累加所有结果，不能因为同步批次已产生结果就提前返回。失败和连接清理异常向调用方传播，次要异常保留为 suppressed。
+
+嵌套回滚，以及已有事务中的 JDBC 请求执行失败，会标记 rollback-only。即使业务捕获异常，外层也不能继续正常提交；外层结束实际回滚并抛出异常。嵌套是共享外层事务的计数，不是保存点回滚。
+
+### Spring 注解：支持范围与限制
 
 ```java
 import org.springframework.transaction.annotation.Transactional;
 
-// 放在 Spring 管理的 Service public 方法上，并通过代理调用。
 @Transactional(rollbackFor = Exception.class)
-public void saveBusinessData() {
-    // 在这里执行本次业务需要的 ORM 操作
+public void saveOneDatabase() {
+    ModelInsertWrapper.newInstance("primary", usersToInsert).execute();
 }
 ```
 
-本专题核对了注解与连接接入路径，没有执行事务回滚集成测试。验收应至少覆盖正常提交、异常回滚、同类自调用，以及项目实际使用的传播行为。
+jdbc 自动配置注册 SpringTransactionAop，识别类/方法的 Spring注解，开启和结束框架路由事务。若存在 Spring 原生事务管理器，其事务拦截器仍负责自己的属性。框架借用 DataSourceUtils 的绑定连接，不跨工作线程使用，也不自行提交/关闭 Spring 拥有的连接。执行失败会立即标记对应的 Spring ConnectionHolder 为 rollback-only，避免业务捕获异常后原生 Spring 先提交。
+
+仅有 SQLite 时没有原生 JDBC 事务管理器也能使用这个注解，由框架切面管理会话；这不代表实现了 Spring 的全部事务语义。
+
+框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性；`@JoinTransaction.value()` 也不用于选择参与数据源。框架嵌套计数不等价于 REQUIRES_NEW、NESTED 或保存点；异步业务线程不会自动继承事务。高级传播、同步代理自动更新、Spring 与非 Spring 管理的多个库交叉参与，仍需针对实际代理顺序和业务做集成验证，不承诺透明兼容。
+
+### 原子性边界
+
+多数据源和多物理连接都是**本地事务的协调**，不是 XA/分布式原子事务。所有任务成功只是进入提交阶段，不能保证所有连接一起提交成功；中途提交失败时尝试回滚后续连接并清理全部资源，但已经成功提交的数据无法撤销。
+
+同一 Session 使用多个连接时，提交前的跨连接查询也不保证读到其他连接的未提交写入。原子业务使用单连接；需要跨库强一致性应另选分布式事务或设计补偿，不要依据同名注解推定保证。
+
+### 已验证与未验证
+
+专项测试覆盖：Session 独立事务与实例隔离、默认 4/配置 2 连接限流、10 万条均匀四组、PreparedStatement 复用、256 条分批及尾批、能力关闭时不分组、后续批次失败回滚、同步/异步混合结果、失败任务排空、拒绝提交、嵌套 rollback-only、连接提交/回滚/关闭失败清理、获取连接等待不阻塞其他借用者归还、真实 Spring AOP 顺序及绑定连接复用；SQLite 真实临时文件 CRUD、512 行批次和整批失败回滚、多会话协调及编解码/建表。
+
+JDBC 并发/错误注入测试使用模拟连接；SQLite 使用真实本地文件。未连接外部 MySQL，也未执行业务吞吐量或高级 Spring 传播行为基准。
+
+```shell
+mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
 
 ---
 

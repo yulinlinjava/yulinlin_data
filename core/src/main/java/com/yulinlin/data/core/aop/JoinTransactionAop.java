@@ -33,7 +33,8 @@ public class JoinTransactionAop {
              val =  pjp.proceed();
         }catch (Throwable e){
 
-            SessionUtil.route().rollbackTransaction();
+            try { SessionUtil.route().rollbackTransaction(); }
+            catch (Throwable cleanup) { if (e != cleanup) e.addSuppressed(cleanup); }
             throw e;
         }
         SessionUtil.route().commitTransaction();

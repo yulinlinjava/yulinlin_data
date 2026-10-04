@@ -1,0 +1,15 @@
+yulinlin.datasource.mongodb.log: true
+spring:
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/yulinlin?retryWrites=false
+      database: yulinlin
+      authentication-database: admin
+      transactionEnabled: true
+      #field-naming-strategy: org.springframework.data.mapping.model.SnakeCaseFieldNamingStrategy
+      #驼峰转下划线
+      property-naming-strategy: SNAKE_CASE
+
+
+
+

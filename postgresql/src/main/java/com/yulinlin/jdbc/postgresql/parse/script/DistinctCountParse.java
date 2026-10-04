@@ -1,0 +1,17 @@
+package com.yulinlin.jdbc.postgresql.parse.script;
+
+
+import com.yulinlin.data.core.node.metrics.DistinctCountMetrics;
+import com.yulinlin.data.core.parse.IParamsContext;
+import com.yulinlin.data.core.parse.IParse;
+import com.yulinlin.data.core.parse.IParseManager;
+import com.yulinlin.jdbc.postgresql.parse.AliasUtil;
+
+public class DistinctCountParse implements IParse<DistinctCountMetrics> {
+
+    @Override
+    public Object parse(DistinctCountMetrics condition, IParamsContext params, IParseManager parseManager) {
+        String key = AliasUtil.parse(condition,params) ;
+        return "count(DISTINCT "+key+")";
+    }
+}

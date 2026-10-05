@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 
 @Data
-@ConfigurationProperties("yulinlin.datasource.jdbc")
+@ConfigurationProperties("yulinlin.datasource")
 public class JdbcProperties {
 
     @Value("${log:false}")

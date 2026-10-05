@@ -47,7 +47,6 @@ class SqliteIntegrationTest {
             assertThat(sql.queryForObject("PRAGMA busy_timeout", Integer.class)).isEqualTo(5000);
             assertThat(sql.queryForObject("PRAGMA foreign_keys", Integer.class)).isEqualTo(1);
             assertThat(file).exists();
-            sql.execute("create table local_user(id text primary key, user_name text, status integer)");
             assertThat(SessionUtil.route().loadBalanceList()).containsExactly("local");
             assertThat(ModelInsertWrapper.newInstance("local", List.of(user("1", "alice"), user("2", "bob"))).execute()).isEqualTo(2);
             var page = ModelSelectWrapper.newInstance("local", User.class).orderByAsc(User::getId).selectPage(1, 1);
@@ -79,9 +78,7 @@ class SqliteIntegrationTest {
     }
 
     @Test void autoSchemaSupportsCodecRoundTripAndDateRanges() {
-        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("auto.db"),
-                "yulinlin.sqlite.schema.enabled=true",
-                "yulinlin.sqlite.schema.packages[0]=com.yulinlin.jdbc.sqlite.fixtures").run(context -> {
+        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("auto.db")).run(context -> {
             assertThat(context).hasNotFailed();
             var entity = new com.yulinlin.jdbc.sqlite.fixtures.SchemaEntity();
             entity.setId("1"); entity.setName("test");
@@ -112,12 +109,12 @@ class SqliteIntegrationTest {
         });
     }
 
-    @Test void genericJdbcSessionWorksWithoutRouterAndKeepsSqliteBatchesSingleConnection() {
+    @Test void sqliteSessionWorksWithoutRouterAndKeepsBatchesSingleConnection() {
         runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("generic.db"),
                 "yulinlin.datasource.jdbc.parallel-connections=4").run(context -> {
             assertThat(context).hasNotFailed();
             JdbcSession session = context.getBean("sqliteSession", JdbcSession.class);
-            assertThat(session).isExactlyInstanceOf(JdbcSession.class);
+            assertThat(session).isExactlyInstanceOf(SqliteSession.class);
             assertThat(session.getParallelConnections()).isEqualTo(1);
             assertThat(session.supportsParallelWrites()).isFalse();
             assertThat(session.getExecuteBatchSize()).isEqualTo(256);
@@ -144,15 +141,17 @@ class SqliteIntegrationTest {
         });
     }
 
-    @Test void schemaDisabledByDefaultAndEmptyEnabledScanFails() {
-        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("disabled.db"))
+    @Test void tablesAreCreatedOnFirstRequestNotAtStartup() {
+        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("on-demand.db"))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(new JdbcTemplate(context.getBean(SqliteDatabase.class).dataSource()).queryForObject(
+                    var sql = new JdbcTemplate(context.getBean(SqliteDatabase.class).dataSource());
+                    assertThat(sql.queryForObject(
                             "select count(*) from sqlite_schema where type='table'", Integer.class)).isZero();
+                    assertThat(ModelSelectWrapper.newInstance("local", User.class).selectList()).isEmpty();
+                    assertThat(sql.queryForObject(
+                            "select count(*) from sqlite_schema where name='local_user'", Integer.class)).isEqualTo(1);
                 });
-        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("invalid.db"),
-                "yulinlin.sqlite.schema.enabled=true").run(context -> assertThat(context).hasFailed());
     }
 
     @Test void mysqlAndSqliteHaveIndependentFactoriesAndRouting() {
@@ -164,7 +163,7 @@ class SqliteIntegrationTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean("mysqlSessionFactory")).isExactlyInstanceOf(JdbcSessionFactory.class);
                     assertThat(context.getBean("sqliteSessionFactory")).isExactlyInstanceOf(JdbcSessionFactory.class);
-                    assertThat(context.getBean("sqliteSession")).isExactlyInstanceOf(JdbcSession.class);
+                    assertThat(context.getBean("sqliteSession")).isExactlyInstanceOf(SqliteSession.class);
                     assertThat(context).hasSingleBean(javax.sql.DataSource.class).doesNotHaveBean(SqliteDataSource.class);
                     assertThat(context.getBean(javax.sql.DataSource.class)).isNotSameAs(context.getBean(SqliteDatabase.class).dataSource());
                     var mainTx = context.getBean("transactionManager", DataSourceTransactionManager.class);

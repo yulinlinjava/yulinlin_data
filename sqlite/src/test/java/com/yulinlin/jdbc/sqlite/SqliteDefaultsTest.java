@@ -22,7 +22,6 @@ class SqliteDefaultsTest {
         var properties = new SqliteProperties();
         assertThat(properties.getFile()).isEqualTo("data/local.db");
         assertThat(properties.getGroup()).isEqualTo("sqlite");
-        assertThat(properties.getSchema().isEnabled()).isFalse();
     }
 
     @Test void noYamlFilePropertyStillCreatesConfiguredSessionWithoutTouchingDisk() throws Exception {
@@ -45,6 +44,7 @@ class SqliteDefaultsTest {
                     assertThat(properties.getFile()).isEqualTo("data/local.db");
                     assertThat(properties.getGroup()).isEqualTo("sqlite");
                     var session = context.getBean("sqliteSession", JdbcSession.class);
+                    assertThat(session).isExactlyInstanceOf(SqliteSession.class);
                     assertThat(session.group()).isEqualTo("sqlite");
                     assertThat(session.getParallelConnections()).isEqualTo(1);
                 });

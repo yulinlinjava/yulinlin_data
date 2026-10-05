@@ -13,7 +13,7 @@ public class ExpressionNodeParse implements IParse<CommandNode<String>> {
     public Object parse(CommandNode<String> condition, IParamsContext params, IParseManager parseManager) {
         if(condition.getParams() != null){
             for (Map.Entry<String, Object> stringObjectEntry : condition.getParams().entrySet()) {
-                params.put("#{"+stringObjectEntry.getKey()+"}",stringObjectEntry.getValue());
+                params.put(stringObjectEntry.getKey(),stringObjectEntry.getValue());
             }
         }
 

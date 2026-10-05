@@ -1,76 +1,141 @@
 package com.yulinlin.jdbc.sqlite;
 
+import com.yulinlin.data.core.anno.JoinAggregations;
+import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
+import com.yulinlin.jdbc.sqlite.fixtures.QueryOnly;
 import com.yulinlin.jdbc.sqlite.fixtures.SchemaEntity;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
 import java.nio.file.Path;
+
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class SqliteSchemaManagerTest {
     @TempDir Path directory;
+
     private SqliteDataSource source() {
         var properties = new SqliteProperties();
         properties.setFile(directory.resolve("schema.db").toString());
         return new SqliteDataSource(properties);
     }
 
-    @Test void scansCreatesAndRepeatsWithoutChangingData() {
+    private boolean ensure(SqliteDataSource source, SqliteSchemaManager manager, Class<?> entity) throws Exception {
+        try (var connection = source.getConnection()) {
+            return manager.ensureTable(connection, entity, true);
+        }
+    }
+
+    @Test void createsFromEntityAndRepeatsWithoutChangingData() throws Exception {
         try (var source = source()) {
-            var manager = new SqliteSchemaManager(source, true);
-            var result = manager.scanAndCreate("com.yulinlin.jdbc.sqlite.fixtures");
-            assertThat(result).isEqualTo(new SqliteSchemaManager.SchemaResult(1, 1, 0));
+            var manager = new SqliteSchemaManager();
+            assertThat(ensure(source, manager, SchemaEntity.class)).isTrue();
             var sql = new JdbcTemplate(source);
             var columns = sql.queryForList("pragma table_info(schema_entity)");
             assertThat(columns).extracting(c -> c.get("name")).contains("id", "display_name", "created_at")
                     .doesNotContain("ignored", "computed");
             for (String name : new String[]{"created_at", "state", "amount", "details", "payload", "bytes"}) {
-                assertThat(columns.stream().filter(c -> name.equals(c.get("name"))).findFirst().orElseThrow().get("type")).isEqualTo("TEXT");
+                assertThat(columns.stream().filter(c -> name.equals(c.get("name"))).findFirst().orElseThrow().get("type"))
+                        .isEqualTo("TEXT");
             }
             sql.update("insert into schema_entity(id,display_name) values('1','keep')");
-            assertThat(manager.createTables(SchemaEntity.class).existing()).isEqualTo(1);
+            assertThat(ensure(source, manager, SchemaEntity.class)).isTrue();
             assertThat(sql.queryForObject("select display_name from schema_entity", String.class)).isEqualTo("keep");
             sql.execute("alter table schema_entity add column extra text");
-            assertThat(manager.createTables(SchemaEntity.class).existing()).isEqualTo(1);
+            assertThat(ensure(source, manager, SchemaEntity.class)).isTrue();
         }
     }
 
-    @Test void missingColumnRollsBackAllNewTables() {
+    @Test void callerControlsRollbackOfNewTables() throws Exception {
         try (var source = source()) {
             var sql = new JdbcTemplate(source);
             sql.execute("create table schema_entity(id text primary key)");
-            var manager = new SqliteSchemaManager(source, true);
-            assertThatThrownBy(() -> manager.createTables(NewTable.class, SchemaEntity.class))
-                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("Incompatible SQLite column");
+            var manager = new SqliteSchemaManager();
+            try (var connection = source.getConnection()) {
+                connection.setAutoCommit(false);
+                manager.ensureTable(connection, NewTable.class, true);
+                assertThatThrownBy(() -> manager.ensureTable(connection, SchemaEntity.class, true))
+                        .isInstanceOf(IllegalStateException.class).hasMessageContaining("Incompatible SQLite column");
+                connection.rollback();
+            }
             assertThat(sql.queryForObject("select count(*) from sqlite_schema where name='a_new_table'", Integer.class)).isZero();
             assertThat(sql.queryForList("pragma table_info(schema_entity)")).hasSize(1);
         }
     }
 
-    @Test void rejectsConflictingMappingsAndUnsafeNamesBeforeDdl() {
+    @Test void rejectsConflictingModelsAndUnsafeNamesWithoutMigrating() throws Exception {
         try (var source = source()) {
-            var manager = new SqliteSchemaManager(source, true);
-            assertThatThrownBy(() -> manager.createTables(SchemaEntity.class, Conflict.class)).hasMessageContaining("Conflicting");
-            assertThatThrownBy(() -> manager.createTables(Unsafe.class)).hasMessageContaining("plain");
-            assertThatThrownBy(() -> manager.scanAndCreate()).hasMessageContaining("empty");
-            assertThatThrownBy(() -> manager.scanAndCreate("no.such.entities")).hasMessageContaining("No SQLite");
+            var manager = new SqliteSchemaManager();
+            ensure(source, manager, SchemaEntity.class);
+            assertThatThrownBy(() -> ensure(source, manager, Conflict.class)).hasMessageContaining("Incompatible");
+            assertThatThrownBy(() -> ensure(source, manager, Unsafe.class)).hasMessageContaining("plain");
+            assertThat(new JdbcTemplate(source).queryForList("pragma table_info(schema_entity)"))
+                    .noneMatch(column -> "value".equals(column.get("name")));
         }
     }
 
     @Test void checksExistingTypeAndPrimaryKey() {
         try (var source = source()) {
-            var manager = new SqliteSchemaManager(source, true);
+            var manager = new SqliteSchemaManager();
             var sql = new JdbcTemplate(source);
             sql.execute("create table a_new_table(value integer)");
-            assertThatThrownBy(() -> manager.createTables(NewTable.class)).hasMessageContaining("Incompatible SQLite column");
+            assertThatThrownBy(() -> ensure(source, manager, NewTable.class)).hasMessageContaining("Incompatible SQLite column");
             sql.execute("drop table a_new_table");
             sql.execute("create table a_new_table(value text primary key)");
-            assertThatThrownBy(() -> manager.createTables(NewTable.class)).hasMessageContaining("Incompatible SQLite column");
+            assertThatThrownBy(() -> ensure(source, manager, NewTable.class)).hasMessageContaining("Incompatible SQLite column");
+        }
+    }
+
+    @Test void skipsUnmappedJoinAndStatisticsModelsWithoutTouchingConnection() {
+        var manager = new SqliteSchemaManager();
+        var connection = mock(java.sql.Connection.class);
+        for (Class<?> entity : new Class<?>[]{null, Object.class, java.util.Map.class, QueryOnly.class, Statistics.class}) {
+            assertThat(manager.ensureTable(connection, entity, true)).isFalse();
+        }
+        verifyNoInteractions(connection);
+    }
+
+    @Test void associationFieldsAreNotPhysicalColumns() throws Exception {
+        try (var source = source()) {
+            ensure(source, new SqliteSchemaManager(), Relations.class);
+            assertThat(new JdbcTemplate(source).queryForList("pragma table_info(relations)"))
+                    .extracting(column -> column.get("name")).containsExactly("name");
+        }
+    }
+
+    @Test void doesNotCompleteOrCloseCallersConnection() throws Exception {
+        try (var source = source(); var connection = source.getConnection()) {
+            var observed = spy(connection);
+            assertThat(new SqliteSchemaManager().ensureTable(observed, NewTable.class, true)).isTrue();
+            verify(observed, never()).setAutoCommit(anyBoolean());
+            verify(observed, never()).commit();
+            verify(observed, never()).rollback();
+            verify(observed, never()).close();
+        }
+    }
+
+    @Test void missingTableInReadOnlyTransactionFailsBeforeDdl() throws Exception {
+        try (var source = source()) {
+            TransactionSynchronizationManager.setCurrentTransactionReadOnly(true);
+            try {
+                assertThatThrownBy(() -> ensure(source, new SqliteSchemaManager(), NewTable.class))
+                        .hasMessageContaining("outside a read-only transaction");
+            } finally { TransactionSynchronizationManager.setCurrentTransactionReadOnly(false); }
+            assertThat(new JdbcTemplate(source).queryForObject(
+                    "select count(*) from sqlite_schema where name='a_new_table'", Integer.class)).isZero();
         }
     }
 
     @JoinTable("a_new_table") public static class NewTable { public String value; }
     @JoinTable("schema_entity") public static class Conflict { public Integer value; }
     @JoinTable("unsafe;drop") public static class Unsafe { public String value; }
+    @JoinTable("statistics") public static class Statistics { @JoinAggregations public String name; }
+    @JoinTable("relations") public static class Relations {
+        public String name;
+        @JoinQuery public SchemaEntity child;
+    }
 }

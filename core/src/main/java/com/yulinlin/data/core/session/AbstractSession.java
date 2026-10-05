@@ -11,6 +11,7 @@ import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.parse.SimpParamsContext;
 import com.yulinlin.data.core.proxy.EntityProxyService;
+import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.wrapper.ICountWrapper;
@@ -51,7 +52,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     int core =  Runtime.getRuntime().availableProcessors();
 
-    private ExecutorService threadPoolExecutor = new ThreadPoolExecutor(core,core*2,30,TimeUnit.MINUTES,new LinkedBlockingDeque<>());
+    private ExecutorService threadPoolExecutor = new ThreadPoolExecutor(core,core*2,5,TimeUnit.MINUTES,new LinkedBlockingDeque<>());
 
 
 
@@ -90,6 +91,9 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
     protected  abstract  IDataBuffer executeCount(ParseResult request);
+
+    /** Runs inside the request transaction, only when the request actually reaches the backend. */
+    protected void beforeExecute(BaseRequest<?> request) { }
 
     /** @deprecated Execution groups are now bounded by parallelWriteGroupCount(), not a row chunk size. */
     @Deprecated
@@ -227,6 +231,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             try {
 
                 return transaction(() -> {
+                    beforeExecute(request);
                     IDataBuffer buffer = executeCount(result);
                     String value = buffer.getObject("total");
                     return Integer.parseInt(value);
@@ -257,6 +262,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                     ? parseNodesAndGroup(requestType, request.getRoot(), request.getWrappers(), request.getFromClass())
                     : List.of(parseNodes(requestType, request.getRoot(), request.getWrappers(), request.getFromClass()));
             int rows = lists.stream().mapToInt(List::size).sum();
+            if (rows > 0) beforeExecute(request);
             if (rows < Math.max(1, request.getBatchSize())) {
                 parallel = false;
                 if (lists.size() > 1) {
@@ -378,7 +384,10 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
         Supplier<List<E>> dataLoader = () -> {
 
-                List<IDataBuffer> buffers = transaction(() -> executeSelect(result), result);
+                List<IDataBuffer> buffers = transaction(() -> {
+                    beforeExecute(request);
+                    return executeSelect(result);
+                }, result);
                 List<E>  data = bufferToBean(buffers, request.getEntityClass());
 
 
@@ -423,6 +432,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
         Supplier<List<E>> dataLoader = () -> {
             List<IDataBuffer> buffers  =    transaction(() -> {
+                beforeExecute(request);
                 return executeGroup(result);
             },result);
             List<E>  data = bufferToBean(buffers, request.getEntityClass());

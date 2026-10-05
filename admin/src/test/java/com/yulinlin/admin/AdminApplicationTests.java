@@ -1,6 +1,9 @@
 package com.yulinlin.admin;
 
 
+import com.yulinlin.common.model.ModelInsertWrapper;
+import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
@@ -8,6 +11,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.List;
+import java.util.Map;
 
 //
 @Slf4j
@@ -19,9 +25,19 @@ public class AdminApplicationTests {
 
     @Test
     public void go(){
-        RouteSession route = SessionUtil.route();
-        EntitySession session1 = route.session("");
-        System.out.println(1);
+        SysUserEntity user = new SysUserEntity();
+        user.setUsername("admin");
+
+
+
+        List<SysUserEntity> sqllite = ModelSelectWrapper.newInstance("sqlite", SysUserEntity.class)
+                .selectList();
+
+
+
+        int a = 0;
+
+
     }
 
 

@@ -48,6 +48,8 @@ public class AliasContent {
     private static Map<Class,AliasContent> globalCache = new ConcurrentHashMap<>();
 
     public static AliasContent newInstance(Class clazz,boolean mapUnderscoreToCamelCase) {
+        // Raw SQL may have no entity source. Return a fresh identity mapping, never a shared mutable one.
+        if (clazz == null || clazz == Object.class) return new AliasContent();
         return globalCache.computeIfAbsent(clazz,s -> build(s,mapUnderscoreToCamelCase));
     }
 

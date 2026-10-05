@@ -1,6 +1,5 @@
 package com.yulinlin.jdbc.sqlite;
 
-import com.yulinlin.jdbc.JdbcProperties;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -27,21 +26,11 @@ public class SqliteAutoConfiguration {
 
     @Bean("sqliteSessionFactory")
     @ConditionalOnMissingBean(name = "sqliteSessionFactory")
-    public JdbcSessionFactory sqliteSessionFactory() { return new JdbcSessionFactory(new SqliteParseManager(), "jdbc:sqlite:"); }
-
-    @Bean
-    @ConditionalOnMissingBean(SqliteSchemaManager.class)
-    public SqliteSchemaManager sqliteSchemaManager(SqliteDatabase database, SqliteProperties properties, JdbcProperties jdbc) {
-        var manager = new SqliteSchemaManager(database.dataSource(), jdbc.isMapUnderscoreToCamelCase());
-        if (properties.getSchema().isEnabled()) {
-            manager.scanAndCreate(properties.getSchema().getPackages().toArray(String[]::new));
-        }
-        return manager;
-    }
+    public JdbcSessionFactory sqliteSessionFactory() { return new JdbcSessionFactory("jdbc:sqlite:", SqliteSession::new); }
 
     @Bean("sqliteSession")
     public JdbcSession sqliteSession(@Qualifier("sqliteSessionFactory") JdbcSessionFactory factory, SqliteProperties properties,
-                                      SqliteDatabase database, SqliteSchemaManager schemaManager) {
+                                      SqliteDatabase database) {
         JdbcSession session = factory.create(database.dataSource(), properties.getGroup());
         session.setParallelConnections(1); // WAL still permits only one simultaneous writer per file.
         return session;

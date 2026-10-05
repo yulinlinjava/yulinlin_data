@@ -20,7 +20,7 @@ knife4j:
 
 spring:
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/okvideo?characterEncoding=utf-8&useSSL=false&serverTimezone=GMT&rewriteBatchedStatements=true
+    url: jdbc:mysql://127.0.0.1:3306/ads_bot?characterEncoding=utf-8&useSSL=false&serverTimezone=GMT&rewriteBatchedStatements=true
     username: root
     password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -49,8 +49,8 @@ spring:
     filters: start
 yulinlin:
   datasource:
-    jdbc:
-      log: true
+    default-group: mysql
+    log: true
 
 
 

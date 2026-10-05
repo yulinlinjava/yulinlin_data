@@ -1,120 +1,82 @@
 package com.yulinlin.jdbc.sqlite;
 
 import com.yulinlin.data.core.alias.AliasContent;
+import com.yulinlin.data.core.anno.JoinAggregations;
 import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinLazy;
 import com.yulinlin.data.core.anno.JoinMeta;
+import com.yulinlin.data.core.anno.JoinMetrics;
+import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
-import org.springframework.core.type.filter.AnnotationTypeFilter;
-import org.springframework.util.ClassUtils;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
-/** Creates missing local tables only. Existing data and schemas are never migrated. */
+/** Builds entity mappings once and ensures tables using a caller-owned connection. No scans or commits. */
 public final class SqliteSchemaManager {
-    private static final Logger log = LoggerFactory.getLogger(SqliteSchemaManager.class);
-    private final SqliteDataSource dataSource;
-    private final boolean underscore;
+    private record EntityType(Class<?> type, boolean underscore) { }
+    private record Column(String name, String type, boolean primary) { }
+    private record Table(String name, List<Column> columns) { }
+    private final Map<EntityType, Optional<Table>> mappings = new ConcurrentHashMap<>();
 
-    public SqliteSchemaManager(SqliteDataSource dataSource, boolean mapUnderscoreToCamelCase) {
-        this.dataSource = Objects.requireNonNull(dataSource);
-        this.underscore = mapUnderscoreToCamelCase;
+    boolean isTableEntity(Class<?> entity, boolean underscore) {
+        return table(entity, underscore) != null;
     }
 
-    public record SchemaResult(int entities, int created, int existing) {}
-    private record Column(String name, String type, boolean primary) {}
-    private record Table(String name, List<Column> columns) {}
-
-    /** Scans annotated concrete classes without instantiating entities or initializing classes. */
-    public SchemaResult scanAndCreate(String... packages) {
-        if (packages == null || packages.length == 0) throw new IllegalArgumentException("SQLite schema packages must not be empty");
-        var scanner = new ClassPathScanningCandidateComponentProvider(false);
-        scanner.addIncludeFilter(new AnnotationTypeFilter(JoinTable.class));
-        Map<String, Class<?>> classes = new TreeMap<>();
-        for (String base : packages) {
-            if (base == null || !base.matches("[\\p{javaJavaIdentifierStart}][\\p{javaJavaIdentifierPart}]*(\\.[\\p{javaJavaIdentifierStart}][\\p{javaJavaIdentifierPart}]*)*")) {
-                throw new IllegalArgumentException("SQLite schema requires explicit package names: " + base);
-            }
-            for (var bean : scanner.findCandidateComponents(base)) {
-                String name = bean.getBeanClassName();
-                try {
-                    Class<?> type = Class.forName(name, false, ClassUtils.getDefaultClassLoader());
-                    JoinTable table = AnnotationUtil.findAnnotation(type, JoinTable.class);
-                    if (isSimpleTable(type, table)) classes.put(name, type);
-                    else log.debug("Skipping SQLite query-only model {}", name);
-                } catch (ClassNotFoundException | LinkageError e) {
-                    throw new IllegalStateException("Cannot load SQLite entity " + name, e);
-                }
-            }
-        }
-        if (classes.isEmpty()) throw new IllegalArgumentException("No SQLite table entities found in " + Arrays.toString(packages));
-        return createTables(classes.values().toArray(Class<?>[]::new));
+    private Table table(Class<?> entity, boolean underscore) {
+        if (entity == null) return null;
+        return mappings.computeIfAbsent(new EntityType(entity, underscore), key -> {
+            JoinTable annotation = AnnotationUtil.findAnnotation(key.type(), JoinTable.class);
+            return isSimpleTable(key.type(), annotation)
+                    ? Optional.of(describe(key.type(), annotation, key.underscore())) : Optional.empty();
+        }).orElse(null);
     }
 
-    /** Uses a dedicated local transaction. Call outside business transactions. */
-    public synchronized SchemaResult createTables(Class<?>... entities) {
-        if (org.springframework.transaction.support.TransactionSynchronizationManager.hasResource(dataSource)) {
-            throw new IllegalStateException("Run SQLite schema initialization outside business transactions");
-        }
-        if (entities == null || entities.length == 0) throw new IllegalArgumentException("SQLite entities must not be empty");
-        Map<String, Table> tables = new TreeMap<>();
-        for (Class<?> entity : entities) {
-            Table table = describe(Objects.requireNonNull(entity, "entity"));
-            String key = table.name().toLowerCase(Locale.ROOT);
-            Table previous = tables.putIfAbsent(key, table);
-            if (previous != null && !previous.equals(table)) {
-                throw new IllegalArgumentException("Conflicting SQLite mappings for table " + table.name() + ": " + entity.getName());
-            }
-        }
-        int created = 0;
-        try (Connection connection = dataSource.getConnection()) {
-            connection.setAutoCommit(false);
-            try {
-                for (Table table : tables.values()) {
-                    boolean exists = exists(connection, table.name());
-                    if (!exists) {
-                        StringJoiner columns = new StringJoiner(", ");
-                        for (Column column : table.columns()) {
-                            columns.add(quote(column.name()) + " " + column.type()
-                                    + (column.primary() ? " NOT NULL PRIMARY KEY" : ""));
-                        }
-                        try (var statement = connection.createStatement()) {
-                            statement.executeUpdate("CREATE TABLE " + quote(table.name()) + " (" + columns + ")");
-                        }
-                        created++;
-                    }
-                    validate(connection, table);
+    /** Does not close the connection, change autoCommit, or complete the caller's transaction. */
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore) {
+        Table table = table(entity, underscore);
+        if (table == null) return false;
+        Objects.requireNonNull(connection, "connection");
+        try {
+            if (!exists(connection, table.name())) {
+                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                    throw new IllegalStateException("SQLite table " + table.name()
+                            + " is missing; initialize it outside a read-only transaction");
                 }
-                connection.commit();
-            } catch (SQLException | RuntimeException e) {
-                try { connection.rollback(); } catch (SQLException rollback) { e.addSuppressed(rollback); }
-                throw e;
+                StringJoiner columns = new StringJoiner(", ");
+                for (Column column : table.columns()) {
+                    columns.add(quote(column.name()) + " " + column.type()
+                            + (column.primary() ? " NOT NULL PRIMARY KEY" : ""));
+                }
+                try (var statement = connection.createStatement()) {
+                    statement.executeUpdate("CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")");
+                }
             }
+            validate(connection, table);
+            return true;
         } catch (SQLException e) {
-            throw new IllegalStateException("SQLite schema creation/validation failed: " + e.getMessage(), e);
+            throw new IllegalStateException("SQLite schema creation/validation failed for "
+                    + entity.getName() + " (" + table.name() + "): " + e.getMessage(), e);
         }
-        var result = new SchemaResult(entities.length, created, tables.size() - created);
-        log.info("SQLite schema: entities={}, created={}, existing={}", result.entities(), result.created(), result.existing());
-        return result;
     }
 
     private static boolean isSimpleTable(Class<?> type, JoinTable table) {
         return table != null && !table.value().isBlank() && table.left().isEmpty() && table.right().isEmpty()
                 && table.on().isEmpty() && AnnotationUtil.findAnnotation(type, JoinTableList.class) == null
-                && !type.isInterface() && !Modifier.isAbstract(type.getModifiers());
+                && !type.isInterface() && !Modifier.isAbstract(type.getModifiers())
+                && ReflectionUtil.getAllDeclaredFields(type).stream().noneMatch(field ->
+                        AnnotationUtil.findAnnotation(field, JoinAggregations.class) != null
+                                || AnnotationUtil.findAnnotation(field, JoinMetrics.class) != null);
     }
 
-    private Table describe(Class<?> entity) {
-        JoinTable table = AnnotationUtil.findAnnotation(entity, JoinTable.class);
-        if (!isSimpleTable(entity, table)) throw new IllegalArgumentException("Not a concrete SQLite table entity: " + entity.getName());
+    private Table describe(Class<?> entity, JoinTable table, boolean underscore) {
         identifier(table.value());
         var aliases = AliasContent.newInstance(entity, underscore);
         Map<String, Column> columns = new TreeMap<>();
@@ -122,6 +84,8 @@ public final class SqliteSchemaManager {
             if (Modifier.isStatic(field.getModifiers()) || Modifier.isTransient(field.getModifiers()) || field.isSynthetic()) continue;
             JoinField mapping = AnnotationUtil.findAnnotation(field, JoinField.class);
             if (mapping != null && (!mapping.exist() || !mapping.function().isEmpty())) continue;
+            if (AnnotationUtil.findAnnotation(field, JoinQuery.class) != null
+                    || AnnotationUtil.findAnnotation(field, JoinLazy.class) != null) continue;
             String name = aliases.toColumn(field.getName());
             // Qualified names are fields of a joined/query-only model, not physical local columns.
             if (name.contains(".")) throw new IllegalArgumentException("Qualified SQLite column in " + entity.getName() + ": " + name);

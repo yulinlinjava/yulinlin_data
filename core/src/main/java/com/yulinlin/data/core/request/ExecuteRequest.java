@@ -93,6 +93,7 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
 
     public static <E> ExecuteRequest<E> newInstance(String sql, Map<String,Object> params){
         ExecuteRequest<E> executeRequest = new ExecuteRequest<>(Object.class, Object.class);
+        executeRequest.requestType = RequestType.update;
         executeRequest.addRequest(
                 new CommandNode(sql,  params, ParseType.update)
         );

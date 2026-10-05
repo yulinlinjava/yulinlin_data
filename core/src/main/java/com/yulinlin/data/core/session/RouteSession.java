@@ -40,8 +40,9 @@ public class RouteSession  extends  RegisterSession{
 
 
 
-        if(StringUtil.isNull(request.getSession())){
-            JoinSession joinDataSource = AnnotationUtil.findAnnotation(request.getFromClass(),JoinSession.class);
+        Class<?> fromClass = request.getFromClass();
+        if(fromClass != null && fromClass != Object.class && StringUtil.isNull(request.getSession())){
+            JoinSession joinDataSource = AnnotationUtil.findAnnotation(fromClass,JoinSession.class);
             if(joinDataSource != null){
                 request.setSession(joinDataSource.value());
                 request.setCluster(joinDataSource.cluster());
@@ -107,9 +108,12 @@ public class RouteSession  extends  RegisterSession{
 
     @SuppressWarnings("unchecked")
     private <E> E executeList(QueryRequest<?> req, RequestType requestType) {
-        LongAdder depth = mapThreadLocal.get().computeIfAbsent(req.getFromClass(), ignored -> new LongAdder());
+        // Keep the recursion guard for raw SQL, without requiring an entity or changing the request.
+        Class<?> depthKey = req.getFromClass() == null ? Object.class : req.getFromClass();
+        LongAdder depth = mapThreadLocal.get().computeIfAbsent(depthKey, ignored -> new LongAdder());
         if (depth.intValue() >= deep)
-            throw new NoticeException("递归查询深度超过" + deep + ",请使用懒加载:" + req.getFromClass().getName());
+            throw new NoticeException("递归查询深度超过" + deep + ",请使用懒加载:"
+                    + (depthKey == Object.class ? "自定义SQL" : depthKey.getName()));
         depth.increment();
         boolean previousCache = LazyProxyFactory.isCache();
         boolean entered = false;
@@ -126,7 +130,7 @@ public class RouteSession  extends  RegisterSession{
         } finally {
             LazyProxyFactory.cache(previousCache);
             depth.decrement();
-            if (depth.intValue() == 0) mapThreadLocal.get().remove(req.getFromClass());
+            if (depth.intValue() == 0) mapThreadLocal.get().remove(depthKey);
             if (mapThreadLocal.get().isEmpty()) mapThreadLocal.remove();
             if (entered) after(req);
         }

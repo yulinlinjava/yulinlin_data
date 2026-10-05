@@ -10,6 +10,7 @@ import com.yulinlin.data.core.filter.SimpFilterManager;
 import com.yulinlin.data.core.http.HttpRequestClient;
 import com.yulinlin.data.core.http.HttpRequestProperties;
 import com.yulinlin.data.core.loadbalan.LoadBalance;
+import com.yulinlin.data.core.loadbalan.LoadBalanceProperties;
 import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.log.LogPrint;
@@ -39,7 +40,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 
 @AutoConfiguration(after = {JacksonAutoConfiguration.class, RestClientAutoConfiguration.class})
-@EnableConfigurationProperties(HttpRequestProperties.class)
+@EnableConfigurationProperties({HttpRequestProperties.class, LoadBalanceProperties.class})
 public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
@@ -90,8 +91,9 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public LoadBalance loadBalance(){
+    public LoadBalance loadBalance(LoadBalanceProperties properties){
         RandomLoadBalance loadBalance =   new RandomLoadBalance();
+        loadBalance.setDefaultGroup(properties.getDefaultGroup());
         loadBalance.heartbeat(300);
         return loadBalance;
     }

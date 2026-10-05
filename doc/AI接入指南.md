@@ -93,7 +93,7 @@ yulinlin:
 
 当前 core、starter、mysql 等模块提供 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`。在正常 Boot 自动配置链中无需额外的框架启用注解。MySQL 模块自行注册 mysqlSessionFactory，并直接创建 `mysqlSession`，默认会话组为 `mysql`，不检查或识别 JDBC URL。公共 JDBC 自动配置只提供通用组件，不选择工厂或创建默认会话。仅引入 starter 不会创建 MySQL 数据库会话；PostgreSQL 接入和驱动要求见 17-postgresql 专题。此默认会话注册与命名于 2026-10-05 更新，本轮未运行测试、编译或打包。
 
-下方省略 group 的示例以只有一个会话组为前提。MySQL、PostgreSQL、SQLite 的默认组分别是 mysql、postgresql、sqlite；同时存在多个组时通过 Model Wrapper 的第一个参数或 @JoinSession 明确选组。旧 primary 组如果仍被用户注册，未指定组时继续优先使用它。模块不校验 DataSource 类型，混用多个数据库时需要显式配置正确的工厂、数据源和会话组。
+下方省略 group 的示例以只有一个会话组为前提。MySQL、PostgreSQL、SQLite 的默认组分别是 mysql、postgresql、sqlite；同时存在多个组时可配置 yulinlin.datasource.default-group，或通过 Model Wrapper 的第一个参数和 @JoinSession 明确选组。primary 只是普通组名，不再自动优先；需要兼容旧组时显式把 default-group 设置为 primary。模块不校验 DataSource 类型，混用多个数据库时需要显式配置正确的工厂、数据源和会话组。
 
 只需反射/JSON 时可依赖 `com.yulinlin:lang:3.0`。只需 HTTP 时可依赖 `com.yulinlin:core:3.0`；但 core 在 Boot 中还包含 ORM 相关自动配置，不是一个专门拆分的纯 HTTP starter。项目已引入 starter 时无需重复声明 core。
 
@@ -539,7 +539,7 @@ private LocalUserEntity localUser;
 <!-- source: doc/topics/15-datasources.md -->
 ## 多数据源：创建、注册与选择 JDBC 会话
 
-> 状态：2026-10-05 按数据库模块自行注册 Session 更新。本轮未运行测试、编译或打包，未连接真实数据库运行多数据源集成测试。
+> 状态：2026-10-05 按数据库模块自行注册 Session 和负载均衡默认组更新。本轮未运行测试、编译或打包，未连接真实数据库运行多数据源集成测试。
 > 适用：JDK 25、制品版本 3.0、Spring Boot 3.5；本例两个数据源均为 MySQL。
 > 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`DataJdbcApplication`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
 
@@ -559,7 +559,33 @@ Spring 推荐路径：将返回对象声明成 `@Bean`。core 自动配置注入
 | `dataSource`（@Primary） | `mysqlSession` | `mysql` | MySQL 模块自动配置用自己的工厂创建 |
 | `ossDataSource` | `ossSession` | `oss` | 自定义 Bean 调用 factory.create |
 
-`@Primary` 解决 Spring DataSource 注入歧义；group 是框架路由名，二者不同。模块默认组为 mysql、postgresql、sqlite。未指定 group 时优先使用已注册的旧 primary 组；没有 primary 且只有一个组时自动使用该组；有多个组且无有效默认组时必须显式指定，不按注册顺序猜测。
+`@Primary` 解决 Spring DataSource 注入歧义；group 是框架路由名，二者不同。模块默认组为 mysql、postgresql、sqlite。未指定 group 且只有一个注册组时自动使用该组；多个组时使用 yulinlin.datasource.default-group 或 setDefaultGroup 指定的组，未设置或组不存在时明确报错，不按注册顺序猜测。primary 也是普通组名，没有隐藏的优先级。
+
+#### 全局默认会话组
+
+下面设置应用共享负载均衡器的默认组；mysql 必须是已注册的会话组，不是 DataSource Bean 名：
+
+```yaml
+yulinlin:
+  datasource:
+    default-group: mysql
+```
+
+也可通过代码设置。以下是业务方法体片段，loadBalance 为容器注入的 `com.yulinlin.data.core.loadbalan.LoadBalance` 单例：
+
+```java
+loadBalance.setDefaultGroup("mysql");
+String configured = loadBalance.getDefaultGroup(); // 配置值
+String effective = loadBalance.defaultGroup();    // 实际默认组，单组时直接使用唯一组
+```
+
+配置只影响未显式选组的请求，Model Wrapper 的 group 参数、模型 @JoinSession 和当前 Service 会话上下文仍优先。只有一个组时不要求 default-group，即使配置值与唯一组不同也直接使用唯一组；存在多个节点的同组仍按集群标签和权重选节点，不直接拿第一个节点。
+
+框架默认 LoadBalance Bean 会绑定此配置。若用户自己声明 LoadBalance Bean，应自行注入 LoadBalanceProperties 或调用 setDefaultGroup；自定义实现需要支持默认组接口。运行时修改会影响后续未限定请求，应在没有在途业务事务的配置窗口进行。
+
+注册和移除发布只读快照，读路径不加注册锁。权重必须非负，0 表示不参与选择；权重总和使用 long，随机区间为 [0, total)，避免第一节点偏置。单个可用节点不执行随机选择，但不会绕过主从标签或健康过滤。RandomLoadBalance.ping() 更新健康快照；现有 heartbeat 不启动后台定时任务，不能把这项优化描述成新增自动巡检。
+
+非事务路由不再永久缓存已选节点，后续请求能看到权重或健康变化；事务内仍按组和标签保持节点固定。快照保护集合访问，并不等于动态卸载、关闭底层资源对在途请求完全安全；运行中的 group/cluster 不宜随意修改。
 
 ### 2. 完整配置：保留自动 mysql，再新增 oss
 
@@ -680,7 +706,7 @@ var query = ModelSelectWrapper.newInstance("oss", new DemoUser());
 var users = query.selectList();
 ```
 
-主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认组选取（已注册的 primary 优先，否则自动使用唯一组；多组无有效默认组时要求显式指定）。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
+主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 负载均衡器默认组选取（单组自动使用；多组使用 default-group，或要求显式指定）。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
 
 ### 4. 事务与生命周期限制
 
@@ -786,7 +812,7 @@ yulinlin:
 
 相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时使用 data/local.db，不再以 file 是否存在决定启用；显式配置空路径仍会校验失败。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
 
-默认会话组是 `sqlite`，请求时使用 `newInstance("sqlite", ...)`。只有 sqlite 一个会话组时可以省略 group；多个组并存时显式选择，除非用户另外注册了旧 primary 默认组。旧业务需要 local 组时可显式设置 yulinlin.sqlite.group=local。无需为了省略参数把 SQLite 组改成 primary。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
+默认会话组是 `sqlite`，请求时使用 `newInstance("sqlite", ...)`。只有 sqlite 一个会话组时可以省略 group；多个组并存时显式选择，或设置 yulinlin.datasource.default-group=sqlite；旧 primary 组也需显式配置为默认，不能仅凭组名自动优先。旧业务需要 local 组时可显式设置 yulinlin.sqlite.group=local。无需为了省略参数把 SQLite 组改成 primary。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
 
 ### CRUD 完全沿用现有用法
 
@@ -977,7 +1003,7 @@ PostgresqlAutoConfiguration 在模块内部注册 `postgresqlSessionFactory`，�
 - 多个 DataSource 必须指定 @Primary，或者显式声明每个会话；无主候选时不会任意选库。
 - 自定义 Bean 名 `postgresqlSession` 或兼容入口 `jdbcSession` 会使 PostgreSQL 默认创建退让。默认配置不再提供名为 jdbcSession 的会话，旧的按名注入需迁移或自行声明兼容 Bean。
 - 会话初始化不要求连接池暴露 URL 获取方法，也不通过打开连接来识别类型；不匹配的驱动或数据库可能到执行 SQL 时才报错，初始化成功不能证明数据库类型兼容。
-- 只有 postgresql 一个会话组时可以省略选组参数；多个组并存时显式选 postgresql，除非用户另外注册了旧 primary 组作为默认。
+- 只有 postgresql 一个会话组时可以省略选组参数；多个组并存时显式选 postgresql，或设置 yulinlin.datasource.default-group=postgresql。primary 组不再自动优先，需要时显式配置为默认组。
 
 ### 2 复用实体和 CRUD
 
@@ -1124,7 +1150,7 @@ byte[] 参数由驱动绑定；InputStream 在 PostgreSQL 下使用 setBinaryStr
 
 如果外部代码直接引用旧 PostgreSQL 类，必须迁移到上述新入口并重新编译；不要仅替换 JAR。旧 PG 工厂名 mysqlSessionFactory 必须改为 postgresqlSessionFactory；真正的 MySQL 工厂仍叫 mysqlSessionFactory。
 
-业务仍使用原有 Model Wrapper、Request、RouteSession 和 factory.create(dataSource, group)。默认主会话 Bean 从 jdbcSession 改为 postgresqlSession，按名注入必须相应更新；默认组从 primary 改为 postgresql，显式选择旧 primary 的业务也需迁移或自行注册旧组。仅有一个组时仍支持无组参数查询；多个组时应明确选库，Wrapper API 不变。额外数据源仍需显式声明对应 Session Bean，由 core 自动注册到路由。SqlParamsContext 只携带当前 ParseManager、字段解析器与请求内的 SELECT 别名，不引用 Session，也不把别名写回共享的模型映射。在注册表初始化后不再修改的前提下，同一数据库语法的多个会话可以复用一个 ParseManager；不同数据库要使用各自的注册表。
+业务仍使用原有 Model Wrapper、Request、RouteSession 和 factory.create(dataSource, group)。默认主会话 Bean 从 jdbcSession 改为 postgresqlSession，按名注入必须相应更新；默认组从 primary 改为 postgresql，显式选择旧 primary 的业务也需迁移或自行注册旧组。仅有一个组时仍支持无组参数查询；多个组时通过 default-group 配置或请求参数选库，Wrapper API 不变。额外数据源仍需显式声明对应 Session Bean，由 core 自动注册到路由。SqlParamsContext 只携带当前 ParseManager、字段解析器与请求内的 SELECT 别名，不引用 Session，也不把别名写回共享的模型映射。在注册表初始化后不再修改的前提下，同一数据库语法的多个会话可以复用一个 ParseManager；不同数据库要使用各自的注册表。
 
 低层解析可调用 session.parseSql(node, params)，也可直接使用 new PostgresqlParseManager().parse(node, params)；两者只生成 SQL，不获取连接或执行查询。不要把公共 SqlParseManager 或 MysqlParseManager 当作 PostgreSQL 解析器。增加数据库适配时继承 SqlParseManager，在 init 中注册确有差异的 IParse 实现；仅有驱动读写差异时再继承 JdbcSession，重写 bindParameter、readColumn 并设置对应解析器。通过工厂指定 JDBC 地址前缀及 Session 构造函数，再由数据库模块自动配置直接创建自己的 Session Bean，无需公共 JDBC 工厂选择逻辑，也无需复制 CRUD 解析器或事务代码。
 
@@ -1492,7 +1518,8 @@ List<DemoUser> users = JsonUtil.parseJson("[]", new TypeReference<List<DemoUser>
 | --- | --- |
 | `NoSuchMethodError: ReflectionUtil.property(...)` | 编译时与运行时 JAR 不一致；检查 lang/core 的来源，统一构建和依赖树，不先归咎于 JDK 25 反射 |
 | 没有可用会话 | 检查对应模块、实际 DataSource、自动配置、唯一候选或 @Primary、已注册 group 与初始化顺序；默认组为 mysql/postgresql/sqlite，工厂不自动校验数据库类型 |
-| 多个组时未指定会话 | 用请求的 group 参数或 @JoinSession 明确选库；没有有效 primary 等默认组时不会按顺序猜测。@Primary DataSource 不等于默认路由组 |
+| 多个组时未指定会话 | 设置 yulinlin.datasource.default-group，或用 group 参数/@JoinSession 选库；primary 不自动优先，@Primary DataSource 不等于默认路由组 |
+| 指定主从标签后没有可用节点 | 核对节点 cluster、正权重和 ping 健康结果；单个节点也不会绕过标签过滤，0 权重不参与选择 |
 | PostgreSQL 提示 varchar 无法写入 jsonb 等列 | 编码器可能将值编码为字符串；每个 PG 数据源配置 stringtype=unspecified，或在自定义 SQL 中显式 CAST；见 17-postgresql |
 | PostgreSQL 提示 DATE_FORMAT 或 JSON_EXTRACT 不存在 | 确认会话使用 postgresqlSessionFactory，不是 mysqlSessionFactory；统一升级 jdbc/postgresql，旧原始 SQL 不会自动翻译 |
 | JoinQuery 将 username 当成固定字符串 | 动态取值写成 `${username}`，多级取值同样使用 `${user.sysRoleIds}`；见 12-relations |

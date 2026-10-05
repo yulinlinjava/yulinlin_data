@@ -31,7 +31,7 @@ yulinlin:
 
 相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时使用 data/local.db，不再以 file 是否存在决定启用；显式配置空路径仍会校验失败。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
 
-默认会话组是 `sqlite`，请求时使用 `newInstance("sqlite", ...)`。只有 sqlite 一个会话组时可以省略 group；多个组并存时显式选择，除非用户另外注册了旧 primary 默认组。旧业务需要 local 组时可显式设置 yulinlin.sqlite.group=local。无需为了省略参数把 SQLite 组改成 primary。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
+默认会话组是 `sqlite`，请求时使用 `newInstance("sqlite", ...)`。只有 sqlite 一个会话组时可以省略 group；多个组并存时显式选择，或设置 yulinlin.datasource.default-group=sqlite；旧 primary 组也需显式配置为默认，不能仅凭组名自动优先。旧业务需要 local 组时可显式设置 yulinlin.sqlite.group=local。无需为了省略参数把 SQLite 组改成 primary。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
 
 ## CRUD 完全沿用现有用法
 

@@ -46,6 +46,12 @@
             <artifactId>mysql</artifactId>
             <version>${yulinlin.version}</version>
         </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>sqlite</artifactId>
+            <version>${yulinlin.version}</version>
+        </dependency>
+
    <!--     <dependency>
             <groupId>com.yulinlin</groupId>
             <artifactId>elasticsearch</artifactId>

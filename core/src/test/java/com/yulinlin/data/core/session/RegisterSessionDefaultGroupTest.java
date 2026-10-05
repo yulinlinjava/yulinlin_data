@@ -1,102 +1,120 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.anno.JoinCluster;
-import com.yulinlin.data.core.loadbalan.LoadBalance;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import com.yulinlin.data.core.exception.NoticeException;
+import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
 import org.junit.jupiter.api.Test;
 import java.util.List;
-import java.util.Set;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class RegisterSessionDefaultGroupTest {
-    private String previousMaster;
-
-    @BeforeEach void preserveConfiguredMaster() {
-        previousMaster = RegisterSession.master;
-        RegisterSession.master = "primary";
+    private EntitySession node(String group) {
+        var session = mock(EntitySession.class);
+        when(session.group()).thenReturn(group);
+        when(session.cluster()).thenReturn(JoinCluster.master);
+        when(session.weight()).thenReturn(1);
+        when(session.ping()).thenReturn(true);
+        return session;
     }
 
-    @AfterEach void restoreConfiguredMaster() {
-        RegisterSession.master = previousMaster;
-    }
-
-    private RegisterSession route(LoadBalance balance, Set<String> groups) {
-        when(balance.loadBalanceList()).thenReturn(groups);
+    private RegisterSession route(RandomLoadBalance balance, EntitySession... sessions) {
         var route = new RegisterSession();
         route.setLoadBalance(balance);
+        for (var session : sessions) route.registerSession(session);
         return route;
     }
 
     @Test void aSingleNamedGroupWorksWithoutExplicitSelector() {
         for (String group : List.of("mysql", "postgresql", "sqlite", "local")) {
-            var balance = mock(LoadBalance.class);
-            var session = mock(EntitySession.class);
-            when(balance.<EntitySession>loadBalance(group, JoinCluster.master)).thenReturn(session);
-            assertThat(route(balance, Set.of(group)).session()).isSameAs(session);
+            var session = node(group);
+            assertThat(route(new RandomLoadBalance(), session).session()).isSameAs(session);
         }
-        assertThat(RegisterSession.master).isEqualTo("primary"); // Selection is per route, not a global mutation.
     }
 
-    @Test void legacyPrimaryGroupIsStillPreferredWhenPresent() {
-        var balance = mock(LoadBalance.class);
-        var primary = mock(EntitySession.class);
-        when(balance.<EntitySession>loadBalance("primary", JoinCluster.master)).thenReturn(primary);
-        assertThat(route(balance, Set.of("primary", "mysql")).session()).isSameAs(primary);
+    @Test void configuredDefaultIsUsedWithMultipleGroups() {
+        var mysql = node("mysql"); var sqlite = node("sqlite");
+        var balance = new RandomLoadBalance();
+        balance.setDefaultGroup("mysql");
+        assertThat(route(balance, mysql, sqlite).session()).isSameAs(mysql);
     }
 
-    @Test void multipleNamedGroupsRequireExplicitSelector() {
-        var balance = mock(LoadBalance.class);
-        var route = route(balance, Set.of("mysql", "postgresql"));
-        assertThatThrownBy(route::session).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("specify a session group explicitly");
-        verify(balance, never()).loadBalance(anyString(), any());
+    @Test void primaryIsAnOrdinaryGroupAndMustBeConfiguredWhenMultipleGroupsExist() {
+        var balance = new RandomLoadBalance();
+        var primary = node("primary");
+        var route = route(balance, primary, node("mysql"));
+        assertThatThrownBy(route::session).isInstanceOf(NoticeException.class);
+        balance.setDefaultGroup("primary");
+        assertThat(route.session()).isSameAs(primary);
     }
 
-    @Test void explicitSelectorWorksWithMultipleGroups() {
-        var balance = mock(LoadBalance.class);
-        var mysql = mock(EntitySession.class);
-        when(balance.<EntitySession>loadBalance("mysql", JoinCluster.master)).thenReturn(mysql);
-        assertThat(route(balance, Set.of("mysql", "postgresql")).session("mysql")).isSameAs(mysql);
+    @Test void multipleGroupsWithoutDefaultRequireExplicitSelector() {
+        var route = route(new RandomLoadBalance(), node("mysql"), node("postgresql"));
+        assertThatThrownBy(route::session).isInstanceOf(NoticeException.class)
+                .hasMessageContaining("yulinlin.datasource.default-group");
+    }
+
+    @Test void explicitSelectorWinsOverConfiguredDefault() {
+        var balance = new RandomLoadBalance();
+        balance.setDefaultGroup("postgresql");
+        var mysql = node("mysql");
+        assertThat(route(balance, mysql, node("postgresql")).session("mysql")).isSameAs(mysql);
     }
 
     @Test void activeRouteContextWinsOverDefaultSelection() {
-        var balance = mock(LoadBalance.class);
-        var route = route(balance, Set.of("mysql", "postgresql"));
-        var active = mock(EntitySession.class);
+        var route = route(new RandomLoadBalance(), node("mysql"), node("postgresql"));
+        var active = node("context");
         route.pushSession(active);
+        try { assertThat(route.session()).isSameAs(active); }
+        finally { route.popSession(); }
+    }
+
+    @Test void changingDefaultTakesEffectForSubsequentUnscopedRequests() {
+        var balance = new RandomLoadBalance();
+        var mysql = node("mysql"); var pg = node("postgresql");
+        var route = route(balance, mysql, pg);
+        balance.setDefaultGroup("mysql");
+        assertThat(route.session()).isSameAs(mysql);
+        balance.setDefaultGroup("postgresql");
+        assertThat(route.session()).isSameAs(pg);
+    }
+
+    @Test void outsideTransactionSelectionsAreNotCachedIndefinitely() {
+        var balance = new FixedDrawBalance();
+        var first = node("mysql"); var second = node("mysql");
+        var route = route(balance, first, second);
+        balance.offset = 0;
+        assertThat(route.session()).isSameAs(first);
+        balance.offset = 1;
+        assertThat(route.session()).isSameAs(second);
+    }
+
+    @Test void transactionRetainsNodeAffinityUntilItEnds() {
+        var balance = new FixedDrawBalance();
+        var first = node("mysql"); var second = node("mysql");
+        var route = route(balance, first, second);
+        balance.offset = 0;
+        route.startTransaction();
         try {
-            assertThat(route.session()).isSameAs(active);
-        } finally {
-            route.popSession();
-        }
-        verify(balance, never()).loadBalance(anyString(), any());
+            assertThat(route.session()).isSameAs(first);
+            balance.offset = 1;
+            assertThat(route.session()).isSameAs(first);
+        } finally { route.rollbackTransaction(); }
+        assertThat(route.session()).isSameAs(second);
     }
 
-    @Test void explicitlyConfiguredMissingMasterDoesNotFallBackToAnotherGroup() {
-        RegisterSession.master = "reporting";
-        var balance = mock(LoadBalance.class);
-        var route = route(balance, Set.of("mysql"));
-        assertThatThrownBy(route::session).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("reporting");
-    }
-
-    @Test void noRegisteredGroupProducesClearFailure() {
-        var route = route(mock(LoadBalance.class), Set.of());
-        assertThatThrownBy(route::session).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("No session group has been registered");
-    }
-
-    @Test void registrationDoesNotChangeGlobalDefaultEvenWhenItIsUnset() {
-        RegisterSession.master = null;
-        var balance = mock(LoadBalance.class);
-        var route = route(balance, Set.of("mysql"));
-        var session = mock(EntitySession.class);
-        when(session.group()).thenReturn("mysql");
-        when(balance.<EntitySession>loadBalance("mysql", JoinCluster.master)).thenReturn(session);
-        route.registerSession(session);
-        assertThat(RegisterSession.master).isNull();
+    @Test void healthRefreshAffectsRequestsOutsideTransaction() {
+        var balance = new RandomLoadBalance();
+        var session = node("mysql");
+        var route = route(balance, session);
         assertThat(route.session()).isSameAs(session);
+        when(session.ping()).thenReturn(false);
+        balance.ping();
+        assertThatThrownBy(route::session).isInstanceOf(NoticeException.class);
+    }
+
+    private static class FixedDrawBalance extends RandomLoadBalance {
+        long offset;
+        @Override protected long randomWeight(long bound) { return offset; }
     }
 }

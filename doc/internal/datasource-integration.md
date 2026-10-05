@@ -278,7 +278,9 @@ YulinlinCoreAutoConfig → 收集实际 EntitySession 对象并注册到 RouteSe
 
 多个 DataSource 没有唯一主候选时，不会任意选择，应用必须显式创建会话。普通 DataSource 不需要提供 URL 获取方法；创建 Session 时也不借连接。启动验收应检查注册的组、工厂和物理数据源绑定关系，不能仅凭会话初始化成功推断 SQL 已兼容。
 
-未指定组时，RegisterSession 优先使用配置的有效默认组，默认保留旧 primary；该组不存在且只有一个注册组时使用唯一组，例如 mysql、postgresql 或 sqlite。多组且没有有效默认组时明确报错，要求通过请求参数或 @JoinSession 选库，不改变全局 master 来跟随注册顺序。显式指定一个不存在的组不享受这个回退。
+未指定组时，RegisterSession 委托 LoadBalance.defaultGroup()，不再独立选择第一个组，也不使用静态 master。AbstractLoadBalance 只有一个注册组时直接使用该组；多个组时通过应用共享 LoadBalance Bean 的 setDefaultGroup 或 yulinlin.datasource.default-group 指定，未配置或组不存在时明确报错。primary 是普通组名；显式指定不存在的组不回退到其他库。当前会话上下文和显式请求组仍优先。
+
+AbstractLoadBalance 注册、移除使用只读的 copy-on-write 快照；RandomLoadBalance 健康快照绑定对应的注册快照，旧 ping 结果不能恢复已移除的节点。读取保持标签过滤，0 权重不参与选择，负权重拒绝，long 权重总和及 [0,total) 随机区间避免溢出和偏置。非事务请求重新选节点，路由事务内保留节点绑定；资源关闭仍须协调在途请求，这不是租户热卸载或自动数据库故障转移方案。现有 heartbeat 空钩子保持不变，本次不新增后台调度。
 
 用户自定义对应模块名的会话 Bean 会使默认创建退让；自定义名为 jdbcSession 的 Bean 仍作为兼容覆盖入口。默认配置本身不再提供 jdbcSession 名称，旧 @Qualifier("jdbcSession") 或按名查找需要迁移到 mysqlSession、postgresqlSession，或由用户显式声明兼容会话。不要自动给所有模块同一个别名，否则会重新引入抢注册问题。
 
@@ -321,7 +323,7 @@ EntitySession Bean 会被 core 自动收集注册，Bean 创建方法中不需�
 
 本地资源不必把 DataSource 暴露成 Bean。SQLite 由 [SqliteAutoConfiguration](../../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/SqliteAutoConfiguration.java) 创建资源持有对象 SqliteDatabase，再用其内部 DataSource 创建 sqliteSession，默认组为 sqlite，文件默认为 data/local.db。引入模块即启用，无需额外的模块开关。资源持有对象负责 close，不额外创建 sqliteTransactionManager。
 
-附加库应使用独立组名，例如 mydb 与 reporting；不要把独立库无意间放进同一组。用户仍可主动注册 primary 组兼容旧的默认路由。相同组里的多个 Session 会被当作负载均衡节点，而不是后创建者覆盖前者。
+附加库应使用独立组名，例如 mydb 与 reporting；不要把独立库无意间放进同一组。用户仍可主动注册 primary 组，并显式设置 default-group=primary 兼容旧业务。相同组里的多个 Session 会被当作负载均衡节点，而不是后创建者覆盖前者。
 
 若 Session 不由 Spring 托管，调用方在基础设施初始化后自行注册：
 
@@ -412,7 +414,9 @@ AbstractSession 自带事务状态计数，但不会替 SDK 开启真实事务�
 - 注册表包含公共节点，差异键被正确替换，独立解析不借连接；两个数据库同时解析不串方言或别名。
 - 各模块直接用自己的工厂创建命名组会话，不读取 URL，不借连接，不要求池暴露配置获取方法；无数据源或多个主候选时不任意创建，公共 jdbc 不创建默认会话。
 - 多模块显式绑定正确的 DataSource 与工厂，默认组不同不代表物理源已隔离；自定义模块默认名或 jdbcSession 能让默认创建退让；内置资源不重复创建。
-- 单组省略选择参数仍可执行，多组无有效默认组时明确要求选组，已有 primary 组优先兼容；显式不存在的组不悄悄回退到其他数据库。
+- 单组省略选择参数仍可执行，多组按 default-group 或请求显式组选择；primary 不自动优先，未注册的默认组和显式组都不悄悄回退。
+- 默认选择也使用健康快照与 cluster，边界权重、0 权重、负权重、long 总和、注册/移除快照以及 ping 更新期间的注册变更均有案例。
+- 路由事务保留已选节点，非事务请求能更新选择，默认组运行时调整不会改写其他负载均衡实例的配置。
 - CRUD、分页、排序、JOIN、聚合、日期、JSON 与特殊类型往返；不支持的语法明确拒绝。
 - 直接 Session 执行、路由协调、Spring 绑定连接、嵌套 rollback-only 及提交失败清理。
 - 单连接与多连接批量、尾批、SUCCESS_NO_INFO、失败批次、任务提交失败和连接池等待；执行批次不提前 commit。

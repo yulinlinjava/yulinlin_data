@@ -1,6 +1,6 @@
 # 多数据源：创建、注册与选择 JDBC 会话
 
-> 状态：2026-10-05 按数据库模块自行注册 Session 更新。本轮未运行测试、编译或打包，未连接真实数据库运行多数据源集成测试。
+> 状态：2026-10-05 按数据库模块自行注册 Session 和负载均衡默认组更新。本轮未运行测试、编译或打包，未连接真实数据库运行多数据源集成测试。
 > 适用：JDK 25、制品版本 3.0、Spring Boot 3.5；本例两个数据源均为 MySQL。
 > 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`DataJdbcApplication`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
 
@@ -20,7 +20,33 @@ Spring 推荐路径：将返回对象声明成 `@Bean`。core 自动配置注入
 | `dataSource`（@Primary） | `mysqlSession` | `mysql` | MySQL 模块自动配置用自己的工厂创建 |
 | `ossDataSource` | `ossSession` | `oss` | 自定义 Bean 调用 factory.create |
 
-`@Primary` 解决 Spring DataSource 注入歧义；group 是框架路由名，二者不同。模块默认组为 mysql、postgresql、sqlite。未指定 group 时优先使用已注册的旧 primary 组；没有 primary 且只有一个组时自动使用该组；有多个组且无有效默认组时必须显式指定，不按注册顺序猜测。
+`@Primary` 解决 Spring DataSource 注入歧义；group 是框架路由名，二者不同。模块默认组为 mysql、postgresql、sqlite。未指定 group 且只有一个注册组时自动使用该组；多个组时使用 yulinlin.datasource.default-group 或 setDefaultGroup 指定的组，未设置或组不存在时明确报错，不按注册顺序猜测。primary 也是普通组名，没有隐藏的优先级。
+
+### 全局默认会话组
+
+下面设置应用共享负载均衡器的默认组；mysql 必须是已注册的会话组，不是 DataSource Bean 名：
+
+```yaml
+yulinlin:
+  datasource:
+    default-group: mysql
+```
+
+也可通过代码设置。以下是业务方法体片段，loadBalance 为容器注入的 `com.yulinlin.data.core.loadbalan.LoadBalance` 单例：
+
+```java
+loadBalance.setDefaultGroup("mysql");
+String configured = loadBalance.getDefaultGroup(); // 配置值
+String effective = loadBalance.defaultGroup();    // 实际默认组，单组时直接使用唯一组
+```
+
+配置只影响未显式选组的请求，Model Wrapper 的 group 参数、模型 @JoinSession 和当前 Service 会话上下文仍优先。只有一个组时不要求 default-group，即使配置值与唯一组不同也直接使用唯一组；存在多个节点的同组仍按集群标签和权重选节点，不直接拿第一个节点。
+
+框架默认 LoadBalance Bean 会绑定此配置。若用户自己声明 LoadBalance Bean，应自行注入 LoadBalanceProperties 或调用 setDefaultGroup；自定义实现需要支持默认组接口。运行时修改会影响后续未限定请求，应在没有在途业务事务的配置窗口进行。
+
+注册和移除发布只读快照，读路径不加注册锁。权重必须非负，0 表示不参与选择；权重总和使用 long，随机区间为 [0, total)，避免第一节点偏置。单个可用节点不执行随机选择，但不会绕过主从标签或健康过滤。RandomLoadBalance.ping() 更新健康快照；现有 heartbeat 不启动后台定时任务，不能把这项优化描述成新增自动巡检。
+
+非事务路由不再永久缓存已选节点，后续请求能看到权重或健康变化；事务内仍按组和标签保持节点固定。快照保护集合访问，并不等于动态卸载、关闭底层资源对在途请求完全安全；运行中的 group/cluster 不宜随意修改。
 
 ## 2. 完整配置：保留自动 mysql，再新增 oss
 
@@ -141,7 +167,7 @@ var query = ModelSelectWrapper.newInstance("oss", new DemoUser());
 var users = query.selectList();
 ```
 
-主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认组选取（已注册的 primary 优先，否则自动使用唯一组；多组无有效默认组时要求显式指定）。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
+主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 负载均衡器默认组选取（单组自动使用；多组使用 default-group，或要求显式指定）。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
 
 ## 4. 事务与生命周期限制
 

@@ -39,7 +39,7 @@ yulinlin:
 
 当前 core、starter、mysql 等模块提供 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`。在正常 Boot 自动配置链中无需额外的框架启用注解。MySQL 模块自行注册 mysqlSessionFactory，并直接创建 `mysqlSession`，默认会话组为 `mysql`，不检查或识别 JDBC URL。公共 JDBC 自动配置只提供通用组件，不选择工厂或创建默认会话。仅引入 starter 不会创建 MySQL 数据库会话；PostgreSQL 接入和驱动要求见 17-postgresql 专题。此默认会话注册与命名于 2026-10-05 更新，本轮未运行测试、编译或打包。
 
-下方省略 group 的示例以只有一个会话组为前提。MySQL、PostgreSQL、SQLite 的默认组分别是 mysql、postgresql、sqlite；同时存在多个组时通过 Model Wrapper 的第一个参数或 @JoinSession 明确选组。旧 primary 组如果仍被用户注册，未指定组时继续优先使用它。模块不校验 DataSource 类型，混用多个数据库时需要显式配置正确的工厂、数据源和会话组。
+下方省略 group 的示例以只有一个会话组为前提。MySQL、PostgreSQL、SQLite 的默认组分别是 mysql、postgresql、sqlite；同时存在多个组时可配置 yulinlin.datasource.default-group，或通过 Model Wrapper 的第一个参数和 @JoinSession 明确选组。primary 只是普通组名，不再自动优先；需要兼容旧组时显式把 default-group 设置为 primary。模块不校验 DataSource 类型，混用多个数据库时需要显式配置正确的工厂、数据源和会话组。
 
 只需反射/JSON 时可依赖 `com.yulinlin:lang:3.0`。只需 HTTP 时可依赖 `com.yulinlin:core:3.0`；但 core 在 Boot 中还包含 ORM 相关自动配置，不是一个专门拆分的纯 HTTP starter。项目已引入 starter 时无需重复声明 core。
 

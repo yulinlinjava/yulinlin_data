@@ -15,6 +15,14 @@ public interface LoadBalance {
 
     boolean remove(LoadBalanceNode session);
 
+    String defaultGroup();
+
+    /** Configured group for requests without a selector; the effective single-group default may differ. */
+    default String getDefaultGroup() { return null; }
+
+    default void setDefaultGroup(String group) {
+        throw new UnsupportedOperationException("This load balancer does not support a configurable default group");
+    }
 
 
     /**

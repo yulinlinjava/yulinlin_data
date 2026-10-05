@@ -42,7 +42,7 @@ PostgresqlAutoConfiguration 在模块内部注册 `postgresqlSessionFactory`，�
 - 多个 DataSource 必须指定 @Primary，或者显式声明每个会话；无主候选时不会任意选库。
 - 自定义 Bean 名 `postgresqlSession` 或兼容入口 `jdbcSession` 会使 PostgreSQL 默认创建退让。默认配置不再提供名为 jdbcSession 的会话，旧的按名注入需迁移或自行声明兼容 Bean。
 - 会话初始化不要求连接池暴露 URL 获取方法，也不通过打开连接来识别类型；不匹配的驱动或数据库可能到执行 SQL 时才报错，初始化成功不能证明数据库类型兼容。
-- 只有 postgresql 一个会话组时可以省略选组参数；多个组并存时显式选 postgresql，除非用户另外注册了旧 primary 组作为默认。
+- 只有 postgresql 一个会话组时可以省略选组参数；多个组并存时显式选 postgresql，或设置 yulinlin.datasource.default-group=postgresql。primary 组不再自动优先，需要时显式配置为默认组。
 
 ## 2 复用实体和 CRUD
 
@@ -189,7 +189,7 @@ byte[] 参数由驱动绑定；InputStream 在 PostgreSQL 下使用 setBinaryStr
 
 如果外部代码直接引用旧 PostgreSQL 类，必须迁移到上述新入口并重新编译；不要仅替换 JAR。旧 PG 工厂名 mysqlSessionFactory 必须改为 postgresqlSessionFactory；真正的 MySQL 工厂仍叫 mysqlSessionFactory。
 
-业务仍使用原有 Model Wrapper、Request、RouteSession 和 factory.create(dataSource, group)。默认主会话 Bean 从 jdbcSession 改为 postgresqlSession，按名注入必须相应更新；默认组从 primary 改为 postgresql，显式选择旧 primary 的业务也需迁移或自行注册旧组。仅有一个组时仍支持无组参数查询；多个组时应明确选库，Wrapper API 不变。额外数据源仍需显式声明对应 Session Bean，由 core 自动注册到路由。SqlParamsContext 只携带当前 ParseManager、字段解析器与请求内的 SELECT 别名，不引用 Session，也不把别名写回共享的模型映射。在注册表初始化后不再修改的前提下，同一数据库语法的多个会话可以复用一个 ParseManager；不同数据库要使用各自的注册表。
+业务仍使用原有 Model Wrapper、Request、RouteSession 和 factory.create(dataSource, group)。默认主会话 Bean 从 jdbcSession 改为 postgresqlSession，按名注入必须相应更新；默认组从 primary 改为 postgresql，显式选择旧 primary 的业务也需迁移或自行注册旧组。仅有一个组时仍支持无组参数查询；多个组时通过 default-group 配置或请求参数选库，Wrapper API 不变。额外数据源仍需显式声明对应 Session Bean，由 core 自动注册到路由。SqlParamsContext 只携带当前 ParseManager、字段解析器与请求内的 SELECT 别名，不引用 Session，也不把别名写回共享的模型映射。在注册表初始化后不再修改的前提下，同一数据库语法的多个会话可以复用一个 ParseManager；不同数据库要使用各自的注册表。
 
 低层解析可调用 session.parseSql(node, params)，也可直接使用 new PostgresqlParseManager().parse(node, params)；两者只生成 SQL，不获取连接或执行查询。不要把公共 SqlParseManager 或 MysqlParseManager 当作 PostgreSQL 解析器。增加数据库适配时继承 SqlParseManager，在 init 中注册确有差异的 IParse 实现；仅有驱动读写差异时再继承 JdbcSession，重写 bindParameter、readColumn 并设置对应解析器。通过工厂指定 JDBC 地址前缀及 Session 构造函数，再由数据库模块自动配置直接创建自己的 Session Bean，无需公共 JDBC 工厂选择逻辑，也无需复制 CRUD 解析器或事务代码。
 

@@ -13,7 +13,6 @@ import java.util.Set;
 
 public class RegisterSession extends BaseTransactionSession{
 
-    public  static String master ="primary";
 
     private LoadBalance loadBalance;
 
@@ -149,7 +148,7 @@ public class RegisterSession extends BaseTransactionSession{
 
     public  EntitySession session(String code,JoinCluster tag){
 
-        if(code == null || code.isEmpty()){
+        if(code == null || code.isBlank()){
             if(threadLocal.get().size() > 0){
                return enlist(threadLocal.get().getFirst());
             }else {
@@ -162,27 +161,23 @@ public class RegisterSession extends BaseTransactionSession{
 
         String group  = code;
         JoinCluster cluster = tag;
-        HashMap<String, EntitySession> map = cacheSession.get();
-
-        EntitySession session =  map.computeIfAbsent(code + ":" + cluster.name(),k -> {
-           return loadBalance.loadBalance(group,cluster);
-        });
+        EntitySession session;
+        if (isOpenTransaction()) {
+            session = cacheSession.get().computeIfAbsent(code + ":" + cluster.name(),
+                    key -> loadBalance.loadBalance(group, cluster));
+        } else {
+            // Do not retain an old node indefinitely after weights or health snapshots change.
+            session = loadBalance.loadBalance(group, cluster);
+        }
 
         return enlist(session);
 
     }
 
+
+
     private String defaultSessionGroup() {
-        Set<String> groups = loadBalance.loadBalanceList();
-        String configured = master;
-        if (configured != null && groups.contains(configured)) return configured;
-        // Preserve the legacy primary group; a single named group needs no explicit selector.
-        if ((configured == null || "primary".equals(configured)) && groups.size() == 1) {
-            return groups.iterator().next();
-        }
-        if (groups.isEmpty()) throw new IllegalStateException("No session group has been registered");
-        throw new IllegalStateException("Default session group '" + configured
-                + "' is unavailable; specify a session group explicitly. Registered groups: " + groups);
+        return loadBalance.defaultGroup();
     }
 
     public  int sessionSize(){

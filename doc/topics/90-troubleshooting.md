@@ -8,7 +8,8 @@
 | --- | --- |
 | `NoSuchMethodError: ReflectionUtil.property(...)` | 编译时与运行时 JAR 不一致；检查 lang/core 的来源，统一构建和依赖树，不先归咎于 JDK 25 反射 |
 | 没有可用会话 | 检查对应模块、实际 DataSource、自动配置、唯一候选或 @Primary、已注册 group 与初始化顺序；默认组为 mysql/postgresql/sqlite，工厂不自动校验数据库类型 |
-| 多个组时未指定会话 | 用请求的 group 参数或 @JoinSession 明确选库；没有有效 primary 等默认组时不会按顺序猜测。@Primary DataSource 不等于默认路由组 |
+| 多个组时未指定会话 | 设置 yulinlin.datasource.default-group，或用 group 参数/@JoinSession 选库；primary 不自动优先，@Primary DataSource 不等于默认路由组 |
+| 指定主从标签后没有可用节点 | 核对节点 cluster、正权重和 ping 健康结果；单个节点也不会绕过标签过滤，0 权重不参与选择 |
 | PostgreSQL 提示 varchar 无法写入 jsonb 等列 | 编码器可能将值编码为字符串；每个 PG 数据源配置 stringtype=unspecified，或在自定义 SQL 中显式 CAST；见 17-postgresql |
 | PostgreSQL 提示 DATE_FORMAT 或 JSON_EXTRACT 不存在 | 确认会话使用 postgresqlSessionFactory，不是 mysqlSessionFactory；统一升级 jdbc/postgresql，旧原始 SQL 不会自动翻译 |
 | JoinQuery 将 username 当成固定字符串 | 动态取值写成 `${username}`，多级取值同样使用 `${user.sysRoleIds}`；见 12-relations |

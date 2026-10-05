@@ -17,6 +17,7 @@ import com.yulinlin.data.core.wrapper.ICountWrapper;
 import com.yulinlin.data.core.wrapper.impl.CountWrapper;
 import com.yulinlin.data.lang.util.Page;
 import com.yulinlin.data.lang.util.SegmentLock;
+import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import lombok.SneakyThrows;
 
 import java.util.ArrayList;
@@ -312,19 +313,8 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             return total;
         });
 
-        if(request.isCache()){
-            for (INode node : request.getWrappers()) {
-                CacheKey cacheKey = CacheKey.of(null, node);
-                if(cacheKey.isSingleEqualsCondition()){
-                    cacheManager.getCache(request.getEntityClass()).invalidate(
-                            cacheKey.getKey()
-                    );
-                }else {
-                    cacheManager.update(request.getEntityClass());
-                }
-            }
-
-        }
+        // A write changes single-row, list, count and paginated queries, not just its WHERE key.
+        if (request.isCache()) cacheManager.update(request.getEntityClass());
 
         return val;
     }
@@ -338,7 +328,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         E value = null;
         if(request.isCache()){
 
-                CacheKey cacheKey =CacheKey.of(result.getType(), request.getWrapper());
+                CacheKey cacheKey = CacheKey.of(result.getType(), request.getWrapper(), group() + ":" + cluster());
 
                 Integer key =cacheKey.getKey();
 
@@ -392,13 +382,11 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                 List<E>  data = bufferToBean(buffers, request.getEntityClass());
 
 
-                data =  proxyService.getLazyProxyList(data);
-                filterManager.after(this.group(), request, data);
                 return data;
         };
 
 // 使用缓存封装方法
-        return getCacheValue(request, result, dataLoader);
+        return enhanceQueryResults(request, getCacheValue(request, result, dataLoader));
 
 
     }
@@ -438,14 +426,20 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                 return executeGroup(result);
             },result);
             List<E>  data = bufferToBean(buffers, request.getEntityClass());
-            data =  proxyService.getLazyProxyList(data);
-            filterManager.after(this.group(), request, data);
             return data;
 
         };
 
 
-       return getCacheValue(request, result,dataLoader);
+       return enhanceQueryResults(request, getCacheValue(request, result, dataLoader));
+    }
+
+    private <E> List<E> enhanceQueryResults(QueryRequest<E> request, List<E> data) {
+        // Never cache transaction-bound proxies, loaded relations, or caller-owned mutable entities.
+        if (request.isCache()) data = ReflectionUtil.deepClone(data);
+        data = proxyService.getLazyProxyList(data);
+        filterManager.after(this.group(), request, data);
+        return data;
     }
 
     public ICoderManager getCoderManager() {

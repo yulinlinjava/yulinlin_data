@@ -43,9 +43,6 @@ public class RegisterSession extends BaseTransactionSession{
 
     public  void registerSession(EntitySession session){
         loadBalance.register(session);
-        if(master == null){
-            master = session.group();
-        }
     }
 
     @Override
@@ -156,7 +153,7 @@ public class RegisterSession extends BaseTransactionSession{
             if(threadLocal.get().size() > 0){
                return enlist(threadLocal.get().getFirst());
             }else {
-                code = master;
+                code = defaultSessionGroup();
             }
         }
         if(tag == null){
@@ -173,6 +170,19 @@ public class RegisterSession extends BaseTransactionSession{
 
         return enlist(session);
 
+    }
+
+    private String defaultSessionGroup() {
+        Set<String> groups = loadBalance.loadBalanceList();
+        String configured = master;
+        if (configured != null && groups.contains(configured)) return configured;
+        // Preserve the legacy primary group; a single named group needs no explicit selector.
+        if ((configured == null || "primary".equals(configured)) && groups.size() == 1) {
+            return groups.iterator().next();
+        }
+        if (groups.isEmpty()) throw new IllegalStateException("No session group has been registered");
+        throw new IllegalStateException("Default session group '" + configured
+                + "' is unavailable; specify a session group explicitly. Registered groups: " + groups);
     }
 
     public  int sessionSize(){

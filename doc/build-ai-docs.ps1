@@ -4,14 +4,14 @@ $ErrorActionPreference = 'Stop'
 $docRoot = $PSScriptRoot
 $repoRoot = Split-Path $docRoot -Parent
 $topicFiles = @(
-    '00-context.md', '10-orm.md', '15-datasources.md', '16-sqlite.md', '20-transactions.md', '30-http.md',
+    '00-context.md', '10-orm.md', '12-relations.md', '15-datasources.md', '16-sqlite.md', '17-postgresql.md', '20-transactions.md', '30-http.md',
     '40-reflection.md', '50-utilities.md', '90-troubleshooting.md'
 )
 $parts = @(
     '# yulinlin-data：外部 AI 单文件接入指南',
     '> 自动生成，请勿直接编辑。维护源为 doc/topics/，生成命令：./doc/build-ai-docs.ps1。',
     '用途：上传一个文件给外部 AI。已包含当前全部专题；无需再上传相同专题、旧案例或性能报告。制品版本 3.0；JDK 25；Spring Boot 3.5。示例的验证范围见各专题。',
-    '阅读顺序：上下文 → 按任务阅读 ORM/事务、HTTP、反射或其他工具 → 排障与交付检查。示例地址、表名、账号均为占位，执行写操作前必须按业务确认。'
+    '阅读顺序：上下文 → 按任务阅读 ORM/级联/事务、HTTP、反射或其他工具 → 排障与交付检查。示例地址、表名、账号均为占位，执行写操作前必须按业务确认。'
 )
 foreach ($name in $topicFiles) {
     $path = Join-Path $docRoot "topics/$name"

@@ -22,6 +22,21 @@ import com.yulinlin.jdbc.sql.parse.wrapper.UpdateFieldsParse;
 
 public class SqlParseManager extends SimpParseManager {
 
+    public com.yulinlin.jdbc.sql.parse.NameParse nameParse() {
+        return (com.yulinlin.jdbc.sql.parse.NameParse) parseMap.get(com.yulinlin.data.core.node.AbstractMetaNode.class);
+    }
+
+    @Override
+    public Object parse(com.yulinlin.data.core.node.INode node,
+                        com.yulinlin.data.core.parse.IParamsContext params) {
+        if (node == null) return null;
+        // Wrap once per root parse; recursive calls reuse the same request-local state.
+        if (!(params instanceof SqlParamsContext sql) || sql.parseManager() != this) {
+            params = new SqlParamsContext(params, this);
+        }
+        return super.parse(node, params);
+    }
+
 
 
     @Override
@@ -34,6 +49,8 @@ public class SqlParseManager extends SimpParseManager {
         this.register(new MetricsWrapperParse());
         this.register(new AggregationsWrapperParse());
         this.register(new BucketParse());
+        this.register(new com.yulinlin.jdbc.sql.parse.NameParse());
+        this.register(new PageParse());
 
 
 
@@ -67,6 +84,7 @@ public class SqlParseManager extends SimpParseManager {
 
 
         this.register(new NilParse());
+        this.register(new NestedParse());
 
 
         this.register(new AvgFieldParse());

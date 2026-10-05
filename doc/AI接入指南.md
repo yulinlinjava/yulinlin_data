@@ -10,7 +10,7 @@
 
 ---
 
-阅读顺序：上下文 → 按任务阅读 ORM/事务、HTTP、反射或其他工具 → 排障与交付检查。示例地址、表名、账号均为占位，执行写操作前必须按业务确认。
+阅读顺序：上下文 → 按任务阅读 ORM/级联/事务、HTTP、反射或其他工具 → 排障与交付检查。示例地址、表名、账号均为占位，执行写操作前必须按业务确认。
 
 ---
 
@@ -34,8 +34,10 @@
 | 需求 | 模块 | 准确入口 |
 | --- | --- | --- |
 | Spring Boot + MySQL ORM | starter + mysql | `com.yulinlin.common.domain.IdEntity` / `SuperEntity` |
-| Spring Boot + SQLite ORM | starter + sqlite | `yulinlin.sqlite.file`，沿用相同实体与 Wrapper |
+| Spring Boot + SQLite ORM | starter + sqlite | 默认启用，file 默认 data/local.db，组 sqlite；沿用相同实体与 Wrapper |
+| Spring Boot + PostgreSQL ORM | postgresql；common 或 starter 按需引入 | `postgresqlSessionFactory` 创建 PostgresqlSession，继承公共 JdbcSession 与相同 Wrapper；见 PostgreSQL 专题 |
 | 实体映射 | core | `com.yulinlin.data.core.anno.JoinTable`、`JoinField`、`JoinMeta`、`JoinWhere` |
+| 级联与代理 | core | 同注解包下 `JoinQuery`、`JoinLazy`、`JoinSync`；`com.yulinlin.data.core.session.SessionUtil.route()` |
 | 数据库分页结果 | lang | `com.yulinlin.data.lang.util.Page`，不是 Spring Data Page |
 | HTTP | core | `com.yulinlin.data.core.http.HttpRequestClient`、`HttpUtil` |
 | HTTP 响应/异常/文件 | core | 同包下 `HttpResponse`、`HttpRequestException`、`HttpFile` |
@@ -89,7 +91,9 @@ yulinlin:
     timeout: 10s
 ```
 
-当前 core、starter、mysql 等模块提供 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`。在正常 Boot 自动配置链中无需额外的框架启用注解。MySQL 自动配置依赖 DataSource，并创建会话名 `primary`、Bean 名 `jdbcSession`。仅引入 starter 不会创建 MySQL 数据库会话。
+当前 core、starter、mysql 等模块提供 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`。在正常 Boot 自动配置链中无需额外的框架启用注解。MySQL 模块自行注册 mysqlSessionFactory，并直接创建 `mysqlSession`，默认会话组为 `mysql`，不检查或识别 JDBC URL。公共 JDBC 自动配置只提供通用组件，不选择工厂或创建默认会话。仅引入 starter 不会创建 MySQL 数据库会话；PostgreSQL 接入和驱动要求见 17-postgresql 专题。此默认会话注册与命名于 2026-10-05 更新，本轮未运行测试、编译或打包。
+
+下方省略 group 的示例以只有一个会话组为前提。MySQL、PostgreSQL、SQLite 的默认组分别是 mysql、postgresql、sqlite；同时存在多个组时通过 Model Wrapper 的第一个参数或 @JoinSession 明确选组。旧 primary 组如果仍被用户注册，未指定组时继续优先使用它。模块不校验 DataSource 类型，混用多个数据库时需要显式配置正确的工厂、数据源和会话组。
 
 只需反射/JSON 时可依赖 `com.yulinlin:lang:3.0`。只需 HTTP 时可依赖 `com.yulinlin:core:3.0`；但 core 在 Boot 中还包含 ORM 相关自动配置，不是一个专门拆分的纯 HTTP starter。项目已引入 starter 时无需重复声明 core。
 
@@ -224,16 +228,320 @@ public class DemoUserService {
 
 将 patch 字段设为 null 不代表会生成 `SET column = NULL`；清空字段需求必须核查底层字段构造器生成的 SQL。不要把整个 HTTP 请求 DTO 不加限制地复制进更新实体，防止越权更新 id 或敏感字段。
 
-事务说明请同时读取 `20-transactions.md`；上面的服务使用 Spring `@Transactional`。多表、级联等历史案例不属于已核验的完整接入示例。
+事务说明请同时读取 `20-transactions.md`；上面的服务使用 Spring `@Transactional`。级联查询、懒加载和懒同步见同目录 `12-relations.md`，其中区分了框架查询的自动增强与手动 DTO 的代理入口；它不是 SQL JOIN 的使用指南。尚未整理的高级多表 SQL 案例仍只作历史参考。
+
+---
+
+<!-- source: doc/topics/12-relations.md -->
+## ORM 级联查询 懒加载和懒同步
+
+框架自带查询结果增强：通过 ORM 查询得到的模型，会进入 `EntityProxyService`，由 `LazyProxyFactory` 处理关联查询；符合条件的关联对象再由 `SyncProxyFactory` 增加懒同步能力。通常不需要业务再次手动代理查询结果。自己 `new` 出来的聚合 DTO 则需要显式调用代理入口。
+
+本专题说明 `@JoinQuery`、`@JoinLazy`、`@JoinSync`，以及用户、角色、菜单的关联示例。这是应用侧追加查询和代理处理，不是 SQL JOIN，也不是 JPA 的实体管理或任意对象自动持久化。
+
+> 源码核对：2026-10-04 / JDK 25 / 制品版本 3.0。
+> 来源：`core/.../session/AbstractSession.java`、`RouteSession.java`；`core/.../proxy/EntityProxyService.java`、`LazyProxyFactory.java`、`SyncProxyFactory.java`；`common/.../model/AbstractQueryModel.java`、`AbstractModel.java`。
+> 代理行为已用真实 SQLite 集成测试验证；本文业务示例使用占位实体，仍需自行提供表结构和数据。事务边界同时读取 `20-transactions.md`。
+
+### 查询后的自动处理
+
+1. `RouteSession.select()` 将请求路由给实际 `EntitySession`。
+2. `AbstractSession.select()` 查询数据库并将结果解码为模型，然后调用 `EntityProxyService.getLazyProxyList()`。分页和 `group()` 也有相应增强入口。缓存保存未增强模型，读取后复制为独立对象，再为当前查询创建代理，不复用上一次事务的代理。
+3. `LazyProxyFactory` 遍历模型的 `@JoinQuery` 字段。没有 `@JoinLazy` 时立即加载关联，有 `@JoinLazy` 且路由事务开启时创建 getter 拦截代理。
+4. 返回关联实体的字段有 `@JoinSync` 且路由事务开启时，结果再包装为同步代理；它不是给所有查询结果无条件套上两层代理。计数结果不属于同步实体。
+
+| 注解组合 | 读取行为 | 修改行为 |
+| --- | --- | --- |
+| `@JoinQuery` | 增强阶段立即查询关联并赋值 | 普通对象，修改不因此自动写库 |
+| `@JoinQuery` + `@JoinLazy` | 事务内访问未加载字段的 getter 时查询 | 仅延迟读取，不代表自动同步 |
+| `@JoinQuery` + `@JoinSync` | 立即查询关联，有路由事务时创建同步代理 | 在事务内通过代理调用非 null setter，提交阶段写回 |
+| 三个注解一起使用 | 事务内 getter 触发查询时创建关联同步代理 | 同上，必须真正加载并修改代理对象 |
+
+业务使用 `ModelSelectWrapper.selectOne()/selectList()` 等查询入口时，模型中的关联字段会按上述链路处理。不要直接实例化内部工厂；`SyncProxyFactory` 本身是包内类，公共入口是路由或模型方法。
+
+### JoinQuery 的取值规则
+
+注解 import 为 `com.yulinlin.data.core.anno.JoinQuery`。
+
+```java
+// 放在一个已有映射模型的关联字段上。
+@JoinField(exist = false)
+@JoinQuery(primary = "id", value = "${sysDeptId}")
+private SysDeptEntity department;
+```
+
+这里 `SysDeptEntity` 是业务实体，不是框架提供的类。查询目标模型的 `id`，使用当前对象的 `sysDeptId` 作为查询值。`primary` 是目标模型的匹配属性，默认 `id`，不要求它一定是数据库主键；例如也可以指定 `username`。
+
+**动态取值必须写 `${...}`。** 当前 `LazyProxyFactory` 将没有 `${}` 的 `value` 当作固定字符串，不会自动将它理解为属性名：
+
+| value 写法 | 当前含义 |
+| --- | --- |
+| `"${username}"` | 当前对象的 username |
+| `"${user.sysRoleIds}"` | 当前对象 user 的 sysRoleIds |
+| `"${roles.sysMenuIds}"` | 遍历 roles 集合，收集各角色的 sysMenuIds |
+| `"username"` | 固定字符串 username，不是当前用户名 |
+
+普通关联分支根据字段类型推断目标模型：`SysUserEntity` 对应单对象，`List<SysRoleEntity>` / `Set<SysRoleEntity>` 根据明确的泛型推断集合元素类型。不要使用原始 `List`、`List<?>` 或无法推断类型的字段。关联键为集合时会收集、去重后查询，源键与目标属性的 Java 类型需要一致。
+
+普通列表关联汇集这一批父对象的键，去重后分批 `IN` 查询，再按目标属性建立索引分配，不逐个父对象遍历全部结果。单对象取匹配结果中的第一项，无匹配保持 null；集合赋空集合。索引支持一个键对应多条关联记录，单对象匹配条件应保证唯一。
+
+`batchSize` 默认 512，限制每次 IN 的去重键数量，不是结果行数或事务提交大小。可写 `@JoinQuery(value = "${ids}", batchSize = 256)`。集合默认不保证输入 ID 顺序；指定 `order` 时各批执行数据库排序，跨批按属性的 Java 自然顺序合并。自定义 collation、TEXT 数字排序与 Java 比较规则可能不同，严格依赖这类排序时显式查询处理。
+
+关系字段放在数据库实体中时显式标记 `@JoinField(exist = false)`，避免被当作数据库列。仅用于组装数据的 DTO 不需要 `@JoinTable`，但它引用的关联实体仍需完整映射和可用表。
+
+### 用户角色菜单的级联示例
+
+下面是一份完整 DTO。`demo.domain.SysUserEntity`、`SysRoleEntity`、`SysMenuEntity` 是业务侧模型占位，应替换为自己的类，不依赖 admin 模块接入业务。
+
+示例的实体契约如下，相关属性都需要 getter，主键及需要同步的字段还需要 setter：
+
+| 模型 | 必须提供的属性 |
+| --- | --- |
+| SysUserEntity | id、username、sysRoleIds；其中 sysRoleIds 为角色 ID 集合 |
+| SysRoleEntity | id、sysMenuIds；其中 sysMenuIds 为菜单 ID 集合 |
+| SysMenuEntity | id，以及需要查询的菜单字段 |
+
+集合中的 ID 与被关联实体的 id 类型保持一致。缺少 `sysRoleIds` / `sysMenuIds`，或字段被注释，就不能仅靠 `@JoinQuery` 得到后续关联。本文使用 Lombok `@Data` 生成 getter/setter，需要启用注解处理；不使用 Lombok 时自行编写访问方法。
+
+```java
+package demo.dto;
+
+import com.yulinlin.data.core.anno.JoinQuery;
+import demo.domain.SysUserEntity;
+import demo.domain.SysRoleEntity;
+import demo.domain.SysMenuEntity;
+import lombok.Data;
+import java.util.List;
+
+@Data
+public class RouterDetails {
+    private String username;
+    private String loginType;
+
+    @JoinQuery(primary = "username", value = "${username}")
+    private SysUserEntity user;
+
+    @JoinQuery(primary = "id", value = "${user.sysRoleIds}")
+    private List<SysRoleEntity> roles;
+
+    @JoinQuery(primary = "id", value = "${roles.sysMenuIds}")
+    private List<SysMenuEntity> menus;
+
+    public RouterDetails() { }
+
+    public RouterDetails(String username, String loginType) {
+        this.username = username;
+        this.loginType = loginType;
+    }
+}
+```
+
+手动 DTO 的方法体用法：
+
+```java
+import com.yulinlin.data.core.session.SessionUtil;
+import demo.dto.RouterDetails;
+
+RouterDetails details = SessionUtil.route()
+        .getLazyProxy(new RouterDetails(username, loginType));
+// 此版本没有 @JoinLazy，入口执行时立即尝试加载 user、roles、menus。
+```
+
+`getLazyProxy()` 的名称不表示所有字段都延迟查询；是否延迟由 `@JoinLazy` 决定。仅声明注解后 `new RouterDetails(...)`，不会自行访问数据库。实现了框架 `AbstractQueryModel` 的模型也可调用 `createLazyProxy()`，普通 DTO 则用上面的路由入口。
+
+即时加载按反射得到的字段顺序执行，没有关联依赖的拓扑排序。示例将 user、roles、menus 按依赖排列；不要将复杂关联图的正确性建立在反射顺序上，必要时显式分步查询。立即互相引用可能递归，当前路由有默认深度 6 的保护，不等于可以自动解决循环关系。
+
+### JoinLazy 的使用
+
+在上一节 DTO 中，将有关联依赖的三个字段一起改为延迟加载。下面是替换字段的片段，类上仍需有无参构造及普通 getter/setter：
+
+```java
+import com.yulinlin.data.core.anno.JoinLazy;
+import com.yulinlin.data.core.anno.JoinQuery;
+
+@JoinLazy
+@JoinQuery(primary = "username", value = "${username}")
+private SysUserEntity user;
+
+@JoinLazy
+@JoinQuery(primary = "id", value = "${user.sysRoleIds}")
+private List<SysRoleEntity> roles;
+
+@JoinLazy
+@JoinQuery(primary = "id", value = "${roles.sysMenuIds}")
+private List<SysMenuEntity> menus;
+```
+
+有路由事务时，懒代理先于立即关联加载创建，因此立即字段也可通过 getter 读取延迟依赖。全部懒字段按实际访问逐步加载，同批同字段共享状态；循环懒加载会抛出明确异常，仍应避免循环关系。
+
+在同一线程的框架路由事务中创建、访问代理，方法体片段如下：
+
+```java
+import com.yulinlin.data.core.session.SessionUtil;
+
+SessionUtil.route().transaction(() -> {
+    RouterDetails details = SessionUtil.route()
+            .getLazyProxy(new RouterDetails(username, loginType));
+    var user = details.getUser();   // 此时才查询用户。
+    var roles = details.getRoles(); // 使用已读取的用户角色 ID。
+    var menus = details.getMenus(); // 汇集角色中的菜单 ID。
+    // 在事务内用所需数据组装普通响应 DTO。
+    return null;
+});
+```
+
+也可将这段读取逻辑放在 Spring 管理的 Service public 方法内，使用 `@com.yulinlin.data.core.anno.JoinTransaction` 并经 Spring 代理调用。已兼容的 Spring `@Transactional` 路径见事务专题；不能仅因一个独立 JdbcSession 开着事务，就推定 `SessionUtil.route().isOpenTransaction()` 为 true。
+
+使用时注意：
+
+- 在未开启路由事务时，带 `@JoinLazy` 的字段被跳过，而且不会创建懒代理；它们不会自动退回立即加载。
+- 未加载字段必须在创建代理的原始线程和原始路由事务内读取。事务外、其他线程或另一个新事务访问会抛出明确异常；已加载数据仍可在事务后读取。不要将未加载的代理直接交给 Controller 序列化或异步任务。
+- 通过 getter 才能触发延迟查询。直接访问字段、反射读取字段或只持有原始对象不是等价入口；已经非 null 的字段也不会因为 getter 调用而重新加载。
+- CGLIB 创建子类并使用无参构造，代理类不能是 final/record，相关 getter/setter 不能是 final 或不可代理方法。
+- 同批同字段加载成功后，包括未匹配的 null 和空集合，不再重复查询。失败不会标记加载完成，可重试；显式 setter 赋值的关联不会被后续批量加载覆盖。
+
+#### 列表批量懒加载
+
+同一次 `selectList()` 的对象自动共享懒加载上下文。首次访问某个关联 getter 时，收集同批对象尚未加载的关联键，去重、分批查询并分配到所有对象。只加载被访问的字段，不展开全部关联图。
+
+手动 DTO 列表应一次传入，下面使用上文采用 `@JoinLazy` 的 RouterDetails：
+
+```java
+SessionUtil.route().transaction(() -> {
+    return SessionUtil.callable("oss", () -> {
+        List<RouterDetails> details = SessionUtil.route().getLazyProxy(
+                List.of(new RouterDetails("alice", "password"),
+                        new RouterDetails("bob", "password")));
+        details.get(0).getUser(); // 收集 alice/bob，查询并分配这一批 user。
+        details.get(1).getUser(); // 不再为 bob 单独查询。
+        return null;
+    });
+});
+```
+
+不要循环逐个 `getLazyProxy(dto)`，否则每个对象属于独立批次。不同查询的列表不自动合并。`wheres` / `model` 的复杂条件和计数仍逐父对象执行，不承诺普通 IN 的批量合并。
+
+### JoinSync 的使用
+
+懒同步指延后数据库更新，不是后台线程同步。它捕获事务内的 setter 调用，正常提交阶段再使用现有更新 Wrapper 写入数据库。
+
+#### 自动增强关联对象
+
+在上一节的 user 字段上增加 `@JoinSync`。它可以与 `@JoinLazy` 组合，下面是字段片段：
+
+```java
+import com.yulinlin.data.core.anno.JoinQuery;
+import com.yulinlin.data.core.anno.JoinSync;
+
+@JoinSync
+@JoinQuery(primary = "username", value = "${username}")
+private SysUserEntity user;
+```
+
+随后在路由事务内读取、修改关联代理。这里假设业务用户实体有可更新的 `nickname` 属性：
+
+```java
+SessionUtil.route().transaction(() -> {
+    RouterDetails details = SessionUtil.route()
+            .getLazyProxy(new RouterDetails(username, loginType));
+    SysUserEntity user = details.getUser();
+    if (user == null) throw new IllegalStateException("user not found");
+    user.setNickname(newNickname);
+    // 不需要再手动执行 createUpdateWrapper().execute()。
+    return null;
+});
+// 正常提交阶段尝试写回；异常则回滚并清理待同步记录。
+```
+
+关联目标必须是可更新的映射实体，具备 `@JoinTable` 和非 null 的 `@JoinMeta(primaryKey = true)` 主键；推荐沿用 ORM 专题中的 IdEntity。不要把同步代理用在没有可靠更新定位条件的投影 DTO 上，也不要在待同步对象上改主键。
+
+#### 显式增强普通实体
+
+普通查询结果不代表根实体已经具备懒同步。没有相应关联字段增强时，可显式创建同步代理；下面使用 ORM 专题中的 `demo.domain.DemoUser`，方法体片段为：
+
+```java
+import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.data.core.session.SessionUtil;
+import demo.domain.DemoUser;
+
+if (id == null || id.isBlank()) throw new IllegalArgumentException("id is required");
+SessionUtil.route().transaction(() -> {
+    // 查询、创建代理时保持同一个明确的会话上下文。
+    return SessionUtil.callable("mysql", () -> {
+        DemoUser user = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+                .eq("id", id).selectOne();
+        if (user == null) throw new IllegalStateException("user not found");
+        DemoUser syncUser = SessionUtil.route().getSyncProxy(user);
+        syncUser.setStatus(1);
+        return null;
+    });
+});
+```
+
+模型也有 `createSyncProxy()` / `commitUpdate()` 快捷入口。`createSyncProxy()` 在未开启路由事务时会自行开启一个；`commitUpdate()` 实际结束路由的一层事务，不只是提交当前对象。需要自己配对提交/异常回滚，已有业务事务内优先沿用路由回调，不随意提前调用 `commitUpdate()`。
+
+`@JoinSync` 的声明允许 TYPE 和 FIELD，但查询处理检查关联字段上的注解；不要仅在任意根实体类上加注解，就假定所有查询结果会自动变成同步代理。显式 `getSyncProxy()` 不要求类上有这个注解。
+
+#### 提交顺序和跟踪边界
+
+`EntityProxyService` 是事务监听器。框架事务最外层提交时，setter 记录按原始数据源、实体类型分组，构造部分更新，再结束实际 Session 事务；内层结束不清理跟踪。最终 `afterCompletion()` 释放上下文，回滚丢弃记录，但不恢复 Java 对象。
+
+存在原生 Spring 事务时，同步记录注册 `beforeCommit` 钩子，在 Spring 物理提交前更新，避免框架外层切面返回时才写入已结束的连接。只读事务禁止同步 setter。已验证普通注解和 TransactionTemplate，不代表任意传播方式或分布式原子事务。
+
+这个机制不是完整的脏检查：
+
+- 只记录真实持久化属性的单参数 setter，业务 setter 执行一次并保存执行后的值；`setUp()` 等普通方法不会误记录。`setNickname(null)` 不清空数据库列，还会取消该字段此前的待同步值，保持 null 跳过语义。
+- `getIds().add(...)`、修改嵌套 Map/对象、直接写字段或修改未代理的原对象，不会自动产生 setter 记录。
+- 没有被跟踪的 setter 调用就不加入待更新列表；同值 setter 也可能被计为修改，不会先比较数据库或旧值。
+- 不构造空更新实体。SQL 使用原始主键定位，仅写 setter 记录及 `updateBefore()` 本次生成的字段；未修改的 0、false、非 null 初始化值不会自动更新。字段映射、update=false 和 inc/dec 策略继续生效。
+- 创建时要求完整非 null 主键，禁止通过代理改主键，提交时再次校验；支持多主键组成定位条件。缓存按数据源和对象身份隔离，不按实体 equals/hashCode 合并。
+- 懒同步版本字段支持 `@JoinField(version = true)` 的 Integer/int、Long/long：使用原始版本条件并递增，更新条数不匹配报乐观锁失败；版本由框架维护。
+- 代理绑定原始线程和路由事务，事务结束后或另一个事务里调用同步 setter 会报错。自动更新清理对应实体缓存；查询缓存保存未增强数据，读取时复制为独立对象，避免回滚对象污染缓存。这增加了缓存读取的复制成本，但不缓存旧事务代理。
+
+缓存查询的模型还需满足 `ReflectionUtil.deepClone` 的支持边界，包括可用无参构造及可写属性。含不可复制的资源对象（如打开的流）时不要启用 `.cache()`；复制失败会显式报错，不退回共享旧对象。
+
+集合、Map 和嵌套对象内部变化明确不跟踪，需要同步时调用对应持久化属性 setter，或显式更新。setter 捕获对象引用而非深快照，setter 后修改同一引用可能影响最终编码值；不检测内部变化不代表冻结对象。
+
+### 关联会话和高级参数
+
+关联字段可以指定会话，例如本地 SQLite：
+
+```java
+import com.yulinlin.data.core.anno.JoinSession;
+
+@JoinSession("sqlite")
+@JoinQuery(primary = "id", value = "${localUserId}")
+private LocalUserEntity localUser;
+```
+
+`LocalUserEntity` 与 `localUserId` 由业务提供。未在字段指定会话时，懒上下文记住创建时的数据源组；getter 即使发生在其他会话栈里，也使用原组。字段 `@JoinSession` 覆盖关联查询的数据源和 cluster；后续同步更新路由至该组的写会话。手动 DTO/同步代理创建时，用 `SessionUtil.callable("oss", ...)` 明确来源组。
+
+注解还有以下参数，当前实现并非每个分支行为完全相同：
+
+| 参数 | 当前实现 |
+| --- | --- |
+| `order = @JoinOrder(name = "sortValue", asc = true)` | 对关联查询排序；默认 asc 为 false |
+| `batchSize` | 默认 512，普通关联每次 IN 的去重键上限，不控制事务提交或总结果数 |
+| `wheres = {...}` | 按每个父对象分别构造条件并查询，可能产生 N+1；不等同于普通 IN 合并查询 |
+| `size` | 正值仅在 wheres/model 分支设置分页；普通 primary/value 分支不应用该限制 |
+| `model = SomeEntity.class` | 当前进入 count 分支，不是给对象或 List 覆盖泛型的通用选项；不要套用其他 ORM 的理解 |
+
+`wheres` 返回关联实体时可结合 `@JoinSync`；`model` 的 count 结果不是同步实体。复杂条件仍逐父对象执行，空条件可能跳过，不是普通 IN 的同义写法。
+
+### 交付前检查
+
+确认 `${...}` 语法、源属性存在、关联泛型与 ID 类型、目标主键唯一性、实体映射、无参构造和可代理方法。懒加载与懒同步必须检查框架路由事务、执行线程及关联会话；对外返回前在事务内读取所需数据并组装普通 DTO，不把整个关联图默认当作接口响应。
+
+验证入口为 `sqlite/.../OrmProxyIntegrationTest.java`：真实临时 SQLite 文件覆盖列表/单对象、分批 IN、空结果、依赖链、循环及重试、来源数据源、setter/默认值/null、嵌套事务、缓存隔离、主键/版本，以及 Spring 提交回滚。业务占位模型不属于这些测试，不代表全部文档示例已执行。未运行外部 MySQL 服务或性能基准。
 
 ---
 
 <!-- source: doc/topics/15-datasources.md -->
 ## 多数据源：创建、注册与选择 JDBC 会话
 
-> 状态：2026-10-04 按当前源码核对，未连接真实数据库运行多数据源集成测试。
+> 状态：2026-10-05 按数据库模块自行注册 Session 更新。本轮未运行测试、编译或打包，未连接真实数据库运行多数据源集成测试。
 > 适用：JDK 25、制品版本 3.0、Spring Boot 3.5；本例两个数据源均为 MySQL。
-> 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
+> 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`DataJdbcApplication`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
 
 ### 1. create 与注册不是同一步
 
@@ -248,12 +556,12 @@ Spring 推荐路径：将返回对象声明成 `@Bean`。core 自动配置注入
 
 | Spring DataSource Bean | Spring 会话 Bean | 会话组 | 生成方式 |
 | --- | --- | --- | --- |
-| `dataSource`（@Primary） | `jdbcSession` | `primary` | MySQL 自动配置创建 |
+| `dataSource`（@Primary） | `mysqlSession` | `mysql` | MySQL 模块自动配置用自己的工厂创建 |
 | `ossDataSource` | `ossSession` | `oss` | 自定义 Bean 调用 factory.create |
 
-`@Primary` 解决 Spring 注入歧义；字符串 `primary` 是框架默认路由组。这两个概念不同。
+`@Primary` 解决 Spring DataSource 注入歧义；group 是框架路由名，二者不同。模块默认组为 mysql、postgresql、sqlite。未指定 group 时优先使用已注册的旧 primary 组；没有 primary 且只有一个组时自动使用该组；有多个组且无有效默认组时必须显式指定，不按注册顺序猜测。
 
-### 2. 完整配置：保留自动 primary，再新增 oss
+### 2. 完整配置：保留自动 mysql，再新增 oss
 
 前提：已引入 starter + mysql，配置类在应用组件扫描范围内。此例替代原单数据源手工配置；不要再保留另一份同名 DataSource Bean。
 
@@ -321,11 +629,15 @@ public class MultiDataSourceConfig {
 }
 ```
 
-为什么主数据源也显式定义：应用新增 DataSource Bean 会影响 Boot 默认数据源的条件装配；不要只定义第二个数据源，却假定主数据源一定仍会自动创建。本例明确提供两个数据源，并用 @Primary 指定自动 `jdbcSession` 应注入哪一个。
+为什么主数据源也显式定义：应用新增 DataSource Bean 会影响 Boot 默认数据源的条件装配；不要只定义第二个数据源，却假定主数据源一定仍会自动创建。本例明确提供两个数据源，并用 @Primary 指定 MySQL 模块的 `mysqlSession` 应使用哪一个。
 
-不要额外声明 `factory.create(mainDataSource, "primary")` 的会话 Bean：当前 MySQL 自动配置按 Bean 名 `jdbcSession` 条件创建主会话。两个不同会话对象使用同一组名会作为同组节点注册，不是按组名覆盖。与 SQLite 共存时，工厂必须用 `@Qualifier("mysqlSessionFactory")` 指定，不能把 SQLite 解析器用于 MySQL。
+本例已有组 mysql 的自动会话，不要再额外声明另一个同组会话。各模块直接调用自己的工厂，不检查 JDBC URL，也不由公共 JDBC 层选择工厂。两个不同会话对象使用同一组名会作为同组节点注册，不是按组名覆盖。手动覆盖某模块会话时使用对应默认 Bean 名；声明 jdbcSession 则会让 MySQL 和 PostgreSQL 的默认创建都退让。
 
-工厂应使用 Spring 注入的实例，不能直接 `new JdbcSessionFactory(...)` 后就调用 create，因为其内部依赖需要注入。当前 MySQL 工厂使用 MySQL 解析器，不能用它直接承诺连接 PostgreSQL/Oracle 后 SQL 方言也正确。
+同时引入 MySQL 与 PostgreSQL 时，默认组名虽然不同，但两边仍可能注入同一个 @Primary DataSource。group 名不会自动选中对应的 DataSource Bean，也不会修正错配的驱动或 SQL。应显式声明由正确工厂和数据源创建的会话；有 @Primary 主库时可将主会话命名为 jdbcSession 禁用双方默认创建，再为其他库注册独立组。完整例子见 PostgreSQL 专题。
+
+与 SQLite 或 PostgreSQL 共存时，工厂必须用 `@Qualifier("mysqlSessionFactory")` 指定；PostgreSQL 使用 `@Qualifier("postgresqlSessionFactory")`。直接注入会话时也应使用实际生效的 Bean 名，例如 `@Qualifier("mysqlSession")`，避免同时引入多个模块或存在多个会话时仅按 JdbcSession 父类型注入产生歧义。手动 create 由调用方正确选择工厂。
+
+工厂应使用 Spring 注入的实例，不能直接 `new JdbcSessionFactory(...)` 后就调用 create，因为其内部依赖需要注入。SQL 差异由对应 ParseManager 注册的解析器处理，JDBC 参数绑定和结果读取差异由 Session 的扩展方法处理；PostgreSQL 工厂创建 PostgresqlSession 并设置 PostgresqlParseManager，MySQL 工厂创建公共 JdbcSession 并设置 MysqlParseManager。不能仅把 MySQL 工厂的数据源地址改为 PostgreSQL/Oracle 就承诺兼容。
 
 ### 3. 如何指定使用 oss
 
@@ -368,7 +680,7 @@ var query = ModelSelectWrapper.newInstance("oss", new DemoUser());
 var users = query.selectList();
 ```
 
-主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认 primary。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
+主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认组选取（已注册的 primary 优先，否则自动使用唯一组；多组无有效默认组时要求显式指定）。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
 
 ### 4. 事务与生命周期限制
 
@@ -393,7 +705,7 @@ route.registerSession(session);
 
 当前注册表没有提供完整的并发动态管理保证；不要将这个片段当作运行时随意增加/移除租户库的生产方案。
 
-启动后检查 `SessionUtil.route().loadBalanceList()` 是否包含 primary、oss。两个库预置不同标记数据，通过代理调用上述 Service 确认选库；分别验证正常提交、异常回滚和跨库失败行为。此文档没有替你执行这些数据库操作。
+启动后检查 `SessionUtil.route().loadBalanceList()` 是否包含 mysql、oss。主库查询显式选择 mysql，例如 `ModelSelectWrapper.newInstance("mysql", DemoUser.class).selectList()`。两个库预置不同标记数据，通过代理调用上述 Service 确认选库；分别验证正常提交、异常回滚和跨库失败行为。此文档没有替你执行这些数据库操作。
 
 ### 6. 大集合：最多 4 个连接，每次 JDBC batch 默认 256 条
 
@@ -445,6 +757,7 @@ boolean parallelAllowed = session.supportsParallelWrites();
 
 > 适用：JDK 25 / 制品版本 3.0。实现位于 `sqlite/`；通用 SQL 解析位于 `jdbc/.../sql/`。
 > SQLite 与 MySQL 复用普通 CRUD 解析器和现有 Model Wrapper API，不需要另一套实体或 DAO。
+> 2026-10-05 更新默认文件和 sqlite 会话组；引入模块即启用。本轮未运行测试、编译或打包。
 
 ### 最小接入
 
@@ -463,7 +776,7 @@ Spring Boot 项目添加依赖；已有 starter 时不用重复添加。
 </dependency>
 ```
 
-仅使用 SQLite 时不需要 mysql 模块、数据库服务器、用户名或密码：
+仅使用 SQLite 时不需要 mysql 模块、数据库服务器、用户名或密码。引入模块即启用，无需提供 yulinlin.sqlite 配置：文件为进程工作目录下的 data/local.db，会话组为 sqlite。下面是可选的覆盖配置，未设置的字段沿用默认值：
 
 ```yaml
 yulinlin:
@@ -471,9 +784,9 @@ yulinlin:
     file: data/local.db
 ```
 
-相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时不启用本模块。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
+相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时使用 data/local.db，不再以 file 是否存在决定启用；显式配置空路径仍会校验失败。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
 
-默认会话组是 `local`，请求时使用 `newInstance("local", ...)`。框架未指定会话时仍默认选择 `primary`；仅使用 SQLite 且希望省略会话参数时，可显式配置 `group: primary`。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
+默认会话组是 `sqlite`，请求时使用 `newInstance("sqlite", ...)`。只有 sqlite 一个会话组时可以省略 group；多个组并存时显式选择，除非用户另外注册了旧 primary 默认组。旧业务需要 local 组时可显式设置 yulinlin.sqlite.group=local。无需为了省略参数把 SQLite 组改成 primary。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
 
 ### CRUD 完全沿用现有用法
 
@@ -523,18 +836,18 @@ schemaManager.createTables(SysUserVo.class, LocalConfig.class);
 import com.yulinlin.common.model.ModelSelectWrapper;
 import com.yulinlin.common.model.ModelInsertWrapper;
 
-// SQLite 默认会话组为 local。
-var users = ModelSelectWrapper.newInstance("local", SysUserVo.class).selectList();
+// SQLite 默认会话组为 sqlite。
+var users = ModelSelectWrapper.newInstance("sqlite", SysUserVo.class).selectList();
 
 // 批量插入：一次传入集合，内部使用事务和 JDBC batch。
-ModelInsertWrapper.newInstance("local", usersToInsert).execute();
+ModelInsertWrapper.newInstance("sqlite", usersToInsert).execute();
 ```
 
 条件、排序、分页、更新和删除继续使用原 Wrapper，不要自行拼接用户输入。批量插入要使用待插入的新数据，不要将查询结果直接重复插入。框架不自动阻止无条件更新或删除。
 
 ### 与 MySQL 同时使用
 
-保留 mysql 模块与原 `spring.datasource`，SQLite 默认使用独立的 `local` 组，以下 `group: local` 可省略：
+保留 mysql 模块与原 `spring.datasource`，SQLite 默认使用独立的 `sqlite` 组，以下 `group: sqlite` 可省略：
 
 ```yaml
 spring:
@@ -545,23 +858,23 @@ spring:
 yulinlin:
   sqlite:
     file: data/local.db
-    group: local
+    group: sqlite
 ```
 
 ```java
 // 第一个参数就是数据源会话组，与 oss 的选择方式相同。
-var localUsers = ModelSelectWrapper.newInstance("local", SysUserVo.class).selectList();
-var mysqlUsers = ModelSelectWrapper.newInstance("primary", SysUserVo.class).selectList();
+var localUsers = ModelSelectWrapper.newInstance("sqlite", SysUserVo.class).selectList();
+var mysqlUsers = ModelSelectWrapper.newInstance("mysql", SysUserVo.class).selectList();
 ```
 
-`spring.datasource.hikari` 仍用于主库。SQLite 使用模块内置的连接池，不继承 MySQL URL 或连接池设置，也不注册 `DataSource` Bean。连接池由 `SqliteDatabase` 创建并在应用关闭时释放；业务无需声明或注入 SQLite DataSource。自定义主 DataSource Bean 时，多主库按 Spring 的规则选择 `@Primary`；SQLite 组保持 `local` 即可，不会参与 DataSource Bean 的选择。不要将不同数据库注册在同一个组下做随机路由。
+`spring.datasource.hikari` 仍用于主库。SQLite 使用模块内置的连接池，不继承 MySQL URL 或连接池设置，也不注册 `DataSource` Bean。连接池由 `SqliteDatabase` 创建并在应用关闭时释放；业务无需声明或注入 SQLite DataSource。自定义主 DataSource Bean 时，多主库按 Spring 的规则选择 `@Primary`；SQLite 组保持 `sqlite` 即可，不会参与 DataSource Bean 的选择。不要将不同数据库注册在同一个组下做随机路由。
 
 ### 默认值与性能取舍
 
 | 配置/行为 | 默认值 | 含义 |
 | --- | --- | --- |
-| `file` | 必填 | 本地数据库文件路径 |
-| `group` | `local` | Wrapper 第一个参数指定的会话组 |
+| `file` | `data/local.db` | 本地文件路径，相对路径基于进程工作目录 |
+| `group` | `sqlite` | Wrapper 第一个参数指定的会话组 |
 | `busy-timeout` | `5000` | 等待 SQLite 锁的毫秒数，不是查询超时 |
 | `synchronous` | `NORMAL` | 可选 `FULL`；不提供关闭同步的默认方案 |
 | 日志模式 | WAL | 启动时启用并验证，失败则启动失败 |
@@ -590,7 +903,7 @@ SQLite 直接参与框架的会话事务，不自动注册 `sqliteTransactionMan
 // 放在 Spring 管理的 Service public 方法上，通过代理调用。
 @com.yulinlin.data.core.anno.JoinTransaction
 public void saveLocal() {
-    ModelInsertWrapper.newInstance("local", usersToInsert).execute();
+    ModelInsertWrapper.newInstance("sqlite", usersToInsert).execute();
     // 同一事务内继续执行其他框架 ORM 操作
 }
 ```
@@ -619,10 +932,227 @@ mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,Sqli
 
 ---
 
+<!-- source: doc/topics/17-postgresql.md -->
+## PostgreSQL 接入与方言范围
+
+> 状态：2026-10-05 按解析器注册机制和数据库模块自行创建 Session 更新。本轮未运行测试、编译或打包；此前回归结果不代表本轮验证。真实 PostgreSQL 测试需显式提供测试库，默认跳过。没有 PostgreSQL 性能实测。
+> 适用：JDK 25、制品版本 3.0、Spring Boot 3.5。
+> 源码：PostgresqlAutoConfiguration、PostgresqlSession、PostgresqlParseManager、SqlParseManager、SqlParamsContext、DataJdbcApplication、JdbcSessionFactory。
+
+PostgreSQL 使用 PostgresqlSession，继承公共 JdbcSession 的连接、事务、批处理与查询执行。Session 设置 PostgresqlParseManager，由它注册 PostgreSQL 专属解析器生成 SQL；Session 只额外处理驱动参数绑定与结果读取，不承担 SQL 拼接，也不使用独立 SqlDialect。postgresql 模块可独立使用，不依赖 mysql 模块或 MySQL 驱动，测试也不引入 mysql；不能把 mysqlSessionFactory 用于 PostgreSQL。
+
+### 1 依赖与单数据源配置
+
+最小依赖只需 postgresql，公共 jdbc、core 和 lang 会传递引入；不需要 mysql 或 starter。通过团队制品仓库或本地发布获取，不假设已经发布到 Maven Central。
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>postgresql</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+正常 Spring Boot 自动配置链下无需额外启用注解。已有表与可用的数据库账号是前提，本模块不扫描建表。
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:5432/demo?stringtype=unspecified
+    username: ${PG_USERNAME}
+    password: ${PG_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+```
+
+日期、枚举、BigDecimal、Map、集合和嵌套 Bean 等仍经过现有 JDBC 编码器，部分值编码成字符串。示例设置 `stringtype=unspecified`，让 PostgreSQL 根据目标列或 SQL 上下文推断参数类型，避免将 JSON 字符串直接绑定为 varchar 后写入 jsonb 等类型时报错。它是驱动配置，不是框架自动添加的参数；每个 PostgreSQL 数据源都要分别设置。[pgJDBC 参数说明](https://jdbc.postgresql.org/documentation/use/)
+
+该参数不能解决所有类型推断问题。无明确类型上下文的自定义 SQL 应写显式 CAST，例如 `CAST(#{value} AS jsonb)`；不应假定 UUID、数组、空间类型、原生 enum 等 PostgreSQL 扩展类型已经都有专用编码器。
+
+PostgresqlAutoConfiguration 在模块内部注册 `postgresqlSessionFactory`，并直接用自己的工厂创建 Bean `postgresqlSession`，实际类型为 PostgresqlSession，组名为 `postgresql`；core 自动收集实际的会话对象注册到 RouteSession。公共 DataJdbcApplication 只提供 JDBC 通用组件，不再集中匹配工厂或创建默认 Session。注入时可使用父类型 JdbcSession 配合 `@Qualifier("postgresqlSession")`，多模块共存时不要仅按父类型猜测会话。
+
+- 模块直接调用自己的工厂创建会话，不读取或校验 JDBC URL；引入模块和配置正确的 DataSource 是调用方责任。默认 Bean 名与组名不同，但这不表示自动选择了不同的物理数据源。
+- 同时引入 mysql 与 postgresql 时，应显式创建各自会话，防止两边默认注入同一个 @Primary DataSource；示例见下节。
+- 多个 DataSource 必须指定 @Primary，或者显式声明每个会话；无主候选时不会任意选库。
+- 自定义 Bean 名 `postgresqlSession` 或兼容入口 `jdbcSession` 会使 PostgreSQL 默认创建退让。默认配置不再提供名为 jdbcSession 的会话，旧的按名注入需迁移或自行声明兼容 Bean。
+- 会话初始化不要求连接池暴露 URL 获取方法，也不通过打开连接来识别类型；不匹配的驱动或数据库可能到执行 SQL 时才报错，初始化成功不能证明数据库类型兼容。
+- 只有 postgresql 一个会话组时可以省略选组参数；多个组并存时显式选 postgresql，除非用户另外注册了旧 primary 组作为默认。
+
+### 2 复用实体和 CRUD
+
+原有 @JoinTable、@JoinField、@JoinMeta、ModelSelectWrapper 等 API 保持不变，主键仍由应用或实体基类生成，不增加数据库自增键回填功能。完整实体与 Service 组织方式见 ORM 专题。
+
+本节示例使用 com.yulinlin.common.model 下的便利门面，需要按需额外引入 common，或者引入已包含 common 的 starter；这不是 postgresql 模块的强制依赖。只使用公共 JdbcSession 与低层 Wrapper 时不需要它们。
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>common</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+下面是方法体片段；PgUser 是业务实体占位名，需已经映射到对应表。会话组必须已注册。
+
+```java
+import com.yulinlin.common.model.ModelInsertWrapper;
+import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.common.model.ModelUpdateWrapper;
+import com.yulinlin.common.model.ModelDeleteWrapper;
+
+// postgresql 是模块默认组；使用其他自定义组时相应替换。
+ModelInsertWrapper.newInstance("postgresql", user).execute();
+
+var users = ModelSelectWrapper.newInstance("postgresql", PgUser.class)
+        .eq("status", 1).orderByAsc("id").selectList();
+
+var page = ModelSelectWrapper.newInstance("postgresql", PgUser.class)
+        .eq("status", 1).orderByAsc("id").selectPage(1, 20);
+
+PgUser patch = new PgUser();
+patch.setId("existing-id");
+patch.setName("updated");
+ModelUpdateWrapper.newInstance("postgresql", patch).execute();
+
+// 必须提供正确主键或明确条件；没有默认的全表写入保护。
+ModelDeleteWrapper.newInstance("postgresql", patch).execute();
+```
+
+表名、列名和别名使用 PostgreSQL 双引号；普通 schema 限定名按段引用，例如 `public.pg_user`。大小写必须与实际建表一致：未引用的 PostgreSQL 标识符通常转为小写，驼峰实体字段应明确映射到实际列名，推荐数据库采用小写下划线命名。[PostgreSQL 标识符规则](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)
+
+### 3 与 MySQL 同时使用
+
+MySQL 使用公共 JdbcSession，PostgreSQL 使用其子类 PostgresqlSession，两者沿用相同会话接口和事务实现。给不同数据库选择各自工厂，再指定组名；不要把工厂 Bean 名和路由组名混为一谈。
+
+以下配置类假设应用已定义名为 dataSource 的 MySQL 主 DataSource 和 pgDataSource 的 PostgreSQL DataSource，主库标记 @Primary。显式声明兼容名 jdbcSession，使两个模块的默认创建退让，再用各自工厂绑定正确的数据源和组名。这里 mysqlSession 只是同一个主会话的 Bean 别名，不会重复注册对象。完整 DataSourceProperties 定义方式见多数据源专题；pgDataSource 的 URL 同样需要按编码器使用情况设置 stringtype。
+
+```java
+package demo.config;
+
+import com.yulinlin.jdbc.session.JdbcSession;
+import com.yulinlin.jdbc.session.JdbcSessionFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import javax.sql.DataSource;
+
+@Configuration(proxyBeanMethods = false)
+public class PgSessionConfig {
+    @Bean(name = {"jdbcSession", "mysqlSession"})
+    public JdbcSession mysqlSession(
+            @Qualifier("mysqlSessionFactory") JdbcSessionFactory factory,
+            @Qualifier("dataSource") DataSource dataSource) {
+        return factory.create(dataSource, "mysql");
+    }
+
+    @Bean("postgresqlSession")
+    public JdbcSession postgresqlSession(
+            @Qualifier("postgresqlSessionFactory") JdbcSessionFactory factory,
+            @Qualifier("pgDataSource") DataSource dataSource) {
+        return factory.create(dataSource, "postgresql");
+    }
+}
+```
+
+返回的会话 Bean 会自动注册，不在 Bean 创建方法中反向注入 RouteSession。业务使用 `ModelSelectWrapper.newInstance("postgresql", PgUser.class).selectList()` 或 `@JoinSession("postgresql")` 选库。factory.create 本身不执行路由注册，也不自动确认手动传入的数据源是否与方言匹配。
+
+Spring @Transactional、框架 @JoinTransaction、懒加载和 setter 懒同步沿用公共实现。多个数据库或多个写连接不是 XA 两阶段提交，不能承诺跨库原子提交；多路由与 Spring 已绑定连接的边界必须按事务专题配置。
+
+### 4 日期与 JSON
+
+| 功能 | PostgreSQL 实现与限制 |
+| --- | --- |
+| 普通 CRUD、JOIN、IN、聚合 | 使用共用 SQL 解析器；自定义 SQL 表达式不自动翻译 |
+| 分页 | LIMIT size OFFSET offset |
+| 行锁 | FOR UPDATE；需要实际事务边界 |
+| 日期分组 | date_trunc 加 to_char；支持分钟、小时、日、月、季度、年 |
+| 数值间隔分组 | 先 CAST 为 numeric，避免整数除法；间隔必须大于 0 |
+| 聚合 HAVING | 将所选聚合别名展开为原表达式，如 count(*)，不直接引用输出别名 |
+| 分组表达式 | GROUP BY 展开原分组表达式，避免日期分组别名与原列同名时分组粒度错误 |
+| 原生布尔列 | 按 JDBC 布尔类型读取，保留 false 与 NULL，不把 PostgreSQL 的 f 当作 true |
+| JSON 路径读取 | CAST 为 jsonb 后用 #>> 提取文本，支持 text、json、jsonb 列中的合法 JSON |
+| JSON 数字或布尔条件 | 根据条件值生成 numeric 或 boolean CAST；不自动处理脏数据 |
+| JSON 局部更新 | 尚未提供自动 jsonb_set 生成，路径赋值会明确拒绝；整字段替换沿用普通更新 |
+
+日期若沿用现有字符串编码并存为 TEXT，应统一固定格式与时区约定，才能依赖字符串范围比较。原生 timestamp/date 列的字符串写入需确认驱动类型推断与格式；日期分组会 CAST 到 timestamp，不提供按业务时区自动转换 timestamptz 的保证。
+
+下面是低层 Wrapper 方法体片段。实体对应的 JSON 属性仍可定义为 Map、List 或普通 Bean，由编码器完成整字段读写；JSON 路径选择的结果是文本，不是自动推断的 Java 数字或对象。
+
+```java
+import com.yulinlin.data.core.wrapper.impl.SelectWrapper;
+import com.yulinlin.data.core.wrapper.impl.GroupWrapper;
+
+var query = new SelectWrapper<>().table("pg_user");
+query.fields().field("id", "id").field("payload->profile->name", "nickname");
+query.where().eq("payload->profile->name", "alice")
+        .gte("payload->age", 18)
+        .eq("payload->enabled", true);
+// 同一种对象路径也可用 nested：
+query.where().nested("payload", nested -> nested.eq("city", "Shanghai"));
+
+var group = new GroupWrapper<>().table("pg_user");
+group.aggregations().day("created_at", "day");
+group.metrics().count("*", "totalCount");
+group.having().gt("totalCount", 1);
+```
+
+这些是 SQL 构造片段，不会自行执行查询；Model Wrapper 的执行方式见 ORM 专题。JSON 路径以 `->` 分段，例如 `payload->items->0->name`。不存在的路径得到 SQL NULL；数字条件遇到不能转换的字符串、非 JSON 文本列遇到非法 JSON 时，数据库会报错，不会静默跳过。JSON 对象与数组整体比较、混合类型 IN、包含查询和 JSON 索引优化不在当前自动适配范围内。[PostgreSQL JSON 操作](https://www.postgresql.org/docs/current/functions-json.html)
+
+日期分组依赖 PostgreSQL 的 [日期函数](https://www.postgresql.org/docs/current/functions-datetime.html)及 [格式化函数](https://www.postgresql.org/docs/current/functions-formatting.html)。季度按所在季度的起始月分组。别名、原始 SQL、表达式中的表名或函数是可信代码，不可由未校验的 HTTP 参数直接拼接。
+
+### 5 大集合写入
+
+普通集合写入复用 JDBC executeBatch。`.batch()` 仍按公共能力判断是否启用多连接，默认最多 4 个连接、每次 executeBatch 256 条。PostgresqlSession 不重写这套连接、事务和批处理流程。
+
+可在 URL 中显式添加 `reWriteBatchedInserts=true`，让 pgJDBC 将兼容批量 INSERT 改写为多值 INSERT；并非框架替你开启，也不是所有 SQL 都能改写。[pgJDBC 参数说明](https://jdbc.postgresql.org/documentation/use/)
+
+多连接不保证比单连接更快。需要单库严格原子事务时配置 parallel-connections 为 1；驱动返回 SUCCESS_NO_INFO 时只统计成功命令，不承诺精确受影响行数。连接池容量、索引、冲突、磁盘与 WAL 都会影响实际性能。
+
+byte[] 参数由驱动绑定；InputStream 在 PostgreSQL 下使用 setBinaryStream，目标通常是 bytea，不沿用 MySQL Blob 绑定。除 PostgreSQL 原生布尔列按布尔类型读取外，现有 ORM 查询结果沿用字符串编码器解码，尚不承诺 bytea 或 PostgreSQL oid 大对象的完整二进制读回；需要时使用专用编码器或 JDBC 读取。
+
+### 6 迁移与验证
+
+新代码使用：
+
+- `com.yulinlin.jdbc.postgresql.PostgresqlSession`
+- `com.yulinlin.jdbc.postgresql.PostgresqlParseManager`
+- `com.yulinlin.jdbc.postgresql.PostgresqlAutoConfiguration`
+- `@Qualifier("postgresqlSessionFactory")`
+
+已移除 PostgreSQL 包内历史 MysqlParseManager、MysqlParseAutoConfig、重复解析器和分页工具，包括空继承的兼容转发类，以及独立的 SqlDialect、PostgresqlDialect。当前 PostgresqlParseManager 继承 SqlParseManager，在 init 中先调用 super.init() 注册公共 CRUD，再注册 PostgreSQL 的 NameParse、PageParse、DateParse、IntervalParse；只有确实不同的 SQL 才单独实现，普通节点不增加重复类。MySQL 同样保留 MysqlParseManager 注册自己的日期和数值区间解析器。
+
+如果外部代码直接引用旧 PostgreSQL 类，必须迁移到上述新入口并重新编译；不要仅替换 JAR。旧 PG 工厂名 mysqlSessionFactory 必须改为 postgresqlSessionFactory；真正的 MySQL 工厂仍叫 mysqlSessionFactory。
+
+业务仍使用原有 Model Wrapper、Request、RouteSession 和 factory.create(dataSource, group)。默认主会话 Bean 从 jdbcSession 改为 postgresqlSession，按名注入必须相应更新；默认组从 primary 改为 postgresql，显式选择旧 primary 的业务也需迁移或自行注册旧组。仅有一个组时仍支持无组参数查询；多个组时应明确选库，Wrapper API 不变。额外数据源仍需显式声明对应 Session Bean，由 core 自动注册到路由。SqlParamsContext 只携带当前 ParseManager、字段解析器与请求内的 SELECT 别名，不引用 Session，也不把别名写回共享的模型映射。在注册表初始化后不再修改的前提下，同一数据库语法的多个会话可以复用一个 ParseManager；不同数据库要使用各自的注册表。
+
+低层解析可调用 session.parseSql(node, params)，也可直接使用 new PostgresqlParseManager().parse(node, params)；两者只生成 SQL，不获取连接或执行查询。不要把公共 SqlParseManager 或 MysqlParseManager 当作 PostgreSQL 解析器。增加数据库适配时继承 SqlParseManager，在 init 中注册确有差异的 IParse 实现；仅有驱动读写差异时再继承 JdbcSession，重写 bindParameter、readColumn 并设置对应解析器。通过工厂指定 JDBC 地址前缀及 Session 构造函数，再由数据库模块自动配置直接创建自己的 Session Bean，无需公共 JDBC 工厂选择逻辑，也无需复制 CRUD 解析器或事务代码。
+
+不需要外部数据库的专项测试：
+
+```powershell
+mvn -pl postgresql,sqlite -am `
+  -Dtest=PostgresqlSessionTest,PostgresqlAutoConfigurationTest,JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest,OrmProxyIntegrationTest `
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+上述命令包含临时 SQLite 数据库测试，但不连接外部 MySQL 或 PostgreSQL。真实 PostgreSQL 测试默认跳过，手动启用：
+
+```powershell
+$env:PG_TEST_URL = 'jdbc:postgresql://127.0.0.1:5432/test_db'
+$env:PG_TEST_USER = 'test_user'
+$env:PG_TEST_PASSWORD = '<测试账号密码>'
+mvn -pl postgresql -am -Dtest=PostgresqlServerTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+PostgresqlServerTest 在一个测试连接中创建临时表；连接关闭后清理，不使用应用的数据库配置，不修改业务表。入口覆盖共用 JdbcSession 的批处理、CRUD、字符串日期与 BigDecimal、jsonb 编解码、JSON 条件、分组 HAVING、分页行锁和回滚；不覆盖真实服务中的连接池并发、跨库提交或 ORM 代理链。只有实际启用并通过后才能声称真实 PostgreSQL 集成测试通过。
+
+---
+
 <!-- source: doc/topics/20-transactions.md -->
 ## JDBC 事务：独立 Session、路由协调与 Spring 接入
 
-> 基线：2026-10-04 / JDK 25 / 制品版本 3.0 / Spring Boot 3.5。
+> 基线：2026-10-04 事务实现；2026-10-05 按命名会话组更新示例 / JDK 25 / 制品版本 3.0 / Spring Boot 3.5。本轮未运行测试、编译或打包，历史验证结果不代表本次变更已验证。
 > 源码：core 的 AbstractSession、RegisterSession、RouteSession；jdbc 的 AbstractJdbcSession、ConnectionPool、SpringTransactionAop。
 
 ### 推荐选择
@@ -630,7 +1160,7 @@ mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,Sqli
 - 多数据源或多连接批处理：使用框架 `@JoinTransaction` 或 `SessionUtil.route().transaction(...)`。
 - 已有 Spring 管理的单数据源业务：继续使用 Spring `@Transactional`；检测到同一 DataSource 的绑定连接时，框架复用它，在原线程顺序执行，由 Spring 完成物理事务。
 - 严格单库原子性：`parallel-connections: 1`，不要把多连接批处理当作单个数据库事务。
-- SQLite：使用通用 JdbcSession、单连接，默认组 local；无需注册 DataSource 或 sqliteTransactionManager Bean。
+- SQLite：使用通用 JdbcSession、单连接，默认组 sqlite；无需注册 DataSource 或 sqliteTransactionManager Bean。
 
 不要默认同时叠加两种事务注解。代理注解需要 Spring 管理的对象并经代理调用，同类自调用或 `new Service()` 不会生效。
 
@@ -641,8 +1171,8 @@ import com.yulinlin.data.core.anno.JoinTransaction;
 
 @JoinTransaction
 public void saveBusinessData() {
-    ModelInsertWrapper.newInstance("primary", mysqlUsers).batch().execute();
-    ModelInsertWrapper.newInstance("local", localUsers).execute();
+    ModelInsertWrapper.newInstance("mysql", mysqlUsers).batch().execute();
+    ModelInsertWrapper.newInstance("sqlite", localUsers).execute();
     // 任何未捕获的异常都触发回滚协调。
 }
 ```
@@ -698,7 +1228,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Transactional(rollbackFor = Exception.class)
 public void saveOneDatabase() {
-    ModelInsertWrapper.newInstance("primary", usersToInsert).execute();
+    ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();
 }
 ```
 
@@ -707,6 +1237,14 @@ jdbc 自动配置注册 SpringTransactionAop，识别类/方法的 Spring注解�
 仅有 SQLite 时没有原生 JDBC 事务管理器也能使用这个注解，由框架切面管理会话；这不代表实现了 Spring 的全部事务语义。
 
 框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性；`@JoinTransaction.value()` 也不用于选择参与数据源。框架嵌套计数不等价于 REQUIRES_NEW、NESTED 或保存点；异步业务线程不会自动继承事务。高级传播、同步代理自动更新、Spring 与非 Spring 管理的多个库交叉参与，仍需针对实际代理顺序和业务做集成验证，不承诺透明兼容。
+
+### 关联代理与事务
+
+`@JoinLazy` 和 `@JoinSync` 使用的是 `SessionUtil.route()` 的事务状态，不是任意独立 JDBC 连接是否关闭 autoCommit。创建代理及访问延迟字段、调用待同步 setter 时保持同一线程的路由事务，完整用法见 `12-relations.md`。
+
+监听器仍收到嵌套层回调，但 SyncProxyFactory 只在路由最外层提交时写回 setter 记录，内层结束不清理跟踪；实际 Session 完成后调用 `afterCompletion()` 释放上下文。回滚丢弃记录，不还原 Java 对象。
+
+同步代理加入原生 Spring 事务时注册 `beforeCommit` 钩子，在 Spring 物理提交前写回，复用绑定连接；只读事务禁止同步 setter。代理必须在原始线程、原始路由事务内使用，原始 Spring 事务结束后也不能继续修改旧同步代理。已验证普通注解及 TransactionTemplate，不将 REQUIRES_NEW/保存点语义套到路由嵌套上。集合原地修改、null 清列、未代理对象修改不自动写回，完整边界见关联专题。
 
 ### 原子性边界
 
@@ -718,10 +1256,10 @@ jdbc 自动配置注册 SpringTransactionAop，识别类/方法的 Spring注解�
 
 专项测试覆盖：Session 独立事务与实例隔离、默认 4/配置 2 连接限流、10 万条均匀四组、PreparedStatement 复用、256 条分批及尾批、能力关闭时不分组、后续批次失败回滚、同步/异步混合结果、失败任务排空、拒绝提交、嵌套 rollback-only、连接提交/回滚/关闭失败清理、获取连接等待不阻塞其他借用者归还、真实 Spring AOP 顺序及绑定连接复用；SQLite 真实临时文件 CRUD、512 行批次和整批失败回滚、多会话协调及编解码/建表。
 
-JDBC 并发/错误注入测试使用模拟连接；SQLite 使用真实本地文件。未连接外部 MySQL，也未执行业务吞吐量或高级 Spring 传播行为基准。
+代理专项测试还覆盖批量懒加载、空结果、来源数据源、setter 一次执行、默认值/null、主键和版本保护、内层提交后继续修改、缓存命中创建新代理、Spring beforeCommit 和回滚。JDBC 并发/错误注入测试使用模拟连接；SQLite 使用真实本地文件。未连接外部 MySQL，也未执行业务吞吐量或高级 Spring 传播行为基准。
 
 ```shell
-mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
+mvn -pl sqlite -am -Dtest=OrmProxyIntegrationTest,JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 ---
@@ -953,7 +1491,15 @@ List<DemoUser> users = JsonUtil.parseJson("[]", new TypeReference<List<DemoUser>
 | 现象/需求 | 处理 |
 | --- | --- |
 | `NoSuchMethodError: ReflectionUtil.property(...)` | 编译时与运行时 JAR 不一致；检查 lang/core 的来源，统一构建和依赖树，不先归咎于 JDK 25 反射 |
-| 没有可用会话 | 检查 mysql 模块、DataSource、自动配置是否被排除以及 Spring 初始化顺序 |
+| 没有可用会话 | 检查对应模块、实际 DataSource、自动配置、唯一候选或 @Primary、已注册 group 与初始化顺序；默认组为 mysql/postgresql/sqlite，工厂不自动校验数据库类型 |
+| 多个组时未指定会话 | 用请求的 group 参数或 @JoinSession 明确选库；没有有效 primary 等默认组时不会按顺序猜测。@Primary DataSource 不等于默认路由组 |
+| PostgreSQL 提示 varchar 无法写入 jsonb 等列 | 编码器可能将值编码为字符串；每个 PG 数据源配置 stringtype=unspecified，或在自定义 SQL 中显式 CAST；见 17-postgresql |
+| PostgreSQL 提示 DATE_FORMAT 或 JSON_EXTRACT 不存在 | 确认会话使用 postgresqlSessionFactory，不是 mysqlSessionFactory；统一升级 jdbc/postgresql，旧原始 SQL 不会自动翻译 |
+| JoinQuery 将 username 当成固定字符串 | 动态取值写成 `${username}`，多级取值同样使用 `${user.sysRoleIds}`；见 12-relations |
+| JoinLazy 字段一直为 null | 检查代理入口、路由事务、源属性及匹配数据；未开启路由事务不会自动退回立即查询 |
+| 懒代理提示原始事务不一致 | 在创建代理的原始线程和事务内加载/修改，不将旧代理带入新事务；缓存命中会创建当前查询的新代理 |
+| 列表关联查询太多 | 同一查询结果或一次 getLazyProxy(list) 才共享批量加载；普通 IN 按 batchSize 分批，复杂 wheres/count 仍可逐对象查询 |
+| 修改关联对象但未自动写库 | 检查 JoinSync/显式同步代理、路由事务与非 null setter；集合原地修改不自动记录 |
 | HTTP 超时配置不生效 | 区分 Spring 注入客户端、HttpUtil 静态客户端、手动构造客户端和单次覆盖 |
 | `isNotFound()` 返回 false | 不足以认定成功，必要时执行请求并检查状态/异常 |
 | DTO 复制类型不兼容 | 显式映射，不把 copyProperties 当作任意类型转换器 |

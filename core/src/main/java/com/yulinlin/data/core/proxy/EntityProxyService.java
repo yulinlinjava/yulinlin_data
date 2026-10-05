@@ -60,5 +60,7 @@ public class EntityProxyService implements TransactionListener {
     public void rollbackTransaction() {
         syncFactory.rollbackTransaction();
     }
+
+    @Override public void afterCompletion() { syncFactory.afterCompletion(); }
 }
 

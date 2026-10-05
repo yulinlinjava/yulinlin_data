@@ -40,7 +40,7 @@ public class SqlSelectWrapperParse implements IParse<SelectWrapper> {
         if(condition.getPageNumber() > 0 && condition.getPageSize() > 0){
             //String limitSql=" limit " + ((condition.getPageNumber() - 1) * condition.getPageSize()) +" , " + condition.getPageSize();
 
-            sql+=SqlPageSqlUtil.pageSql(condition.getPageNumber(),condition.getPageSize());
+            sql+=parseManager.parse(new com.yulinlin.jdbc.sql.SqlPage(condition.getPageNumber(),condition.getPageSize()), params);
         }
 
         if(condition.isLock()){

@@ -10,4 +10,7 @@ class BaseTransactionSession implements TransactionSession {
     @Override public void setRollbackOnly() { transactions.setRollbackOnly(); }
     @Override public boolean isRollbackOnly() { return transactions.isRollbackOnly(); }
     protected int transactionDepth() { return transactions.depth(); }
+    /** Opaque identity of this thread's outermost transaction; null outside a transaction. */
+    public final Object transactionIdentity() { return transactions.identity(); }
+    public final boolean isOutermostTransaction() { return transactions.depth() == 1; }
 }

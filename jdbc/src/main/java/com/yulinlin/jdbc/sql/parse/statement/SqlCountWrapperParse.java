@@ -37,7 +37,7 @@ public class SqlCountWrapperParse implements IParse<CountWrapper> {
         if(whereSql != null){
             sql+=" where " +whereSql;
         }
-        String groupSql =   groupSql(aggregations);
+        String groupSql =   groupSql(aggregations, params);
         if(groupSql != null){
             sql+=" group by " + groupSql;
         }

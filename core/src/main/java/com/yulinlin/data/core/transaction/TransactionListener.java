@@ -10,4 +10,7 @@ public interface TransactionListener {
 
     //回滚事务
     void rollbackTransaction();
+
+    /** Called once after the outermost route transaction has finished, including failures. */
+    default void afterCompletion() { }
 }

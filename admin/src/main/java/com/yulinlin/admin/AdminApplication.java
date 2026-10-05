@@ -2,12 +2,6 @@ package com.yulinlin.admin;
 
 
 import com.alibaba.druid.pool.DruidDataSource;
-import com.yulinlin.common.filter.TableLogicFilter;
-import com.yulinlin.data.core.session.EntitySession;
-import com.yulinlin.jdbc.session.JdbcSession;
-import com.yulinlin.jdbc.session.JdbcSessionFactory;
-import com.yulinlin.repository.JoinRepositoryScan;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,7 +12,7 @@ import javax.sql.DataSource;
 
 
 @SpringBootApplication
-@JoinRepositoryScan
+
 //@EnableRedisHttpSession
 public class AdminApplication  {
 

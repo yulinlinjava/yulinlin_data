@@ -1,108 +1,34 @@
 package com.yulinlin.jdbc.sql.parse;
 
-import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.node.AbstractMetaNode;
-import com.yulinlin.data.core.node.MetaNode;
 import com.yulinlin.data.core.parse.IParamsContext;
 import com.yulinlin.data.core.session.RequestType;
-import com.yulinlin.jdbc.enums.SqlKeys;
-
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.Stack;
+import com.yulinlin.jdbc.sql.SqlParamsContext;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 public class AliasUtil {
+    private static final ThreadLocal<Deque<Boolean>> local = ThreadLocal.withInitial(ArrayDeque::new);
 
-    private static ThreadLocal<Stack<Boolean>> local = ThreadLocal.withInitial(() -> new Stack<>());
-
-
-    public static void push(boolean open){
-        local.get().push(open);
+    public static void push(boolean open) { local.get().addLast(open); }
+    public static void pop() {
+        Deque<Boolean> stack = local.get();
+        stack.removeLast();
+        if (stack.isEmpty()) local.remove();
     }
+    public static boolean ok() { return local.get().isEmpty() || local.get().getFirst(); }
 
-    public static void pop(){
-        local.get().pop();
-    }
-    public static boolean ok(){
-        if(local.get().size() == 0){
-            return true;
-        }
-        Boolean aBoolean = local.get().get(0);
-        return aBoolean;
+    public static boolean supportAlias(IParamsContext params) {
+        return params.getRequestType() == RequestType.select
+                || params.getRequestType() == RequestType.count
+                || params.getRequestType() == RequestType.group;
     }
 
     public static String parse(String name, IParamsContext params) {
-        if(ok()){
-            String val =
-                    params.toColumn(
-                            name
-                    );
-
-            return SqlJsonUtil.json_where(val);
-        }else {
-            return name;
-
-        }
-
-    }
-
-    public static boolean supportAlias(IParamsContext params){
-        if(params.getRequestType() == RequestType.select ||
-                params.getRequestType() == RequestType.count ||
-                params.getRequestType() == RequestType.group
-                ){
-            return true;
-        }
-        return false;
-
+        return SqlParamsContext.nameParse(params).parse(name, params);
     }
 
     public static String parse(AbstractMetaNode node, IParamsContext params) {
-
-        String name = (String) node.get(SqlKeys.name);
-        if(name != null){
-            return name;
-        }
-
-
-        if(node instanceof MetaNode){
-            MetaNode m =(MetaNode) node;
-            name  = m.getKey();
-            if(ok()){
-                String val =
-                        params.toColumn(
-                                name
-                        );
-                val=  params.parse(val).toString();
-
-                if(params.getRequestType() == RequestType.select ||
-                        params.getRequestType() == RequestType.count ||
-                        params.getRequestType() == RequestType.group
-                        ){
-                    return val;
-                }else {
-                    String[] split = val.split("\\.");
-
-                    return split[split.length-1];
-                }
-
-       /*         if(SqlJsonUtil.isEmpty()){
-                    return val;
-                }
-
-
-
-                return SqlJsonUtil.json_where(val);*/
-            }else {
-
-                return name;
-
-            }
-        }else {
-            throw new NoticeException("解析key失败");
-        }
-
-
+        return SqlParamsContext.nameParse(params).parse(node, params, SqlParamsContext.parseManager(params));
     }
-
 }

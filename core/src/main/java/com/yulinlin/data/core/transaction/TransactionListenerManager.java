@@ -50,4 +50,17 @@ public class TransactionListenerManager {
        }
     }
 
+    public void afterCompletion() {
+        Throwable failure = null;
+        for (TransactionListener listener : list) {
+            try { listener.afterCompletion(); }
+            catch (RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
+        }
+        if (failure instanceof Error error) throw error;
+        if (failure != null) throw (RuntimeException) failure;
+    }
+
 }

@@ -2,6 +2,7 @@
 
 > 适用：JDK 25 / 制品版本 3.0。实现位于 `sqlite/`；通用 SQL 解析位于 `jdbc/.../sql/`。
 > SQLite 与 MySQL 复用普通 CRUD 解析器和现有 Model Wrapper API，不需要另一套实体或 DAO。
+> 2026-10-05 更新默认文件和 sqlite 会话组；引入模块即启用。本轮未运行测试、编译或打包。
 
 ## 最小接入
 
@@ -20,7 +21,7 @@ Spring Boot 项目添加依赖；已有 starter 时不用重复添加。
 </dependency>
 ```
 
-仅使用 SQLite 时不需要 mysql 模块、数据库服务器、用户名或密码：
+仅使用 SQLite 时不需要 mysql 模块、数据库服务器、用户名或密码。引入模块即启用，无需提供 yulinlin.sqlite 配置：文件为进程工作目录下的 data/local.db，会话组为 sqlite。下面是可选的覆盖配置，未设置的字段沿用默认值：
 
 ```yaml
 yulinlin:
@@ -28,9 +29,9 @@ yulinlin:
     file: data/local.db
 ```
 
-相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时不启用本模块。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
+相对路径基于进程工作目录，不是 classpath。启动时创建父目录与数据库文件，并启用 WAL；默认不创建业务表，开启下文实体扫描后可以自动建表。生产环境建议使用持久化目录的绝对路径。未配置 `file` 时使用 data/local.db，不再以 file 是否存在决定启用；显式配置空路径仍会校验失败。只接受文件路径，不接受 JDBC URL、内存数据库或 `file:` URI。
 
-默认会话组是 `local`，请求时使用 `newInstance("local", ...)`。框架未指定会话时仍默认选择 `primary`；仅使用 SQLite 且希望省略会话参数时，可显式配置 `group: primary`。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
+默认会话组是 `sqlite`，请求时使用 `newInstance("sqlite", ...)`。只有 sqlite 一个会话组时可以省略 group；多个组并存时显式选择，除非用户另外注册了旧 primary 默认组。旧业务需要 local 组时可显式设置 yulinlin.sqlite.group=local。无需为了省略参数把 SQLite 组改成 primary。实体映射和 CRUD 按 ORM 专题使用；将 MySQL 建表语句换成 SQLite DDL，不要照搬 `ENGINE`、`AUTO_INCREMENT` 等 MySQL 专用语法。
 
 ## CRUD 完全沿用现有用法
 
@@ -80,18 +81,18 @@ schemaManager.createTables(SysUserVo.class, LocalConfig.class);
 import com.yulinlin.common.model.ModelSelectWrapper;
 import com.yulinlin.common.model.ModelInsertWrapper;
 
-// SQLite 默认会话组为 local。
-var users = ModelSelectWrapper.newInstance("local", SysUserVo.class).selectList();
+// SQLite 默认会话组为 sqlite。
+var users = ModelSelectWrapper.newInstance("sqlite", SysUserVo.class).selectList();
 
 // 批量插入：一次传入集合，内部使用事务和 JDBC batch。
-ModelInsertWrapper.newInstance("local", usersToInsert).execute();
+ModelInsertWrapper.newInstance("sqlite", usersToInsert).execute();
 ```
 
 条件、排序、分页、更新和删除继续使用原 Wrapper，不要自行拼接用户输入。批量插入要使用待插入的新数据，不要将查询结果直接重复插入。框架不自动阻止无条件更新或删除。
 
 ## 与 MySQL 同时使用
 
-保留 mysql 模块与原 `spring.datasource`，SQLite 默认使用独立的 `local` 组，以下 `group: local` 可省略：
+保留 mysql 模块与原 `spring.datasource`，SQLite 默认使用独立的 `sqlite` 组，以下 `group: sqlite` 可省略：
 
 ```yaml
 spring:
@@ -102,23 +103,23 @@ spring:
 yulinlin:
   sqlite:
     file: data/local.db
-    group: local
+    group: sqlite
 ```
 
 ```java
 // 第一个参数就是数据源会话组，与 oss 的选择方式相同。
-var localUsers = ModelSelectWrapper.newInstance("local", SysUserVo.class).selectList();
-var mysqlUsers = ModelSelectWrapper.newInstance("primary", SysUserVo.class).selectList();
+var localUsers = ModelSelectWrapper.newInstance("sqlite", SysUserVo.class).selectList();
+var mysqlUsers = ModelSelectWrapper.newInstance("mysql", SysUserVo.class).selectList();
 ```
 
-`spring.datasource.hikari` 仍用于主库。SQLite 使用模块内置的连接池，不继承 MySQL URL 或连接池设置，也不注册 `DataSource` Bean。连接池由 `SqliteDatabase` 创建并在应用关闭时释放；业务无需声明或注入 SQLite DataSource。自定义主 DataSource Bean 时，多主库按 Spring 的规则选择 `@Primary`；SQLite 组保持 `local` 即可，不会参与 DataSource Bean 的选择。不要将不同数据库注册在同一个组下做随机路由。
+`spring.datasource.hikari` 仍用于主库。SQLite 使用模块内置的连接池，不继承 MySQL URL 或连接池设置，也不注册 `DataSource` Bean。连接池由 `SqliteDatabase` 创建并在应用关闭时释放；业务无需声明或注入 SQLite DataSource。自定义主 DataSource Bean 时，多主库按 Spring 的规则选择 `@Primary`；SQLite 组保持 `sqlite` 即可，不会参与 DataSource Bean 的选择。不要将不同数据库注册在同一个组下做随机路由。
 
 ## 默认值与性能取舍
 
 | 配置/行为 | 默认值 | 含义 |
 | --- | --- | --- |
-| `file` | 必填 | 本地数据库文件路径 |
-| `group` | `local` | Wrapper 第一个参数指定的会话组 |
+| `file` | `data/local.db` | 本地文件路径，相对路径基于进程工作目录 |
+| `group` | `sqlite` | Wrapper 第一个参数指定的会话组 |
 | `busy-timeout` | `5000` | 等待 SQLite 锁的毫秒数，不是查询超时 |
 | `synchronous` | `NORMAL` | 可选 `FULL`；不提供关闭同步的默认方案 |
 | 日志模式 | WAL | 启动时启用并验证，失败则启动失败 |
@@ -147,7 +148,7 @@ SQLite 直接参与框架的会话事务，不自动注册 `sqliteTransactionMan
 // 放在 Spring 管理的 Service public 方法上，通过代理调用。
 @com.yulinlin.data.core.anno.JoinTransaction
 public void saveLocal() {
-    ModelInsertWrapper.newInstance("local", usersToInsert).execute();
+    ModelInsertWrapper.newInstance("sqlite", usersToInsert).execute();
     // 同一事务内继续执行其他框架 ORM 操作
 }
 ```

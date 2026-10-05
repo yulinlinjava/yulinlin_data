@@ -20,6 +20,14 @@ public class OrderParse implements IParse<Order> {
                 sql+=" , ";
             }
             String key =item.getKey();
+            if (!com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params).supportsHavingAlias()) {
+                if (params instanceof com.yulinlin.jdbc.sql.SqlParamsContext context
+                        && context.selectExpression(key) != null) {
+                    key = context.nameParse().alias(key);
+                } else {
+                    key = AliasUtil.parse(item, params);
+                }
+            }
 
             sql+= key;
             if(item.isAsc()){

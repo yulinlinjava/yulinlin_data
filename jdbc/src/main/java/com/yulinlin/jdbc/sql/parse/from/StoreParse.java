@@ -13,11 +13,12 @@ public class StoreParse implements IParse<Store> {
 
     @Override
     public String parse(Store condition, IParamsContext params, IParseManager parseManager) {
-        String table =  params.parse(condition.getName()).toString();
+        var names = com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params);
+        String table = names.reference(params.parse(condition.getName()).toString());
       if(AliasUtil.supportAlias(params)){
           if(condition.getAlias() != null){
 
-              return table +" " +condition.getAlias();
+              return table +" " +names.alias(condition.getAlias());
           }
       }
         return table;

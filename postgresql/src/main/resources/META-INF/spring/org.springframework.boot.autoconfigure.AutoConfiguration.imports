@@ -1,1 +1,1 @@
-com.yulinlin.jdbc.postgresql.MysqlParseAutoConfig
+com.yulinlin.jdbc.postgresql.PostgresqlAutoConfiguration

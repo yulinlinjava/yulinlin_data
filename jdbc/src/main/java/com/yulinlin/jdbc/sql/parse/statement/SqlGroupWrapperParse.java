@@ -4,8 +4,9 @@ import com.yulinlin.data.core.node.select.GroupAsField;
 import com.yulinlin.data.core.parse.*;
 import com.yulinlin.data.core.wrapper.impl.AggregationsWrapper;
 import com.yulinlin.data.core.wrapper.impl.GroupWrapper;
-import com.yulinlin.jdbc.sql.parse.AliasUtil;
 import com.yulinlin.jdbc.session.SqlNode;
+import com.yulinlin.jdbc.sql.parse.AliasUtil;
+
 
 import java.util.List;
 
@@ -26,6 +27,19 @@ public class SqlGroupWrapperParse implements IParse<GroupWrapper> {
 
         }
         return  sb.toString();
+    }
+
+    public static String groupSql(AggregationsWrapper groups, IParamsContext params) {
+        if (groups.getList().isEmpty()) return null;
+        var names = com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params);
+        var joiner = new java.util.StringJoiner(" , ");
+        for (Object item : groups.getList()) {
+            String alias = ((GroupAsField) item).getAlias();
+            String expression = params instanceof com.yulinlin.jdbc.sql.SqlParamsContext sql
+                    ? sql.selectExpression(alias) : null;
+            joiner.add(names.groupReference(alias, expression));
+        }
+        return joiner.toString();
     }
 
 
@@ -53,7 +67,7 @@ public class SqlGroupWrapperParse implements IParse<GroupWrapper> {
             sql+=" where " +whereSql;
         }
 
-        String groupSql =   groupSql(aggregations);
+        String groupSql =   groupSql(aggregations, params);
         if(groupSql != null){
             sql+=" group by " + groupSql;
         }
@@ -78,7 +92,7 @@ public class SqlGroupWrapperParse implements IParse<GroupWrapper> {
 
         if(condition.getPageNumber() > 0){
           //  String limitSql=" limit " + ((condition.getPageNumber() - 1) * condition.getPageSize()) +" , " + condition.getPageSize();
-            sql+=SqlPageSqlUtil.pageSql(condition.getPageNumber(),condition.getPageSize());
+            sql+=parseManager.parse(new com.yulinlin.jdbc.sql.SqlPage(condition.getPageNumber(),condition.getPageSize()), params);
 
         }
 

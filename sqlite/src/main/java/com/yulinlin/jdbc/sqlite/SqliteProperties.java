@@ -4,8 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("yulinlin.sqlite")
 public class SqliteProperties {
-    private String file;
-    private String group = "local";
+    private String file = "data/local.db";
+    private String group = "sqlite";
     private int busyTimeout = 5000;
     private Sync synchronous = Sync.NORMAL;
     private Schema schema = new Schema();

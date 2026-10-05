@@ -1,11 +1,14 @@
 package com.yulinlin.data.core.request;
 
+import com.yulinlin.data.core.node.CommandNode;
 import com.yulinlin.data.core.node.INode;
+import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.session.SessionUtil;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 public class ExecuteRequest<E> extends BaseRequest<E> {
@@ -85,6 +88,14 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
     private static ExecuteRequest newInstance(Class clazz, RequestType requestType){
         ExecuteRequest executeRequest = new ExecuteRequest(clazz,clazz);
         executeRequest.requestType = requestType;
+        return executeRequest;
+    }
+
+    public static <E> ExecuteRequest<E> newInstance(String sql, Map<String,Object> params){
+        ExecuteRequest<E> executeRequest = new ExecuteRequest<>(Object.class, Object.class);
+        executeRequest.addRequest(
+                new CommandNode(sql,  params, ParseType.update)
+        );
         return executeRequest;
     }
 

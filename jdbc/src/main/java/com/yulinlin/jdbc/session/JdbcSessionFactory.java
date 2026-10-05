@@ -15,7 +15,9 @@ import javax.sql.DataSource;
 
 public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
-    private IParseManager parseManager;
+    private final IParseManager parseManager;
+    private final String jdbcUrlPrefix;
+    private final java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator;
 
     @Autowired
     IFilterManager filterManager;
@@ -38,7 +40,28 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
 
     public JdbcSessionFactory(IParseManager parseManager) {
+        this(parseManager, "jdbc:mysql:", JdbcSession::new);
+    }
+
+    public JdbcSessionFactory(IParseManager parseManager, String jdbcUrlPrefix) {
+        this(parseManager, jdbcUrlPrefix, JdbcSession::new);
+    }
+
+    /** Create the concrete session, which installs its parsers and driver-specific value handling. */
+    public JdbcSessionFactory(String jdbcUrlPrefix,
+            java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator) {
+        this(null, jdbcUrlPrefix, sessionCreator);
+    }
+
+    private JdbcSessionFactory(IParseManager parseManager, String jdbcUrlPrefix,
+            java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator) {
         this.parseManager = parseManager;
+        this.jdbcUrlPrefix = java.util.Objects.requireNonNull(jdbcUrlPrefix, "jdbcUrlPrefix");
+        this.sessionCreator = java.util.Objects.requireNonNull(sessionCreator, "sessionCreator");
+    }
+
+    public boolean supportsJdbcUrl(String url) {
+        return url != null && url.startsWith(jdbcUrlPrefix);
     }
 
 
@@ -52,7 +75,7 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         sqlSession.setCoderManager(jdbcCoderManager);
         sqlSession.setGroup(group);
         sqlSession.setLogManager(logManager);
-        sqlSession.setParseManager(parseManager);
+        if (parseManager != null) sqlSession.setParseManager(parseManager);
 
         sqlSession.setFilterManager(filterManager);
         sqlSession.setProxyService(entityProxyService);
@@ -60,7 +83,7 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
     }
 
     protected JdbcSession newSession(DataSource dataSource) {
-        return new JdbcSession(dataSource);
+        return sessionCreator.apply(dataSource);
     }
 
     public JdbcSession create(DataSourceProperties dataSourceProperties, String group){

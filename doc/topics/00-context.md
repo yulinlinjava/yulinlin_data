@@ -17,8 +17,10 @@
 | 需求 | 模块 | 准确入口 |
 | --- | --- | --- |
 | Spring Boot + MySQL ORM | starter + mysql | `com.yulinlin.common.domain.IdEntity` / `SuperEntity` |
-| Spring Boot + SQLite ORM | starter + sqlite | `yulinlin.sqlite.file`，沿用相同实体与 Wrapper |
+| Spring Boot + SQLite ORM | starter + sqlite | 默认启用，file 默认 data/local.db，组 sqlite；沿用相同实体与 Wrapper |
+| Spring Boot + PostgreSQL ORM | postgresql；common 或 starter 按需引入 | `postgresqlSessionFactory` 创建 PostgresqlSession，继承公共 JdbcSession 与相同 Wrapper；见 PostgreSQL 专题 |
 | 实体映射 | core | `com.yulinlin.data.core.anno.JoinTable`、`JoinField`、`JoinMeta`、`JoinWhere` |
+| 级联与代理 | core | 同注解包下 `JoinQuery`、`JoinLazy`、`JoinSync`；`com.yulinlin.data.core.session.SessionUtil.route()` |
 | 数据库分页结果 | lang | `com.yulinlin.data.lang.util.Page`，不是 Spring Data Page |
 | HTTP | core | `com.yulinlin.data.core.http.HttpRequestClient`、`HttpUtil` |
 | HTTP 响应/异常/文件 | core | 同包下 `HttpResponse`、`HttpRequestException`、`HttpFile` |

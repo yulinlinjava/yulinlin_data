@@ -24,9 +24,13 @@ public class AggregationsWrapperParse implements IParse<AggregationsWrapper> {
             if (sql.length() > 0) {
                 sql .append( " , ");
             }
-            sql.append(parseManager.parse(selectItem.getGroup(),params));
+            String expression = parseManager.parse(selectItem.getGroup(),params).toString();
+            sql.append(expression);
             sql.append(" as ");
-            sql.append(selectItem.getAlias());
+            sql.append(com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params).alias(selectItem.getAlias()));
+            if (params instanceof com.yulinlin.jdbc.sql.SqlParamsContext context) {
+                context.selectExpression(selectItem.getAlias(), expression);
+            }
 
 
 

@@ -13,9 +13,11 @@
 | --- | --- | --- |
 | 所有任务 | [00-context](topics/00-context.md) | 版本、准确包名、约定、模块范围 |
 | ORM CRUD | [10-orm](topics/10-orm.md) + [20-transactions](topics/20-transactions.md) | 依赖、配置、实体、配套表、完整 Service、Spring 事务 |
+| 级联与代理 | [12-relations](topics/12-relations.md) + [20-transactions](topics/20-transactions.md) | JoinQuery、JoinLazy、JoinSync、自动处理链、聚合 DTO、会话与跟踪限制 |
 | 多数据源 | [15-datasources](topics/15-datasources.md) + [20-transactions](topics/20-transactions.md) | JdbcSessionFactory.create、自动注册、primary/oss 路由、完整配置 |
 | Spring 事务排查 | [20-transactions](topics/20-transactions.md) | 支持路径与多路由/异步边界 |
 | 本地 SQLite | [16-sqlite](topics/16-sqlite.md) + [10-orm](topics/10-orm.md) | 文件配置、WAL、扫描建表、类型规则、通用 CRUD、多库路由与事务 |
+| PostgreSQL | [17-postgresql](topics/17-postgresql.md) + [15-datasources](topics/15-datasources.md) | 驱动配置、共用 JDBC、方言、MySQL 共存、JSON 与日期、迁移和验证范围 |
 | HTTP 请求/文件 | [30-http](topics/30-http.md) | JSON、表单、上传下载、超时、404、异常 |
 | 反射/复制 | [40-reflection](topics/40-reflection.md) | API、null、引用关系、DTO 与克隆区别 |
 | JSON/常用工具 | [50-utilities](topics/50-utilities.md) | JSON、字符串、日期、树、ID、响应包装 |
@@ -23,22 +25,27 @@
 
 40/50 中的 DemoUser 是 10 中的示例模型；仅用工具类可以替换为自己的普通 Bean，不要求启动 ORM。
 
+## 内部开发文档
+
+[数据源接入开发规范](internal/datasource-integration.md)面向框架维护者和开发新模块的 AI，涵盖 JDBC 与非 JDBC 模块、差异解析器、Session 创建、自动配置、路由与事务边界以及验收清单。业务使用仍按上表读取专题；内部文档不并入外部 AI 单文件指南。
+
 ## 文档状态与可信度
 
 | 分类 | 位置 | 使用规则 |
 | --- | --- | --- |
 | 当前契约与示例 | `topics/` | 维护源；标记源码基线与未验证范围，优先读取 |
+| 内部开发规范 | `internal/` | 模块扩展与维护说明，不作为业务使用契约，不并入单文件导出 |
 | 单文件 AI 导出 | `AI接入指南.md` | 自动生成，不单独编辑，不与专题重复投喂 |
 | 历史案例 | [archive](archive/README.md) | 保留原文；仅查背景，不直接据此生成代码 |
 | 性能实测 | [2026-10-01 克隆报告](深度克隆性能对比报告.md) | 仅代表当时机器、代码和数据，不是最新通用排名 |
 | 性能运行说明 | [JMH 指南](深度克隆JMH基准.md) | 按需读取；当前未重新运行 |
 | SQL 样例 | `admin.sql`、`code.sql`、`quartz.sql` | 历史演示数据，不是当前迁移方案，不自动执行 |
 
-专题的主体契约延续 2026-10-01 源码核对；2026-10-04 重组时复查了 POM、HTTP 超时工厂及 Spring 事务切面。没有声称所有示例重新编译或集成测试通过。若安装包与源码不同，先核对依赖再生成代码。
+专题的主体契约延续 2026-10-01 源码核对；2026-10-04 重组时复查了 POM、HTTP 超时工厂及 Spring 事务切面，同日按代理实现新增级联、懒加载与懒同步专题。没有声称所有示例重新编译或集成测试通过。若安装包与源码不同，先核对依赖再生成代码。
 
 ## 维护规则
 
-1. 每个主题只维护 `topics/` 中的一份正文；已移除重复的旧指南和旧路径跳转页，统一从本目录进入。
+1. 用户使用专题只维护 `topics/` 中的一份正文，框架开发规范维护在 `internal/`，避免混入业务指南；已移除重复的旧指南和旧路径跳转页，统一从本目录进入。
 2. 修改 API 文档时同时核对源码签名、异常、null、线程/引用语义，并更新核对说明。
 3. 区分完整类、方法体片段、占位值和前置条件，不声称未运行的示例已验证。
 4. 生成并检查单文件导出：
@@ -50,4 +57,6 @@
 
 脚本使用 PowerShell 7，只处理文档；检查生成文件同步、当前文档相对链接和代码围栏，不联网、不编译项目。它不验证 Java API 的语义或编译正确性。
 
-新增专题时更新脚本清单、此目录及根 `llms.txt`。高级 JOIN/级联等主题目前保留为历史资料，未验证之前不要提升为“当前推荐”。
+新增专题时更新脚本清单、此目录及根 `llms.txt`。级联与代理的当前用法见 `12-relations.md`；尚未整理的高级 SQL JOIN 等案例继续保留为历史资料，不依据旧例推断兼容性。
+
+新增内部文档时更新本目录的内部开发入口，不加入专题导出清单。脚本当前不检查 internal 下的正文；内部文档的源码链接、示例和能力边界仍需单独核对。验证命令仅作为维护说明，用户未授权时不自动执行。

@@ -1,6 +1,8 @@
 package com.yulinlin.data.core.wrapper;
 
 import com.yulinlin.data.core.node.INode;
+import com.yulinlin.data.core.wrapper.factory.UpdatePatchFactory;
+import java.util.Map;
 
 public interface IWrapperFactory {
 
@@ -12,6 +14,12 @@ public interface IWrapperFactory {
     IInsertWrapper createInsertWrapper(Object model);
 
     IUpdateWrapper createUpdateWrapper(Object model);
+
+    /** Setter-tracked update; original keys, not current entity defaults, form the WHERE clause. */
+    default IUpdateWrapper createUpdateWrapper(Object model, Map<String, Object> fields,
+                                               Map<String, Object> primaryKeys, Map<String, Object> versions) {
+        return UpdatePatchFactory.create(createUpdateWrapper(), model, fields, primaryKeys, versions);
+    }
 
     ISelectWrapper createSelectWrapper(Object model);
 

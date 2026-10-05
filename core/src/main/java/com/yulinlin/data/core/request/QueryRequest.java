@@ -1,6 +1,8 @@
 package com.yulinlin.data.core.request;
 
+import com.yulinlin.data.core.node.CommandNode;
 import com.yulinlin.data.core.node.INode;
+import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.Page;
@@ -112,7 +114,14 @@ public class QueryRequest<E> extends BaseRequest<E> {
 
 
     public static <E> QueryRequest<E> newInstance(Class<E> clazz, INode node){
-        QueryRequest executeRequest = new QueryRequest(clazz,clazz,node);
+        QueryRequest<E> executeRequest = new QueryRequest<>(clazz,clazz,node);
         return executeRequest;
     }
+
+
+    public static <E> QueryRequest<E> newInstance(String sql, Map<String,Object> params,Class<E> clazz){
+        QueryRequest<E> executeRequest = new QueryRequest<>(clazz,clazz,new CommandNode(sql,  params, ParseType.select));
+        return executeRequest;
+    }
+
 }

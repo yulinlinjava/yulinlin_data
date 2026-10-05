@@ -1,8 +1,8 @@
 # 多数据源：创建、注册与选择 JDBC 会话
 
-> 状态：2026-10-04 按当前源码核对，未连接真实数据库运行多数据源集成测试。
+> 状态：2026-10-05 按数据库模块自行注册 Session 更新。本轮未运行测试、编译或打包，未连接真实数据库运行多数据源集成测试。
 > 适用：JDK 25、制品版本 3.0、Spring Boot 3.5；本例两个数据源均为 MySQL。
-> 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
+> 源码：`JdbcSessionFactory`、`YulinlinCoreAutoConfig.routeSession`、`DataJdbcApplication`、`MysqlParseAutoConfig`、`RegisterSession`、`JoinSessionAop`、`RouteSession`。
 
 ## 1. create 与注册不是同一步
 
@@ -17,12 +17,12 @@ Spring 推荐路径：将返回对象声明成 `@Bean`。core 自动配置注入
 
 | Spring DataSource Bean | Spring 会话 Bean | 会话组 | 生成方式 |
 | --- | --- | --- | --- |
-| `dataSource`（@Primary） | `jdbcSession` | `primary` | MySQL 自动配置创建 |
+| `dataSource`（@Primary） | `mysqlSession` | `mysql` | MySQL 模块自动配置用自己的工厂创建 |
 | `ossDataSource` | `ossSession` | `oss` | 自定义 Bean 调用 factory.create |
 
-`@Primary` 解决 Spring 注入歧义；字符串 `primary` 是框架默认路由组。这两个概念不同。
+`@Primary` 解决 Spring DataSource 注入歧义；group 是框架路由名，二者不同。模块默认组为 mysql、postgresql、sqlite。未指定 group 时优先使用已注册的旧 primary 组；没有 primary 且只有一个组时自动使用该组；有多个组且无有效默认组时必须显式指定，不按注册顺序猜测。
 
-## 2. 完整配置：保留自动 primary，再新增 oss
+## 2. 完整配置：保留自动 mysql，再新增 oss
 
 前提：已引入 starter + mysql，配置类在应用组件扫描范围内。此例替代原单数据源手工配置；不要再保留另一份同名 DataSource Bean。
 
@@ -90,11 +90,15 @@ public class MultiDataSourceConfig {
 }
 ```
 
-为什么主数据源也显式定义：应用新增 DataSource Bean 会影响 Boot 默认数据源的条件装配；不要只定义第二个数据源，却假定主数据源一定仍会自动创建。本例明确提供两个数据源，并用 @Primary 指定自动 `jdbcSession` 应注入哪一个。
+为什么主数据源也显式定义：应用新增 DataSource Bean 会影响 Boot 默认数据源的条件装配；不要只定义第二个数据源，却假定主数据源一定仍会自动创建。本例明确提供两个数据源，并用 @Primary 指定 MySQL 模块的 `mysqlSession` 应使用哪一个。
 
-不要额外声明 `factory.create(mainDataSource, "primary")` 的会话 Bean：当前 MySQL 自动配置按 Bean 名 `jdbcSession` 条件创建主会话。两个不同会话对象使用同一组名会作为同组节点注册，不是按组名覆盖。与 SQLite 共存时，工厂必须用 `@Qualifier("mysqlSessionFactory")` 指定，不能把 SQLite 解析器用于 MySQL。
+本例已有组 mysql 的自动会话，不要再额外声明另一个同组会话。各模块直接调用自己的工厂，不检查 JDBC URL，也不由公共 JDBC 层选择工厂。两个不同会话对象使用同一组名会作为同组节点注册，不是按组名覆盖。手动覆盖某模块会话时使用对应默认 Bean 名；声明 jdbcSession 则会让 MySQL 和 PostgreSQL 的默认创建都退让。
 
-工厂应使用 Spring 注入的实例，不能直接 `new JdbcSessionFactory(...)` 后就调用 create，因为其内部依赖需要注入。当前 MySQL 工厂使用 MySQL 解析器，不能用它直接承诺连接 PostgreSQL/Oracle 后 SQL 方言也正确。
+同时引入 MySQL 与 PostgreSQL 时，默认组名虽然不同，但两边仍可能注入同一个 @Primary DataSource。group 名不会自动选中对应的 DataSource Bean，也不会修正错配的驱动或 SQL。应显式声明由正确工厂和数据源创建的会话；有 @Primary 主库时可将主会话命名为 jdbcSession 禁用双方默认创建，再为其他库注册独立组。完整例子见 PostgreSQL 专题。
+
+与 SQLite 或 PostgreSQL 共存时，工厂必须用 `@Qualifier("mysqlSessionFactory")` 指定；PostgreSQL 使用 `@Qualifier("postgresqlSessionFactory")`。直接注入会话时也应使用实际生效的 Bean 名，例如 `@Qualifier("mysqlSession")`，避免同时引入多个模块或存在多个会话时仅按 JdbcSession 父类型注入产生歧义。手动 create 由调用方正确选择工厂。
+
+工厂应使用 Spring 注入的实例，不能直接 `new JdbcSessionFactory(...)` 后就调用 create，因为其内部依赖需要注入。SQL 差异由对应 ParseManager 注册的解析器处理，JDBC 参数绑定和结果读取差异由 Session 的扩展方法处理；PostgreSQL 工厂创建 PostgresqlSession 并设置 PostgresqlParseManager，MySQL 工厂创建公共 JdbcSession 并设置 MysqlParseManager。不能仅把 MySQL 工厂的数据源地址改为 PostgreSQL/Oracle 就承诺兼容。
 
 ## 3. 如何指定使用 oss
 
@@ -137,7 +141,7 @@ var query = ModelSelectWrapper.newInstance("oss", new DemoUser());
 var users = query.selectList();
 ```
 
-主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认 primary。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
+主路径组选择优先级：请求显式组 → 模型 @JoinSession → Service 切面压入的当前组 → 默认组选取（已注册的 primary 优先，否则自动使用唯一组；多组无有效默认组时要求显式指定）。不要在模型固定 oss 后，假定 Service 上的另一个组一定覆盖它。
 
 ## 4. 事务与生命周期限制
 
@@ -162,7 +166,7 @@ route.registerSession(session);
 
 当前注册表没有提供完整的并发动态管理保证；不要将这个片段当作运行时随意增加/移除租户库的生产方案。
 
-启动后检查 `SessionUtil.route().loadBalanceList()` 是否包含 primary、oss。两个库预置不同标记数据，通过代理调用上述 Service 确认选库；分别验证正常提交、异常回滚和跨库失败行为。此文档没有替你执行这些数据库操作。
+启动后检查 `SessionUtil.route().loadBalanceList()` 是否包含 mysql、oss。主库查询显式选择 mysql，例如 `ModelSelectWrapper.newInstance("mysql", DemoUser.class).selectList()`。两个库预置不同标记数据，通过代理调用上述 Service 确认选库；分别验证正常提交、异常回滚和跨库失败行为。此文档没有替你执行这些数据库操作。
 
 ## 6. 大集合：最多 4 个连接，每次 JDBC batch 默认 256 条
 

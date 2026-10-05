@@ -1,42 +1,29 @@
 package com.yulinlin.jdbc.mysql;
 
-import com.yulinlin.data.core.wrapper.IWrapperFactory;
-import com.yulinlin.jdbc.coder.JdbcCoderManager;
+import com.yulinlin.jdbc.DataJdbcApplication;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.context.annotation.Bean;
-
 import javax.sql.DataSource;
 
-@AutoConfiguration(after = DataSourceAutoConfiguration.class)
+@AutoConfiguration(after = {DataSourceAutoConfiguration.class, DataJdbcApplication.class})
 public class MysqlParseAutoConfig {
-
-
+    @Bean("mysqlSessionFactory")
     @ConditionalOnMissingBean(name = "mysqlSessionFactory")
-    @Bean
     public JdbcSessionFactory mysqlSessionFactory() {
-
-
-        JdbcSessionFactory factory = new JdbcSessionFactory(new MysqlParseManager());
-
-        return factory;
+        return new JdbcSessionFactory(new MysqlParseManager());
     }
 
-
-    @Bean("jdbcSession")
-    @ConditionalOnMissingBean(name = "jdbcSession")
+    @Bean("mysqlSession")
+    @ConditionalOnMissingBean(name = {"mysqlSession", "jdbcSession"})
     @ConditionalOnSingleCandidate(DataSource.class)
-    public JdbcSession jdbcSession(
-            DataSource dataSource,
-            @org.springframework.beans.factory.annotation.Qualifier("mysqlSessionFactory") JdbcSessionFactory jdbcSessionFactory
-    ){
-        JdbcSession sqlSession = jdbcSessionFactory.create(dataSource,"primary");
-        return  sqlSession;
+    public JdbcSession mysqlSession(DataSource dataSource,
+            @Qualifier("mysqlSessionFactory") JdbcSessionFactory factory) {
+        return factory.create(dataSource, "mysql");
     }
-
-
 }

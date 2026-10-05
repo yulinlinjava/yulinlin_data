@@ -23,7 +23,9 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
 
     public JdbcSession(DataSource dataSource) {
         super(dataSource);
+        setParseManager(new com.yulinlin.jdbc.sql.SqlParseManager());
     }
+
 
 
 
@@ -71,11 +73,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
                 int index = 1;
                 preparedStatement.clearParameters();
                 if (node.getList() != null) for (Object row : node.getList()) {
-                    if(row instanceof InputStream){
-                        preparedStatement.setBlob(index,(InputStream)row );
-                    }else {
-                        preparedStatement.setObject(index, row);
-                    }
+                    bindParameter(preparedStatement, index, row);
                     index++;
 
                 }
@@ -127,7 +125,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
               int index = 1;
               for (Object row : node.getList()) {
 
-                  preparedStatement.setObject(index++,row);
+                  bindParameter(preparedStatement, index++, row);
               }
 
           }

@@ -14,7 +14,6 @@ public final class SqliteOnlyAutoConfigurationFilter implements AutoConfiguratio
 
     @Override public boolean[] match(String[] autoConfigurations, AutoConfigurationMetadata metadata) {
         boolean fileOnly = environment != null
-                && StringUtils.hasText(environment.getProperty("yulinlin.sqlite.file"))
                 && !StringUtils.hasText(environment.getProperty("spring.datasource.url"))
                 && !StringUtils.hasText(environment.getProperty("spring.datasource.jndi-name"));
         boolean[] matches = new boolean[autoConfigurations.length];

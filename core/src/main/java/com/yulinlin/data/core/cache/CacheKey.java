@@ -26,6 +26,13 @@ public class CacheKey {
         return new CacheKey( type,node);
     }
 
+    /** Identical queries in different data-source groups/clusters must not share rows. */
+    public static CacheKey of(ParseType type, INode node, String namespace) {
+        CacheKey key = new CacheKey(type, node);
+        key.key = java.util.Objects.hash(namespace, key.key);
+        return key;
+    }
+
     private CacheKey(ParseType type,INode node) {
 
 

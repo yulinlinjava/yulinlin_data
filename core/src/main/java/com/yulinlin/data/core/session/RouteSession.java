@@ -51,18 +51,18 @@ public class RouteSession  extends  RegisterSession{
         EntitySession session = session(request);
         pushSession(session);
 
-        String name = session.group();
-        request =  filterManager.before(name,request);
-        //session被改写
-
-        if(!name.equals(request.getSession())){
-            session =  session(request);
-            pushSession(session);
+        try {
+            String name = session.group();
+            request = filterManager.before(name, request);
+            if (!name.equals(request.getSession())) {
+                session = session(request);
+                pushSession(session);
+            }
+            return session;
+        } catch (RuntimeException | Error error) {
+            popSession(); // A failed filter must not leave its source on the route stack.
+            throw error;
         }
-
-
-
-        return session;
     }
     private void after(BaseRequest request){
 
@@ -101,68 +101,35 @@ public class RouteSession  extends  RegisterSession{
     }
 
 
-    private static ThreadLocal<LongAdder> threadLocal = ThreadLocal.withInitial(() ->new LongAdder());
-
-
-
     private static ThreadLocal<Map<Class,LongAdder>> mapThreadLocal = ThreadLocal.withInitial(() ->new HashMap<>());
 
     public static int deep = 6;
 
-    private <E> E executeList(QueryRequest<?> req,RequestType requestType){
-        LongAdder longAdder = mapThreadLocal.get().computeIfAbsent(req.getFromClass(), k -> new LongAdder());
-
-        int val = longAdder.intValue();
-
-        if(val >= deep){
-            throw new NoticeException("递归查询深度超过6,请使用懒加载:"+req.getFromClass().getName());
-        }
-
-
-        longAdder.increment();
-        EntitySession session = before(req);
-
-        Object data = null;
-        LongAdder adder = null;
-
-        if(req.isCache()){
-            adder = threadLocal.get();
-            if(adder.intValue() == 0){
-                LazyProxyFactory.cache(req.isCache());
-            }
-            adder.increment();;
-        }
-
-
+    @SuppressWarnings("unchecked")
+    private <E> E executeList(QueryRequest<?> req, RequestType requestType) {
+        LongAdder depth = mapThreadLocal.get().computeIfAbsent(req.getFromClass(), ignored -> new LongAdder());
+        if (depth.intValue() >= deep)
+            throw new NoticeException("递归查询深度超过" + deep + ",请使用懒加载:" + req.getFromClass().getName());
+        depth.increment();
+        boolean previousCache = LazyProxyFactory.isCache();
+        boolean entered = false;
         try {
-            switch (requestType) {
-                case select: {
-                    data = session.select((QueryRequest) req);
-                    break;
-                }
-                case page: {
-                    data = session.page((QueryRequest) req);
-                    break;
-                }
-                case group: {
-                    data = session.group((QueryRequest) req);
-                    break;
-                }
-            }
-
-            return (E)data;
-
-        }finally {
-            if(adder != null){
-                adder.decrement();
-            }
-            longAdder.decrement();
-            after(req);
-
+            LazyProxyFactory.cache(previousCache || req.isCache());
+            EntitySession session = before(req);
+            entered = true;
+            return (E) switch (requestType) {
+                case select -> session.select((QueryRequest) req);
+                case page -> session.page((QueryRequest) req);
+                case group -> session.group((QueryRequest) req);
+                default -> throw new IllegalArgumentException("Not a query: " + requestType);
+            };
+        } finally {
+            LazyProxyFactory.cache(previousCache);
+            depth.decrement();
+            if (depth.intValue() == 0) mapThreadLocal.get().remove(req.getFromClass());
+            if (mapThreadLocal.get().isEmpty()) mapThreadLocal.remove();
+            if (entered) after(req);
         }
-
-
-
     }
 
     public <E> Integer insert(ExecuteRequest<E> request) {
@@ -283,43 +250,70 @@ public class RouteSession  extends  RegisterSession{
     }
 
     @SneakyThrows
-    public void commitTransaction(){
+    public void commitTransaction() {
         if (!isOpenTransaction()) return;
-        if (isRollbackOnly()) {
-            Throwable failure = null;
-            try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
-            catch (Throwable error) { failure = error; }
-            try { super.commitTransaction(); }
+        if (transactionDepth() > 1) {
+            try {
+                if (transactionListenerManager != null) {
+                    if (isRollbackOnly()) transactionListenerManager.rollbackTransaction();
+                    else transactionListenerManager.commitTransaction();
+                }
+            }
+            catch (Throwable error) {
+                try { rollbackTransaction(); }
+                catch (Throwable cleanup) { if (error != cleanup) error.addSuppressed(cleanup); }
+                throw error;
+            }
+            super.commitTransaction();
+            return;
+        }
+        Throwable failure = null;
+        try {
+            if (transactionListenerManager != null) {
+                if (isRollbackOnly()) transactionListenerManager.rollbackTransaction();
+                else transactionListenerManager.commitTransaction();
+            }
+            super.commitTransaction();
+        } catch (Throwable error) {
+            failure = error;
+            if (isOpenTransaction()) {
+                setRollbackOnly();
+                try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
+                catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
+                try { super.rollbackTransaction(); }
+                catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
+            }
+        } finally {
+            try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
             catch (Throwable cleanup) {
                 if (failure == null) failure = cleanup;
                 else if (failure != cleanup) failure.addSuppressed(cleanup);
             }
-            if (failure != null) throw failure;
-            return;
         }
-        try {
-            if (transactionListenerManager != null) transactionListenerManager.commitTransaction();
-        } catch (Throwable error) {
-            try { rollbackTransaction(); }
-            catch (Throwable cleanup) { if (error != cleanup) error.addSuppressed(cleanup); }
-            throw error;
-        }
-        super.commitTransaction();
-
-
+        if (failure != null) throw failure;
     }
 
     @SneakyThrows
-    public void rollbackTransaction(){
+    public void rollbackTransaction() {
         if (!isOpenTransaction()) return;
+        if (transactionDepth() > 1) {
+            try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
+            finally { super.rollbackTransaction(); }
+            return;
+        }
         Throwable failure = null;
-        try {
-            if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction();
-        } catch (Throwable error) { failure = error; }
+        try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
+        catch (Throwable error) { failure = error; }
         try { super.rollbackTransaction(); }
         catch (Throwable cleanup) {
             if (failure == null) failure = cleanup;
             else if (failure != cleanup) failure.addSuppressed(cleanup);
+        } finally {
+            try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
+            catch (Throwable cleanup) {
+                if (failure == null) failure = cleanup;
+                else if (failure != cleanup) failure.addSuppressed(cleanup);
+            }
         }
         if (failure != null) throw failure;
     }

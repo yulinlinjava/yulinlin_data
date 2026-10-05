@@ -18,6 +18,9 @@ public @interface JoinQuery {
 	
 	int size() default -1;
 
+	/** Maximum distinct association keys in one IN query (not a result limit). */
+	int batchSize() default 512;
+
 	JoinOrder[] order() default {};
 
 	//主键字段名

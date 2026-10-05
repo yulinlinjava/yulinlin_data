@@ -24,6 +24,7 @@ final class TransactionScope {
 
     boolean isOpen() { return local.get() != null; }
     int depth() { return local.get() == null ? 0 : local.get().depth; }
+    Object identity() { return local.get(); }
     boolean isRollbackOnly() { return local.get() != null && local.get().rollbackOnly; }
     void setRollbackOnly() { if (local.get() != null) local.get().rollbackOnly = true; }
 }

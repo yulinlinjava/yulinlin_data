@@ -46,6 +46,21 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     }
 
+
+    protected void bindParameter(java.sql.PreparedStatement statement, int index, Object value)
+            throws java.sql.SQLException {
+        if (value instanceof java.io.InputStream stream) statement.setBlob(index, stream);
+        else statement.setObject(index, value);
+    }
+    protected Object readColumn(ResultSet rows, String label, int jdbcType) throws java.sql.SQLException {
+        return rows.getString(label);
+    }
+
+    /** Parse a node using this session, without opening a connection. */
+    public Object parseSql(INode node, com.yulinlin.data.core.parse.IParamsContext context) {
+        return getParseManager().parse(node, context);
+    }
+
     @Override
     protected ParseResult parseNode(
             RequestType requestType,
@@ -71,7 +86,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
 
 
-        ParseResult result = (ParseResult) getParseManager().parse(node,context);
+        ParseResult result = (ParseResult) parseSql(node, context);
         return result;
     }
 
@@ -86,24 +101,30 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
 
         ArrayList<IDataBuffer> list =  new ArrayList<>();
+        ResultSetMetaData metaData = resultSet.getMetaData();
+        int columnTotal = metaData.getColumnCount();
+        String[] labels = new String[columnTotal];
+        int[] types = new int[columnTotal];
+        for (int i = 0; i < columnTotal; i++) {
+            labels[i] = metaData.getColumnLabel(i + 1);
+            types[i] = metaData.getColumnType(i + 1);
+        }
         while (resultSet.next()) {
             IDataBuffer buffer = getCoderManager().createDecoderBuffer();
 
             list.add(buffer);
 
-            ResultSetMetaData metaData = resultSet.getMetaData();
 
-            int columnTotal = metaData.getColumnCount();
             for (int i = 1; i <= columnTotal; i++) {
 
-                String columnName = metaData.getColumnLabel(i);
+                String columnName = labels[i - 1];
                 Object value = null;
 
                 //列类型
             //    int type =  metaData.getColumnType(i);
             //    JDBCType jdbcType = JDBCType.valueOf(type);
 
-                value = resultSet.getString(columnName);
+                value = readColumn(resultSet, columnName, types[i - 1]);
 
 
                 if (value == null) {

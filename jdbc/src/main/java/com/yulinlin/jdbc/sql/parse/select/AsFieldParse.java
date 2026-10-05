@@ -18,7 +18,7 @@ public class AsFieldParse implements IParse<AsField> {
 
             sql.append(name);
             sql.append(" as ");
-            sql.append("`"+condition.getAlias()+"`");
+            sql.append(com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params).selectAlias(condition.getAlias()));
 
 
 

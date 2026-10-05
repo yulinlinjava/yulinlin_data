@@ -1,6 +1,6 @@
 # JDBC 事务：独立 Session、路由协调与 Spring 接入
 
-> 基线：2026-10-04 / JDK 25 / 制品版本 3.0 / Spring Boot 3.5。
+> 基线：2026-10-04 事务实现；2026-10-05 按命名会话组更新示例 / JDK 25 / 制品版本 3.0 / Spring Boot 3.5。本轮未运行测试、编译或打包，历史验证结果不代表本次变更已验证。
 > 源码：core 的 AbstractSession、RegisterSession、RouteSession；jdbc 的 AbstractJdbcSession、ConnectionPool、SpringTransactionAop。
 
 ## 推荐选择
@@ -8,7 +8,7 @@
 - 多数据源或多连接批处理：使用框架 `@JoinTransaction` 或 `SessionUtil.route().transaction(...)`。
 - 已有 Spring 管理的单数据源业务：继续使用 Spring `@Transactional`；检测到同一 DataSource 的绑定连接时，框架复用它，在原线程顺序执行，由 Spring 完成物理事务。
 - 严格单库原子性：`parallel-connections: 1`，不要把多连接批处理当作单个数据库事务。
-- SQLite：使用通用 JdbcSession、单连接，默认组 local；无需注册 DataSource 或 sqliteTransactionManager Bean。
+- SQLite：使用通用 JdbcSession、单连接，默认组 sqlite；无需注册 DataSource 或 sqliteTransactionManager Bean。
 
 不要默认同时叠加两种事务注解。代理注解需要 Spring 管理的对象并经代理调用，同类自调用或 `new Service()` 不会生效。
 
@@ -19,8 +19,8 @@ import com.yulinlin.data.core.anno.JoinTransaction;
 
 @JoinTransaction
 public void saveBusinessData() {
-    ModelInsertWrapper.newInstance("primary", mysqlUsers).batch().execute();
-    ModelInsertWrapper.newInstance("local", localUsers).execute();
+    ModelInsertWrapper.newInstance("mysql", mysqlUsers).batch().execute();
+    ModelInsertWrapper.newInstance("sqlite", localUsers).execute();
     // 任何未捕获的异常都触发回滚协调。
 }
 ```
@@ -76,7 +76,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Transactional(rollbackFor = Exception.class)
 public void saveOneDatabase() {
-    ModelInsertWrapper.newInstance("primary", usersToInsert).execute();
+    ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();
 }
 ```
 
@@ -85,6 +85,14 @@ jdbc 自动配置注册 SpringTransactionAop，识别类/方法的 Spring注解�
 仅有 SQLite 时没有原生 JDBC 事务管理器也能使用这个注解，由框架切面管理会话；这不代表实现了 Spring 的全部事务语义。
 
 框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性；`@JoinTransaction.value()` 也不用于选择参与数据源。框架嵌套计数不等价于 REQUIRES_NEW、NESTED 或保存点；异步业务线程不会自动继承事务。高级传播、同步代理自动更新、Spring 与非 Spring 管理的多个库交叉参与，仍需针对实际代理顺序和业务做集成验证，不承诺透明兼容。
+
+## 关联代理与事务
+
+`@JoinLazy` 和 `@JoinSync` 使用的是 `SessionUtil.route()` 的事务状态，不是任意独立 JDBC 连接是否关闭 autoCommit。创建代理及访问延迟字段、调用待同步 setter 时保持同一线程的路由事务，完整用法见 `12-relations.md`。
+
+监听器仍收到嵌套层回调，但 SyncProxyFactory 只在路由最外层提交时写回 setter 记录，内层结束不清理跟踪；实际 Session 完成后调用 `afterCompletion()` 释放上下文。回滚丢弃记录，不还原 Java 对象。
+
+同步代理加入原生 Spring 事务时注册 `beforeCommit` 钩子，在 Spring 物理提交前写回，复用绑定连接；只读事务禁止同步 setter。代理必须在原始线程、原始路由事务内使用，原始 Spring 事务结束后也不能继续修改旧同步代理。已验证普通注解及 TransactionTemplate，不将 REQUIRES_NEW/保存点语义套到路由嵌套上。集合原地修改、null 清列、未代理对象修改不自动写回，完整边界见关联专题。
 
 ## 原子性边界
 
@@ -96,8 +104,8 @@ jdbc 自动配置注册 SpringTransactionAop，识别类/方法的 Spring注解�
 
 专项测试覆盖：Session 独立事务与实例隔离、默认 4/配置 2 连接限流、10 万条均匀四组、PreparedStatement 复用、256 条分批及尾批、能力关闭时不分组、后续批次失败回滚、同步/异步混合结果、失败任务排空、拒绝提交、嵌套 rollback-only、连接提交/回滚/关闭失败清理、获取连接等待不阻塞其他借用者归还、真实 Spring AOP 顺序及绑定连接复用；SQLite 真实临时文件 CRUD、512 行批次和整批失败回滚、多会话协调及编解码/建表。
 
-JDBC 并发/错误注入测试使用模拟连接；SQLite 使用真实本地文件。未连接外部 MySQL，也未执行业务吞吐量或高级 Spring 传播行为基准。
+代理专项测试还覆盖批量懒加载、空结果、来源数据源、setter 一次执行、默认值/null、主键和版本保护、内层提交后继续修改、缓存命中创建新代理、Spring beforeCommit 和回滚。JDBC 并发/错误注入测试使用模拟连接；SQLite 使用真实本地文件。未连接外部 MySQL，也未执行业务吞吐量或高级 Spring 传播行为基准。
 
 ```shell
-mvn -pl sqlite -am -Dtest=JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
+mvn -pl sqlite -am -Dtest=OrmProxyIntegrationTest,JdbcSessionTransactionTest,JdbcBatchExecutionTest,SqliteIntegrationTest,SqliteSchemaManagerTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```

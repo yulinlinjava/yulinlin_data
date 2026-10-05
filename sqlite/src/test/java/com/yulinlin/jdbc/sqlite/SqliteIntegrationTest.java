@@ -12,7 +12,6 @@ import com.yulinlin.jdbc.session.JdbcSessionFactory;
 import com.yulinlin.jdbc.session.JdbcSession;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,7 +29,8 @@ class SqliteIntegrationTest {
         if (SessionUtil.route() != null) SessionUtil.route().clear();
     }
     private ApplicationContextRunner runner() {
-        return new ApplicationContextRunner().withUserConfiguration(TestInfrastructure.class, BootConfiguration.class);
+        return new ApplicationContextRunner().withUserConfiguration(TestInfrastructure.class, BootConfiguration.class)
+                .withPropertyValues("yulinlin.sqlite.group=local"); // Explicit custom group used by these fixtures.
     }
 
     @Test void fileOnlySupportsOrmBatchAndTransactions() {
@@ -169,7 +169,7 @@ class SqliteIntegrationTest {
                     assertThat(context.getBean(javax.sql.DataSource.class)).isNotSameAs(context.getBean(SqliteDatabase.class).dataSource());
                     var mainTx = context.getBean("transactionManager", DataSourceTransactionManager.class);
                     assertThat(mainTx.getDataSource()).isSameAs(context.getBean(javax.sql.DataSource.class));
-                    assertThat(SessionUtil.route().loadBalanceList()).containsExactlyInAnyOrder("primary", "local");
+                    assertThat(SessionUtil.route().loadBalanceList()).containsExactlyInAnyOrder("mysql", "local");
                     var ds = context.getBean(SqliteDatabase.class).dataSource();
                     var sql = new JdbcTemplate(ds);
                     sql.execute("create table local_user(id text primary key, user_name text, status integer)");
@@ -243,9 +243,12 @@ class SqliteIntegrationTest {
         assertThat(holder.get().isClosed()).isTrue();
     }
 
-    @Test void disabledWithoutFile() {
-        new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(SqliteAutoConfiguration.class))
-                .run(context -> assertThat(context).doesNotHaveBean(SqliteDataSource.class));
+    @Test void defaultFileAndGroupCanBeOverridden() {
+        var properties = new SqliteProperties();
+        properties.setFile(directory.resolve("custom.db").toString());
+        properties.setGroup("custom");
+        assertThat(properties.getFile()).isEqualTo(directory.resolve("custom.db").toString());
+        assertThat(properties.getGroup()).isEqualTo("custom");
     }
 
     @Test void rejectsMemoryAndHonorsFullAndTimeout() {

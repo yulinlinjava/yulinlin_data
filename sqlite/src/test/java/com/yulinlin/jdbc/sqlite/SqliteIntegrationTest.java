@@ -30,7 +30,8 @@ class SqliteIntegrationTest {
     }
     private ApplicationContextRunner runner() {
         return new ApplicationContextRunner().withUserConfiguration(TestInfrastructure.class, BootConfiguration.class)
-                .withPropertyValues("yulinlin.sqlite.group=local"); // Explicit custom group used by these fixtures.
+                .withPropertyValues("yulinlin.sqlite.group=local",
+                        "yulinlin.sqlite.schema-packages=com.yulinlin.jdbc.sqlite.fixtures");
     }
 
     @Test void fileOnlySupportsOrmBatchAndTransactions() {
@@ -119,7 +120,6 @@ class SqliteIntegrationTest {
             assertThat(session.supportsParallelWrites()).isFalse();
             assertThat(session.getExecuteBatchSize()).isEqualTo(256);
             var sql = new JdbcTemplate(context.getBean(SqliteDatabase.class).dataSource());
-            sql.execute("create table local_user(id text primary key, user_name text, status integer)");
             var request = ModelInsertWrapper.newInstance("local", user("standalone", "direct")).getRequest();
             var savedRoute = SessionUtil.route();
             new SessionUtil(null); // Executing a configured session does not depend on any global route.
@@ -141,16 +141,14 @@ class SqliteIntegrationTest {
         });
     }
 
-    @Test void tablesAreCreatedOnFirstRequestNotAtStartup() {
+    @Test void tablesAreCreatedAtStartupBeforeFirstRequest() {
         runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("on-demand.db"))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     var sql = new JdbcTemplate(context.getBean(SqliteDatabase.class).dataSource());
                     assertThat(sql.queryForObject(
-                            "select count(*) from sqlite_schema where type='table'", Integer.class)).isZero();
-                    assertThat(ModelSelectWrapper.newInstance("local", User.class).selectList()).isEmpty();
-                    assertThat(sql.queryForObject(
                             "select count(*) from sqlite_schema where name='local_user'", Integer.class)).isEqualTo(1);
+                    assertThat(ModelSelectWrapper.newInstance("local", User.class).selectList()).isEmpty();
                 });
     }
 
@@ -171,7 +169,6 @@ class SqliteIntegrationTest {
                     assertThat(SessionUtil.route().loadBalanceList()).containsExactlyInAnyOrder("mysql", "local");
                     var ds = context.getBean(SqliteDatabase.class).dataSource();
                     var sql = new JdbcTemplate(ds);
-                    sql.execute("create table local_user(id text primary key, user_name text, status integer)");
                     assertThat(ModelInsertWrapper.newInstance("local", user("1", "local")).execute()).isEqualTo(1);
                     assertThat(ModelSelectWrapper.newInstance("local", User.class).selectOne().getName()).isEqualTo("local");
                     assertThat(context).doesNotHaveBean("sqliteTransactionManager");
@@ -212,7 +209,6 @@ class SqliteIntegrationTest {
                     assertThat(context).doesNotHaveBean(javax.sql.DataSource.class)
                             .doesNotHaveBean(org.springframework.transaction.PlatformTransactionManager.class);
                     var primary = new JdbcTemplate(context.getBean(SqliteDatabase.class).dataSource());
-                    primary.execute("create table local_user(id text primary key, user_name text, status integer)");
                     var properties = new SqliteProperties();
                     properties.setFile(directory.resolve("backup.db").toString()); properties.setGroup("backup");
                     try (var database = new SqliteDatabase(properties)) {
@@ -276,7 +272,7 @@ class SqliteIntegrationTest {
         assertThat(new com.yulinlin.jdbc.mysql.parse.mysql.MysqlSelectWrapperParse().getNodeClass()).isEqualTo(SelectWrapper.class);
     }
 
-    @JoinTable("local_user")
+    @JoinTable(value = "local_user", autoSchema = false)
     public static class User extends IdEntity<User> {
         @JoinField(name = "user_name") private String name;
         @JoinField private Integer status;

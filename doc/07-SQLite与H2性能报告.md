@@ -59,7 +59,7 @@ JMH 显示的 `Threads: 1` 是基准协调线程。一次 benchmark 调用内部
 | 模式 | WAL，`synchronous=NORMAL` | `MODE=MYSQL` |
 | 连接数 | 固定 1 | 最多 4 |
 | 等锁/连接设置 | `busy-timeout=5000` | 默认连接超时，`auto-server=false` |
-| Schema | 首次计时前创建表和联合索引 | `schema-mode=CREATE`，首次计时前创建 |
+| Schema | 配置扫描包，启动时创建表和联合索引 | `schema-mode=CREATE` + 扫描包，启动时创建 |
 | JDBC batch 上限 | 256 | 256 |
 | 单次请求行数 | 最大 128 | 最大 128 |
 
@@ -79,7 +79,7 @@ JMH 显示的 `Threads: 1` 是基准协调线程。一次 benchmark 调用内部
 - Spring 上下文启动和线程池创建；
 - 100,000 个对象的创建与请求分组；
 - 临时数据库目录和文件创建；
-- 首次建表、建索引；
+- 应用启动阶段的建表、建索引；
 - 每轮开始前的清表；
 - 每轮结束后的总行数查询与校验。
 

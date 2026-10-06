@@ -15,10 +15,6 @@ public class PostgresqlSession extends JdbcSession {
         setParseManager(new PostgresqlParseManager());
     }
 
-    @Override protected void bindParameter(PreparedStatement statement, int index, Object value) throws SQLException {
-        if (value instanceof InputStream stream) statement.setBinaryStream(index, stream);
-        else statement.setObject(index, value);
-    }
 
     @Override protected Object readColumn(ResultSet rows, String label, int jdbcType) throws SQLException {
         if (jdbcType == Types.BOOLEAN || jdbcType == Types.BIT) {

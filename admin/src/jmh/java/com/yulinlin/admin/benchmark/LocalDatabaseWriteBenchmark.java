@@ -101,11 +101,13 @@ public class LocalDatabaseWriteBenchmark {
                         "yulinlin.sqlite.group=" + SQLITE_GROUP,
                         "yulinlin.sqlite.busy-timeout=5000",
                         "yulinlin.sqlite.synchronous=NORMAL",
+                        "yulinlin.sqlite.schema-packages=com.yulinlin.admin.benchmark",
                         "yulinlin.h2.file=" + h2File,
                         "yulinlin.h2.group=" + H2_GROUP,
                         "yulinlin.h2.max-connections=" + businessThreads,
                         "yulinlin.h2.batch-size=256",
                         "yulinlin.h2.schema-mode=CREATE",
+                        "yulinlin.h2.schema-packages=com.yulinlin.admin.benchmark",
                         "yulinlin.h2.auto-server=false",
                         "yulinlin.datasource.parallel-connections=" + businessThreads,
                         "yulinlin.datasource.execute-batch-size=256")
@@ -232,7 +234,7 @@ public class LocalDatabaseWriteBenchmark {
         }
     }
 
-    @JoinTable(TABLE)
+    @JoinTable(value = TABLE, autoSchema = true)
     @JoinIndex(fields = {"tenantId", "createdAt"})
     public static class WriteRow {
         @JoinField(name = "id")

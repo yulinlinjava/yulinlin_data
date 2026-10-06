@@ -5,8 +5,8 @@ import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.lang.util.Page;
 
+import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 public interface EntitySession extends LoadBalanceNode,TransactionSession {
 
@@ -14,6 +14,12 @@ public interface EntitySession extends LoadBalanceNode,TransactionSession {
     default boolean supportsParallelWrites() {
         return false;
     }
+
+    /** Generates this session's table/index initialization statements without executing them. */
+    List<String> createTableSql(Class<?> entityClass);
+
+    /** Initializes the supplied schema-owner entities using this session. */
+    void initializeSchema(Collection<Class<?>> entityClasses);
 
 
     <E> Integer insert(ExecuteRequest<E> request );

@@ -3,6 +3,8 @@ package com.yulinlin.jdbc.h2;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 @ConfigurationProperties("yulinlin.h2")
 public class H2Properties {
@@ -25,6 +27,7 @@ public class H2Properties {
     private int batchSize = 256;
     private SchemaMode schemaMode = SchemaMode.CREATE;
     private boolean autoServer;
+    private List<String> schemaPackages = new ArrayList<>();
 
     public String getFile() { return file; }
     public void setFile(String file) { this.file = file; }
@@ -48,4 +51,8 @@ public class H2Properties {
     public void setSchemaMode(SchemaMode schemaMode) { this.schemaMode = schemaMode; }
     public boolean isAutoServer() { return autoServer; }
     public void setAutoServer(boolean autoServer) { this.autoServer = autoServer; }
+    public List<String> getSchemaPackages() { return schemaPackages; }
+    public void setSchemaPackages(List<String> schemaPackages) {
+        this.schemaPackages = schemaPackages == null ? new ArrayList<>() : new ArrayList<>(schemaPackages);
+    }
 }

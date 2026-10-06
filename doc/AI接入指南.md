@@ -10,7 +10,7 @@
 
 ---
 
-适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-06 已运行本地库 JMH 和跳过普通测试的构建；普通单元测试未运行。代码片段不等于已经验证，真实账号、表、路径和接口由业务提供。
+适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-06 已运行本地库 JMH、JDK 25 编译和 Schema 定向测试；代码片段不等于所有数据库服务器均已集成验证，真实账号、表、路径和接口由业务提供。
 
 ---
 
@@ -21,7 +21,7 @@
 
 阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [本地库选型](#sqliteh2-选型) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
 
-适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-06 核对仓库源码；本地库 JMH 已按下文口径执行，普通单元测试未运行。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
+适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-06 核对仓库源码；本地库 JMH、JDK 25 编译和 Schema 定向测试已执行。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
 
 ### 模块选择
 
@@ -67,9 +67,15 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+
+yulinlin:
+  mysql:
+    schema-mode: CREATE
+    schema-packages:
+      - demo.domain
 ```
 
-正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。表需要已经存在；完整实体与第一次 CRUD 见 [第二专题](02-CRUD与统计分析.md)。
+正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。为兼容已有生产项目，`schema-mode` 默认 `NONE`；不需要框架管理结构时删除整个 `yulinlin.mysql` 段并由迁移脚本准备表。设为 `CREATE` 后，启动时递归扫描 `schema-packages`，创建缺失的表和声明索引并校验已有结构；`VALIDATE` 只校验，缺失直接阻止启动。完整实体与 CRUD 见 [第二专题](02-CRUD与统计分析.md)。
 
 ### SQLite 接入
 
@@ -97,71 +103,91 @@ yulinlin:
     group: sqlite
     busy-timeout: 5000
     synchronous: NORMAL
+    schema-packages:
+      - demo.domain
 ```
 
-启动时创建父目录与文件，启用 WAL、外键约束和单连接池；业务表在第一次实际执行请求时按需创建。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
+启动时创建父目录与文件，启用 WAL、外键约束和单连接池，然后递归扫描 `schema-packages` 并创建/校验业务表。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
 
-#### 按实体自动建表
+#### 启动扫描与表结构拥有者
 
-无需扫描包或配置建表开关。SqliteSession 直接读取 `BaseRequest.getFromClass()`，普通单表实体带 `@JoinTable("表名")` 时，检查并创建缺失表，再执行原来的 SQL。插入、更新、删除、查询、分页和统计入口均支持；空写请求、只解析 SQL 或命中查询缓存时不建表。
+MySQL、SQLite 和 H2 共用相同的扫描规则。每个配置包都会递归扫描子包，但只处理显式声明 `@JoinTable(..., autoSchema = true)` 的具体普通单表类。`autoSchema` 默认 `false`；普通查询实体、DTO、接口、抽象类、JOIN 模型和统计模型不参与。未配置扫描包时也不扫描任何类。
 
-下面是业务方法体片段，DemoUser 是 [第二专题](02-CRUD与统计分析.md#最小实体和配套表)的完整实体；无需预先执行该专题的建表 SQL：
+包配置支持通配符：`*` 只匹配一级包，`**` 匹配零到任意多级包；匹配到的包仍会递归扫描子包。建议在 YAML 中加引号。例如 `"com.example.*.*.local"` 会匹配 `com.example` 与 `local` 之间恰好两级的目录，而 `"com.example.**.local"` 允许中间为任意层级。只允许完整包段使用通配符，`jdbc*`、`***` 和空包段会在启动时报配置错误。多个配置项命中的同一个类会自动去重。
+
+```yaml
+yulinlin:
+  mysql:
+    schema-mode: CREATE
+    schema-packages:
+      - "com.example.*.*.local"
+      - "com.example.shared.entity"
+```
+
+同一个物理表只允许一个完整实体明确负责结构。轻量 DTO、不同字段视图和统计模型保持默认值即可：
 
 ```java
-import demo.domain.DemoUser;
-import com.yulinlin.common.model.ModelInsertWrapper;
-import com.yulinlin.common.model.ModelSelectWrapper;
+@JoinTable(value = "ai_demo_user", autoSchema = true)
+public class DemoUser { /* 完整持久化字段 */ }
 
-// 第一次查询也能建表，新文件返回空列表。
-var users = ModelSelectWrapper.newInstance("sqlite", DemoUser.class).selectList();
-
-DemoUser user = new DemoUser();
-user.setUsername("alice");
-user.setStatus(1);
-ModelInsertWrapper.newInstance("sqlite", user).execute();
+@JoinTable("ai_demo_user") // autoSchema 默认 false，只做 ORM 映射
+public class DemoUserSummary { /* 查询投影 */ }
 ```
 
-建表沿用字段别名、下划线映射、继承字段和单主键元信息。整数/布尔值对应 INTEGER，浮点数对应 REAL，其余默认 TEXT；static、transient、非持久化和关联查询字段不生成列。
+扫描结果若发现两个 `autoSchema=true` 的类映射同一表，应用启动失败并列出冲突类，避免“小实体先创建残缺表”。建表沿用字段别名、下划线映射、继承字段、单主键和 `JoinIndex` 元信息；static、transient、非持久化和关联查询字段不生成列。
 
-需要自动建表时，`fromClass` 应是完整表实体；`entityClass` 只决定结果如何解码。框架跳过无注解、Object/Map、多表 JOIN 和带 JoinAggregations/JoinMetrics 的统计模型，不推断这些模型的底层表。普通单表查询 DTO 可能同样带 JoinTable，无法据此判断字段是否齐全，不能用它首次建表。
+#### 文本列、长度与说明
 
-`fromClass` 为 null 或 Object.class 时，两者都视为没有实体来源：跳过字段名映射、类级路由注解和自动建表，仍执行原始 SQL，不从返回类型推断来源。SQL 中的表需已存在；不存在时保留数据库的正常报错。
-
-#### 自定义 SQL 指定建表实体
-
-原始查询默认将返回类型同时作为 fromClass；原始写入默认使用 Object。因此 Map 返回值或原始写入不会自动猜测 SQL 中的表。需要建表时显式设置完整实体，下面示例仍使用第二专题的 DemoUser：
+完整结构实体可以通过 `JoinField` 明确普通文本长度、大文本类型和列用途：
 
 ```java
-import com.yulinlin.data.core.request.QueryRequest;
-import com.yulinlin.data.core.request.ExecuteRequest;
-import demo.domain.DemoUser;
-import java.util.Map;
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.TextTypeEnum;
 
-var query = QueryRequest.newInstance(
-        "select id, user_name, status from ai_demo_user", Map.of(), Map.class);
-query.setSession("sqlite");
-query.setFromClass(DemoUser.class);
-var rows = query.selectList();
+@JoinField(textLength = 120, description = "视频标题")
+private String title;
 
-var update = ExecuteRequest.newInstance(
-        "update ai_demo_user set status=#{status} where id=#{id}",
-        Map.of("status", 2, "id", "existing-id"));
-update.setSession("sqlite");
-update.setFromClass(DemoUser.class);
-int affected = update.execute();
+@JoinField(textType = TextTypeEnum.text, description = "视频正文")
+private String content;
 ```
 
-一次请求只保障 fromClass 对应的表，不解析原始 SQL 中其他表的依赖。JOIN/统计模型的物理表应先通过完整实体请求创建，或者由业务显式提供 DDL。
+`textType` 默认是 `auto`。正数 `textLength` 会将文本列解析为定长上限的 VARCHAR；`textType=text` 表示大文本，不能再同时设置 `textLength`。自动 Schema 的映射如下：
 
-#### 建表与事务边界
+| 声明 | MySQL | H2 | SQLite |
+| --- | --- | --- | --- |
+| 默认普通文本 | `VARCHAR(255)` | `CHARACTER VARYING` | `TEXT` |
+| `textLength = n` | `VARCHAR(n)` | `CHARACTER VARYING(n)` | 声明为 `VARCHAR(n)`，仍采用 TEXT affinity |
+| `textType = text` | `LONGTEXT` | `CHARACTER LARGE OBJECT`/CLOB | `TEXT` |
 
-建表复用当前请求的事务连接，不额外借连接，不独立 commit；框架事务由 Session 完成，Spring 绑定事务由 Spring 完成。检查结果只在对应事务成功提交后进入 Session 缓存，失败/回滚后下次请求可重新检查。同一 Session 的并发首次访问由连接池和建表锁协调，不同数据库文件不会共用成功状态。
+字符串主键统一按短标识处理：未指定长度时自动创建为 `VARCHAR(128)`，显式 `textLength` 只能是 1～128；超过 128 或把大文本声明为主键会在启动建表前报错。框架生成的普通/唯一索引也不接受大文本列。
 
-这不是迁移工具：已有表只做兼容性检查，不自动补列、改类型、删除旧索引、添加外键或复合主键；仅创建实体通过 JoinIndex 明确声明且当前缺失的索引。结构不兼容明确报错，需要手动迁移。运行期间外部修改/删除已缓存的表后，应重新创建 Session 或重启应用；首次创建表或索引不能放在 Spring 只读事务中，需提前初始化。
+`description` 最多 1024 个字符。新建表时 MySQL 写入列 `COMMENT`，H2 写入列 `REMARKS`；SQLite 没有原生列注释，因此只接受该元数据但不落库。已有表不会因为 description 变化而执行 ALTER，注释也不参与兼容性校验。
 
-日期、枚举、BigDecimal、JSON 对象等使用 TEXT；字符串与数字仍由 JDBC 编解码器恢复 Java 字段。日期范围依赖统一、可按字典序排序的固定格式与时区；TEXT BigDecimal 的字符串比较不等于数值比较，数值范围或统计需要适当列类型或显式 SQL CAST。
+这些选项只服务于启动 Schema 描述，不改变运行期 SQL 编解码器，也不会在 Java 端截断或校验字符串。MySQL/H2 会校验显式 VARCHAR 长度；SQLite 不执行或校验 VARCHAR 长度限制，确需强制长度应使用业务校验或自行添加 CHECK 约束。
 
-SQLite 使用继承 JdbcSession 的 SqliteSession，复用公共 CRUD，并增加按需建表；不需要 DataSource Bean 或 sqliteTransactionManager。SqliteDatabase 持有并关闭内部连接池。`supportsParallelWrites()` 返回 false，多连接批处理不会拆组；WAL 也不能让同一文件同时拥有多个写事务。
+SQLite 的整数/布尔值对应 INTEGER，浮点数对应 REAL，其余默认 TEXT。日期、枚举、BigDecimal、JSON 对象等使用 TEXT；字符串与数字仍由 JDBC 编解码器恢复 Java 字段。日期范围依赖统一、可按字典序排序的固定格式与时区；TEXT BigDecimal 的字符串比较不等于数值比较，数值范围或统计需要适当列类型或显式 SQL CAST。
+
+启动完成后，CRUD 和自定义 SQL 均不再检查或修改 Schema。`BaseRequest.fromClass` 为 null、Object.class 或任意类型都不会触发 DDL；它原有的映射与路由语义不变。自定义 SQL 涉及的表若不在扫描实体中，应由迁移脚本或其他初始化流程创建。
+
+#### 预览建表 SQL
+
+`EntitySession` 统一提供 `createTableSql(Class<?>)`。它只根据当前 Session 的数据库方言和字段命名设置生成 SQL，不获取连接、不执行 DDL；返回列表依次包含建表、列注释和声明索引。只有显式 `autoSchema=true` 的完整简单表实体会生成 DDL，投影、统计模型、null 和 Object.class 返回空列表：
+
+```java
+@Resource(name = "mysqlSession")
+private EntitySession mysqlSession;
+
+List<String> ddl = mysqlSession.createTableSql(DemoUser.class);
+ddl.forEach(System.out::println);
+```
+
+`initializeSchema(Collection<Class<?>>)` 才执行初始化。MySQL、H2、SQLite 的启动扫描调用该 Session 接口；Session 自己管理连接和 Statement，并在执行每条语句前以 INFO 输出 `[group][schema]` 和完整 DDL。预览和实际初始化共用相同的 SQL 生成函数。`schema-mode=NONE` 会跳过自动初始化，但不妨碍手动调用 `createTableSql` 预览。
+
+#### Schema 边界
+
+这不是版本迁移工具：已有表只校验实体映射列、单主键和声明索引，不自动补列、改类型、删除旧列/旧索引、添加外键或复合主键。`CREATE` 只创建整个缺失表和缺失的声明索引；结构不兼容时启动失败，需要业务迁移脚本处理。所有 DDL 都发生在会话 Bean 初始化阶段，不进入后续业务事务。
+
+SQLite 使用继承 JdbcSession 的 SqliteSession，复用公共 CRUD；不需要 DataSource Bean 或 sqliteTransactionManager。SqliteDatabase 持有并关闭内部连接池。`supportsParallelWrites()` 返回 false，多连接批处理不会拆组；WAL 也不能让同一文件同时拥有多个写事务。
 
 SQLite 不支持框架生成的 FOR UPDATE、日期分组和数值间隔分组，当前解析器明确拒绝；需用自定义 SQL 实现数据库专用功能。运行中不要单独删除 -wal/-shm 文件，也不要仅复制主文件作为可靠备份。NORMAL 偏向性能，FULL 更重视持久性；这不是业务吞吐量承诺。
 
@@ -205,6 +231,8 @@ yulinlin:
     lock-timeout: 5s
     batch-size: 256
     schema-mode: CREATE
+    schema-packages:
+      - demo.domain
     auto-server: false
 ```
 
@@ -217,11 +245,11 @@ var users = ModelSelectWrapper.newInstance("h2", DemoUser.class).selectList();
 ModelInsertWrapper.newInstance("h2", user).execute();
 ```
 
-H2Session 与 SQLite 一样读取 `BaseRequest.fromClass`，仅为带 JoinTable 的普通完整单表实体按需建表；null、Object.class、Map、JOIN 和统计模型均跳过。schema-mode 的含义是：CREATE 创建缺失表/声明的索引并校验，VALIDATE 只校验且缺失时报错，NONE 完全跳过。已有表只校验映射列、主键和声明的索引，不补列、不改类型、不删除旧索引，也不承担版本迁移。
+H2 在 Session Bean 初始化时扫描配置包。schema-mode 的含义是：CREATE 创建缺失表/声明的索引并校验，VALIDATE 只校验且缺失时报错，NONE 完全跳过。已有表只校验映射列、主键和声明的索引，不补列、不改类型、不删除旧索引，也不承担版本迁移。
 
 字段默认映射为 BOOLEAN、INTEGER、BIGINT、DOUBLE PRECISION 或 CHARACTER VARYING。日期、枚举、BigDecimal/BigInteger、byte[] 与 JSON 对象继续经过公共编码器存为文本。日期范围要求统一的可排序格式；文本数字范围和统计需要显式 CAST。JSON 路径条件当前不自动生成，使用可信的 H2 自定义 SQL。
 
-H2 的 DDL 会自动提交，因此首次创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。只读事务发现结构缺失时拒绝创建，应在写事务或启动初始化阶段先访问完整实体。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
+H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
 
 H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 max-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
 
@@ -229,7 +257,7 @@ H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用
 
 4 个业务线程、每次最多 128 行、总计 10 万行的 JMH 实测中，H2 为 89,401 行/秒，SQLite 为 45,456 行/秒；SQLite 的累计内存分配更低。多线程小批量且吞吐优先选 H2，单文件和写入可排队选 SQLite。测试口径、完整指标、限制和复现命令见[第七专题](07-SQLite与H2性能报告.md)。
 
-#### H2/SQLite 自动索引
+#### MySQL/H2/SQLite 自动索引
 
 在具体表实体上重复使用 `@JoinIndex`，fields 填 Java 属性名，顺序就是联合索引的列顺序。字段先经过 JoinField 和下划线映射，再生成数据库索引：
 
@@ -239,7 +267,7 @@ import com.yulinlin.data.core.anno.JoinIndex;
 import com.yulinlin.data.core.anno.JoinTable;
 import java.util.Date;
 
-@JoinTable("video_comment")
+@JoinTable(value = "video_comment", autoSchema = true)
 @JoinIndex(fields = {"videoId", "crtTime"})
 @JoinIndex(fields = {"videoId", "userId"}, unique = true)
 public class VideoComment {
@@ -251,9 +279,9 @@ public class VideoComment {
 
 上例自动生成普通索引 `idx_video_comment_video_id_crt_time` 和唯一索引 `uk_video_comment_video_id_user_id`。用户不填写索引名；名称由类型前缀、表名和映射后的列名组成，统一小写，超过 63 个字符时截断并追加稳定的 8 位哈希。
 
-同一有序字段组合不能重复声明；如果同时声明普通和唯一索引，只保留唯一索引。字段为空、重复、不存在、exist=false、关联字段或函数映射字段会在业务 SQL 前报错。索引注解只读取 fromClass 具体类上的声明，不继承父类索引；fields 仍可引用父类持久化字段。
+同一有序字段组合不能重复声明；如果同时声明普通和唯一索引，只保留唯一索引。字段为空、重复、不存在、exist=false、关联字段或函数映射字段会在启动初始化时报错。索引注解只读取结构拥有者具体类上的声明，不继承父类索引；fields 仍可引用父类持久化字段。
 
-已有同名索引会校验字段顺序、唯一性以及是否为普通升序列索引；不兼容时要求手动迁移。删除或修改注解不会自动删除旧索引，修改字段组合会创建新名称。H2 使用独立 schema 连接且 DDL 立即生效；SQLite 使用当前请求连接，成功状态在事务提交后缓存。MySQL/PostgreSQL 当前不消费该注解，仍由迁移脚本创建索引。
+已有同名索引会校验字段顺序、唯一性以及是否为普通升序列索引；不兼容时要求手动迁移。删除或修改注解不会自动删除旧索引，修改字段组合会创建新名称。MySQL/H2 使用独立启动连接；SQLite 在内部数据库会话初始化时执行。PostgreSQL 当前不消费该注解，仍由迁移脚本创建索引。
 
 ### PostgreSQL 接入
 
@@ -420,10 +448,13 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | yulinlin.datasource.default-group | 未设置 | 单组自动；多组指定默认 |
+| yulinlin.mysql.schema-mode | NONE | CREATE、VALIDATE 或 NONE；默认不改生产结构 |
+| yulinlin.mysql.schema-packages | 空 | MySQL 启动递归扫描包列表 |
 | yulinlin.sqlite.file | data/local.db | 进程工作目录下的路径 |
 | yulinlin.sqlite.group | sqlite | 本地会话组 |
 | yulinlin.sqlite.busy-timeout | 5000 ms | 等锁，不是查询超时 |
 | yulinlin.sqlite.synchronous | NORMAL | 可选 FULL |
+| yulinlin.sqlite.schema-packages | 空 | SQLite 启动递归扫描包列表 |
 | yulinlin.h2.file | data/local | 数据库基路径，实际文件追加 .mv.db |
 | yulinlin.h2.group | h2 | H2 会话组 |
 | yulinlin.h2.username/password | sa / 空 | 内部文件库凭据 |
@@ -433,13 +464,14 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | yulinlin.h2.lock-timeout | 5s | H2 锁等待时间 |
 | yulinlin.h2.batch-size | 256 | H2 每次 executeBatch 行数 |
 | yulinlin.h2.schema-mode | CREATE | CREATE、VALIDATE 或 NONE |
+| yulinlin.h2.schema-packages | 空 | H2 启动递归扫描包列表 |
 | yulinlin.h2.auto-server | false | 是否允许多 JVM 打开同一文件 |
 | yulinlin.datasource.jdbc.parallel-connections | 4 | 公共 JdbcSession 每框架事务连接上限；SQLite 固定 1，H2 使用自己的配置 |
 | yulinlin.datasource.jdbc.execute-batch-size | 256 | 一次 executeBatch 的行数，不是 commit |
 
 ### 接入边界与排障
 
-- 单数据源也必须等待容器初始化，不在静态初始化块里查询。MySQL/PostgreSQL 表需要业务提前准备；SQLite/H2 普通完整实体可按需建表。
+- 单数据源也必须等待容器初始化，不在静态初始化块里查询。MySQL/SQLite/H2 只有配置扫描包并启用相应模式时才在启动阶段处理结构；PostgreSQL 和未扫描的表由业务迁移脚本准备。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
 - 多库事务与多连接事务不是 XA，详细规则见 [第二专题](02-CRUD与统计分析.md#事务使用)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
@@ -471,7 +503,7 @@ import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinWhere;
 
-@JoinTable("ai_demo_user")
+@JoinTable(value = "ai_demo_user", autoSchema = true)
 public class DemoUser extends IdEntity<DemoUser> {
     @JoinField(name = "user_name")
     @JoinWhere
@@ -489,11 +521,11 @@ public class DemoUser extends IdEntity<DemoUser> {
 }
 ```
 
-MySQL/PostgreSQL 需要提前准备表；SQLite/H2 使用对应本地 Session 时，完整 DemoUser 实体的第一次请求会自动创建缺失表，不需要执行下列 DDL。手动建表仅在自己的示例数据库执行，不把它当作生产迁移脚本：
+PostgreSQL 需要提前准备表。MySQL/SQLite/H2 若已在第一专题配置启动扫描，DemoUser 由应用启动阶段创建/校验；否则也必须提前准备。下列 DDL 只在自己的示例数据库执行，不把它当作生产迁移脚本：
 
 ```sql
 CREATE TABLE ai_demo_user (
-    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    id VARCHAR(128) NOT NULL PRIMARY KEY,
     user_name VARCHAR(100),
     status INT
 );
@@ -503,12 +535,15 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 
 | 注解 | 用途 |
 | --- | --- |
-| JoinTable | 表或 SQL JOIN 映射 |
+| JoinTable | 表或 SQL JOIN 映射；autoSchema 默认 false，只有完整结构实体明确设为 true 才参与启动 Schema |
 | JoinField(name = "...") | Java 属性与列名映射 |
+| JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认且最多 128 |
+| JoinField(textType = TextTypeEnum.text) | 自动 Schema 使用大文本；不能作为主键或框架声明索引 |
+| JoinField(description = "...") | 列用途说明；新表写入 MySQL/H2 注释，SQLite 不落库 |
 | JoinField(exist = false) | 排除非数据库列 |
 | JoinField(update = false) | 排除更新字段 |
 | JoinMeta(primaryKey = true) | 主键元信息；不是 JoinPrimary |
-| JoinIndex(fields = {...}) | H2/SQLite 自动维护普通或唯一联合索引；字段写 Java 属性名 |
+| JoinIndex(fields = {...}) | MySQL/H2/SQLite 启动维护普通或唯一联合索引；字段写 Java 属性名 |
 | JoinWhere | 对象属性有值时参与条件 |
 | JoinField(version = true) | 版本字段；具体支持路径按代理与实际更新实现核对 |
 
@@ -785,7 +820,7 @@ DemoUser user = userRequest.selectOne();
 
 QueryRequest.newInstance(sql, params, clazz) 的 Map.class 返回按列标签组织的行 Map；对象结果按字段映射解码。selectOne 不检查“恰好一条”。多组时用 setSession 指定组；这是 void setter，不是可继续 selectList 的链式返回。
 
-SQLite/H2 按 `BaseRequest.getFromClass()` 自动建表，不按返回类型猜测实体。原始查询初始 fromClass 等于 clazz，原始写入初始为 Object；需要建表时调用 `request.setFromClass(DemoUser.class)` 指定完整表实体。不需要来源时可以设为 null 或 Object.class，框架跳过实体映射和自动建表，SQL 与参数绑定照常执行，结果仍按 entityClass 解码。设置实体不会改写 SQL，也不自动创建 SQL 中的其他表；完整示例见 [第一专题](01-接入与数据源.md#自定义-sql-指定建表实体)及 [H2 接入](01-接入与数据源.md#h2-接入)。
+自定义 SQL 不触发建表，`setFromClass` 也不再承担 Schema 初始化。MySQL/SQLite/H2 的结构只由启动扫描处理；原始 SQL 涉及但没有扫描实体的表，应由迁移脚本创建。`entityClass` 仅决定查询结果如何解码。
 
 原始 CommandNode 不自动补分页或计数 SQL。需要时在可信 SQL 中明确写 LIMIT/OFFSET 或 COUNT，并用 selectList/selectOne 读取；不要把包装器分页能力直接套到任意原始命令。
 

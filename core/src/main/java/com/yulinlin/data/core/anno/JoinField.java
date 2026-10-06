@@ -17,6 +17,16 @@ public @interface JoinField {
 
 	//列明
 	String name() default "";
+
+	/** 文本存储类型；仅影响启动 Schema 创建与校验，不改变编解码器。 */
+	TextTypeEnum textType() default TextTypeEnum.auto;
+
+	/** VARCHAR 最大字符数；0 表示沿用数据库默认值。 */
+	int textLength() default 0;
+
+	/** 数据库列用途说明；MySQL/H2 写入列注释，SQLite 无原生列注释。 */
+	String description() default "";
+
 	//函数
 	String function() default "";
 

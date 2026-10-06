@@ -2,6 +2,7 @@ package com.yulinlin.jdbc.sqlite;
 
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
+import com.yulinlin.jdbc.schema.SchemaEntityScanner;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -31,8 +32,9 @@ public class SqliteAutoConfiguration {
     @Bean("sqliteSession")
     public JdbcSession sqliteSession(@Qualifier("sqliteSessionFactory") JdbcSessionFactory factory, SqliteProperties properties,
                                       SqliteDatabase database) {
-        JdbcSession session = factory.create(database.dataSource(), properties.getGroup());
+        SqliteSession session = (SqliteSession) factory.create(database.dataSource(), properties.getGroup());
         session.setParallelConnections(1); // WAL still permits only one simultaneous writer per file.
+        session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
         return session;
     }
 

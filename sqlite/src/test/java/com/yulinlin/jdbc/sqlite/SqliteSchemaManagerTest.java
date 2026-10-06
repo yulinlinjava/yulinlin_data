@@ -1,8 +1,11 @@
 package com.yulinlin.jdbc.sqlite;
 
 import com.yulinlin.data.core.anno.JoinAggregations;
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
+import com.yulinlin.data.core.anno.TextTypeEnum;
 import com.yulinlin.jdbc.sqlite.fixtures.QueryOnly;
 import com.yulinlin.jdbc.sqlite.fixtures.SchemaEntity;
 import org.junit.jupiter.api.Test;
@@ -26,7 +29,14 @@ class SqliteSchemaManagerTest {
 
     private boolean ensure(SqliteDataSource source, SqliteSchemaManager manager, Class<?> entity) throws Exception {
         try (var connection = source.getConnection()) {
-            return manager.ensureTable(connection, entity, true);
+            return ensure(connection, manager, entity);
+        }
+    }
+
+    private boolean ensure(java.sql.Connection connection, SqliteSchemaManager manager,
+                           Class<?> entity) throws Exception {
+        try (var statement = connection.createStatement()) {
+            return manager.ensureTable(connection, entity, true, statement::executeUpdate);
         }
     }
 
@@ -38,6 +48,10 @@ class SqliteSchemaManagerTest {
             var columns = sql.queryForList("pragma table_info(schema_entity)");
             assertThat(columns).extracting(c -> c.get("name")).contains("id", "display_name", "created_at")
                     .doesNotContain("ignored", "computed");
+            assertThat(columns.stream().filter(c -> "id".equals(c.get("name"))).findFirst().orElseThrow().get("type"))
+                    .isEqualTo("VARCHAR(128)");
+            assertThat(columns.stream().filter(c -> "display_name".equals(c.get("name"))).findFirst().orElseThrow().get("type"))
+                    .isEqualTo("VARCHAR(80)");
             for (String name : new String[]{"created_at", "state", "amount", "details", "payload", "bytes"}) {
                 assertThat(columns.stream().filter(c -> name.equals(c.get("name"))).findFirst().orElseThrow().get("type"))
                         .isEqualTo("TEXT");
@@ -57,8 +71,8 @@ class SqliteSchemaManagerTest {
             var manager = new SqliteSchemaManager();
             try (var connection = source.getConnection()) {
                 connection.setAutoCommit(false);
-                manager.ensureTable(connection, NewTable.class, true);
-                assertThatThrownBy(() -> manager.ensureTable(connection, SchemaEntity.class, true))
+                ensure(connection, manager, NewTable.class);
+                assertThatThrownBy(() -> ensure(connection, manager, SchemaEntity.class))
                         .isInstanceOf(IllegalStateException.class).hasMessageContaining("Incompatible SQLite column");
                 connection.rollback();
             }
@@ -94,7 +108,7 @@ class SqliteSchemaManagerTest {
         var manager = new SqliteSchemaManager();
         var connection = mock(java.sql.Connection.class);
         for (Class<?> entity : new Class<?>[]{null, Object.class, java.util.Map.class, QueryOnly.class, Statistics.class}) {
-            assertThat(manager.ensureTable(connection, entity, true)).isFalse();
+            assertThat(manager.ensureTable(connection, entity, true, sql -> fail("unexpected DDL"))).isFalse();
         }
         verifyNoInteractions(connection);
     }
@@ -110,7 +124,7 @@ class SqliteSchemaManagerTest {
     @Test void doesNotCompleteOrCloseCallersConnection() throws Exception {
         try (var source = source(); var connection = source.getConnection()) {
             var observed = spy(connection);
-            assertThat(new SqliteSchemaManager().ensureTable(observed, NewTable.class, true)).isTrue();
+            assertThat(ensure(observed, new SqliteSchemaManager(), NewTable.class)).isTrue();
             verify(observed, never()).setAutoCommit(anyBoolean());
             verify(observed, never()).commit();
             verify(observed, never()).rollback();
@@ -130,12 +144,30 @@ class SqliteSchemaManagerTest {
         }
     }
 
-    @JoinTable("a_new_table") public static class NewTable { public String value; }
-    @JoinTable("schema_entity") public static class Conflict { public Integer value; }
-    @JoinTable("unsafe;drop") public static class Unsafe { public String value; }
-    @JoinTable("statistics") public static class Statistics { @JoinAggregations public String name; }
-    @JoinTable("relations") public static class Relations {
+    @Test void stringPrimaryKeyIsLimitedTo128CharactersAndCannotBeLargeText() {
+        try (var source = source()) {
+            var manager = new SqliteSchemaManager();
+            assertThatThrownBy(() -> ensure(source, manager, TooLongPrimary.class))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot exceed 128");
+            assertThatThrownBy(() -> ensure(source, manager, LargeTextPrimary.class))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot be a primary key");
+        }
+    }
+
+    @JoinTable(value = "a_new_table", autoSchema = true) public static class NewTable { public String value; }
+    @JoinTable(value = "schema_entity", autoSchema = true) public static class Conflict { public Integer value; }
+    @JoinTable(value = "unsafe;drop", autoSchema = true) public static class Unsafe { public String value; }
+    @JoinTable(value = "statistics", autoSchema = true) public static class Statistics { @JoinAggregations public String name; }
+    @JoinTable(value = "relations", autoSchema = true) public static class Relations {
         public String name;
         @JoinQuery public SchemaEntity child;
+    }
+    @JoinTable(value = "too_long_primary", autoSchema = true) public static class TooLongPrimary {
+        @JoinMeta(primaryKey = true) @JoinField(textLength = 129) public String id;
+    }
+    @JoinTable(value = "large_text_primary", autoSchema = true) public static class LargeTextPrimary {
+        @JoinMeta(primaryKey = true) @JoinField(textType = TextTypeEnum.text) public String id;
     }
 }

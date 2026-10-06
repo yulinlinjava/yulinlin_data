@@ -18,6 +18,12 @@ public @interface JoinTable {
 	String value() default "";
 
 	/**
+	 * Whether this class explicitly owns automatic schema creation and validation for {@link #value()}.
+	 * The safe default is false; only a complete table entity should opt in.
+	 */
+	boolean autoSchema() default false;
+
+	/**
 	 * 单，多可以使用
 	 * 当符合使用时，第2个后面不用写
 	 * @return

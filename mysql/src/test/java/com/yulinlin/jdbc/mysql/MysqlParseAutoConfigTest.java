@@ -31,7 +31,7 @@ class MysqlParseAutoConfigTest {
         runner().withUserConfiguration(PrimaryDataSource.class).run(context -> {
             assertThat(context).hasNotFailed().hasBean("mysqlSessionFactory").hasBean("mysqlSession");
             var session = context.getBean("mysqlSession", JdbcSession.class);
-            assertThat(session).isExactlyInstanceOf(JdbcSession.class);
+            assertThat(session).isExactlyInstanceOf(MysqlSession.class);
             assertThat(session.getParseManager()).isExactlyInstanceOf(MysqlParseManager.class);
             assertThat(session.group()).isEqualTo("mysql");
             assertThat(context).doesNotHaveBean("jdbcSession");
@@ -51,6 +51,12 @@ class MysqlParseAutoConfigTest {
     @Test void factoryRemainsAvailableWithoutDataSource() {
         runner().run(context -> assertThat(context).hasNotFailed()
                 .hasBean("mysqlSessionFactory").doesNotHaveBean("mysqlSession"));
+    }
+
+    @Test void schemaCreationIsOptInAndDoesNotBorrowAConnectionByDefault() {
+        var properties = new MysqlProperties();
+        assertThat(properties.getSchemaMode()).isEqualTo(MysqlProperties.SchemaMode.NONE);
+        assertThat(properties.getSchemaPackages()).isEmpty();
     }
 
     @Test void createsSessionWithoutUrlAccessorOrBorrowingConnection() throws Exception {

@@ -289,7 +289,7 @@ class JdbcBatchExecutionTest {
                     (proxy, method, args) -> {
                         if (Thread.currentThread() != owner) throw new AssertionError("statement used by a different thread");
                         return switch (method.getName()) {
-                            case "setObject", "setBlob" -> { boundParameters++; yield null; }
+                            case "setObject" -> { boundParameters++; yield null; }
                             case "clearParameters" -> null;
                             case "addBatch" -> { pending++; yield null; }
                             case "executeBatch" -> {

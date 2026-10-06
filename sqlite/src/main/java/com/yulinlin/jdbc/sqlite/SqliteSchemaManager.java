@@ -9,9 +9,12 @@ import com.yulinlin.data.core.anno.JoinMetrics;
 import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
+import com.yulinlin.data.core.anno.TextTypeEnum;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
+import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
+import com.yulinlin.jdbc.schema.TextColumnResolver;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
@@ -23,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Builds entity mappings once and ensures tables using a caller-owned connection. No scans or commits. */
 public final class SqliteSchemaManager {
     private record EntityType(Class<?> type, boolean underscore) { }
-    private record Column(String name, String type, boolean primary) { }
+    private record Column(String name, String type, String ddl, boolean primary,
+                          boolean largeText, int textLength) { }
     private record Table(String name, List<Column> columns, List<EntityIndexResolver.Definition> indexes) { }
     private record ActualIndex(List<String> columns, boolean unique, boolean plain) { }
     private final Map<EntityType, Optional<Table>> mappings = new ConcurrentHashMap<>();
@@ -42,7 +46,8 @@ public final class SqliteSchemaManager {
     }
 
     /** Does not close the connection, change autoCommit, or complete the caller's transaction. */
-    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore) {
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            SchemaSqlExecutor executor) {
         Table table = table(entity, underscore);
         if (table == null) return false;
         Objects.requireNonNull(connection, "connection");
@@ -52,17 +57,10 @@ public final class SqliteSchemaManager {
                     throw new IllegalStateException("SQLite table " + table.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }
-                StringJoiner columns = new StringJoiner(", ");
-                for (Column column : table.columns()) {
-                    columns.add(quote(column.name()) + " " + column.type()
-                            + (column.primary() ? " NOT NULL PRIMARY KEY" : ""));
-                }
-                try (var statement = connection.createStatement()) {
-                    statement.executeUpdate("CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")");
-                }
+                executor.execute(createBaseTableSql(table));
             }
             validate(connection, table);
-            ensureIndexes(connection, table);
+            ensureIndexes(connection, table, executor);
             return true;
         } catch (SQLException e) {
             throw new IllegalStateException("SQLite schema creation/validation failed for "
@@ -70,8 +68,32 @@ public final class SqliteSchemaManager {
         }
     }
 
+    /** Returns the exact initial DDL used by SqliteSession without touching the database. */
+    public List<String> createTableSql(Class<?> entity, boolean underscore) {
+        Table table = table(entity, underscore);
+        return table == null ? List.of() : createTableSql(table);
+    }
+
+    private static List<String> createTableSql(Table table) {
+        List<String> statements = new ArrayList<>();
+        statements.add(createBaseTableSql(table));
+        for (EntityIndexResolver.Definition index : table.indexes()) {
+            statements.add(createIndexSql(table.name(), index));
+        }
+        return List.copyOf(statements);
+    }
+
+    private static String createBaseTableSql(Table table) {
+        StringJoiner columns = new StringJoiner(", ");
+        for (Column column : table.columns()) {
+            columns.add(quote(column.name()) + " " + column.ddl()
+                    + (column.primary() ? " NOT NULL PRIMARY KEY" : ""));
+        }
+        return "CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")";
+    }
+
     private static boolean isSimpleTable(Class<?> type, JoinTable table) {
-        return table != null && !table.value().isBlank() && table.left().isEmpty() && table.right().isEmpty()
+        return table != null && table.autoSchema() && !table.value().isBlank() && table.left().isEmpty() && table.right().isEmpty()
                 && table.on().isEmpty() && AnnotationUtil.findAnnotation(type, JoinTableList.class) == null
                 && !type.isInterface() && !Modifier.isAbstract(type.getModifiers())
                 && ReflectionUtil.getAllDeclaredFields(type).stream().noneMatch(field ->
@@ -95,7 +117,22 @@ public final class SqliteSchemaManager {
             if (name.contains(".")) throw new IllegalArgumentException("Qualified SQLite column in " + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
-            var column = new Column(name, storageType(field.getType()), meta != null && meta.primaryKey());
+            TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
+            boolean primary = meta != null && meta.primaryKey();
+            String type = storageType(field.getType());
+            if (primary && text.type() == TextTypeEnum.text) {
+                throw new IllegalArgumentException("SQLite large-text column cannot be a primary key: "
+                        + table.value() + "." + name);
+            }
+            if (primary && "TEXT".equals(type) && text.length() > 128) {
+                throw new IllegalArgumentException("String primary-key textLength cannot exceed 128: "
+                        + entity.getName() + "." + field.getName());
+            }
+            int textLength = primary && "TEXT".equals(type) && text.length() == 0 ? 128 : text.length();
+            String ddl = "TEXT".equals(type) && textLength > 0 && text.type() != TextTypeEnum.text
+                    ? "VARCHAR(" + textLength + ")" : type;
+            var column = new Column(name, type, ddl, primary,
+                    text.type() == TextTypeEnum.text, textLength);
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
                 throw new IllegalArgumentException("Duplicate SQLite column " + table.value() + "." + name);
             }
@@ -105,8 +142,20 @@ public final class SqliteSchemaManager {
         if (columns.values().stream().filter(Column::primary).count() > 1) {
             throw new IllegalArgumentException("Composite primary keys are not supported by ORM model operations: " + entity.getName());
         }
-        return new Table(table.value(), List.copyOf(columns.values()),
-                EntityIndexResolver.resolve(entity, table.value(), persistentFields));
+        List<EntityIndexResolver.Definition> indexes =
+                EntityIndexResolver.resolve(entity, table.value(), persistentFields);
+        Map<String, Column> byName = new HashMap<>();
+        columns.values().forEach(column -> byName.put(column.name().toLowerCase(Locale.ROOT), column));
+        for (EntityIndexResolver.Definition index : indexes) {
+            for (String name : index.columns()) {
+                Column column = byName.get(name.toLowerCase(Locale.ROOT));
+                if (column != null && column.largeText()) {
+                    throw new IllegalArgumentException("SQLite auto-schema cannot index large-text column "
+                            + table.value() + "." + column.name());
+                }
+            }
+        }
+        return new Table(table.value(), List.copyOf(columns.values()), indexes);
     }
 
     private static String storageType(Class<?> type) {
@@ -141,7 +190,9 @@ public final class SqliteSchemaManager {
                     }
                     continue;
                 }
-                actual.put(name.toLowerCase(Locale.ROOT), new Column(name, affinity(rows.getString("type")), rows.getInt("pk") != 0));
+                String declared = rows.getString("type");
+                actual.put(name.toLowerCase(Locale.ROOT), new Column(name, affinity(declared), declared,
+                        rows.getInt("pk") != 0, false, 0));
             }
         }
         for (Column expected : table.columns()) {
@@ -156,7 +207,8 @@ public final class SqliteSchemaManager {
         }
     }
 
-    private static void ensureIndexes(Connection connection, Table table) throws SQLException {
+    private static void ensureIndexes(Connection connection, Table table,
+                                      SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, table.name());
         boolean created = false;
@@ -167,7 +219,7 @@ public final class SqliteSchemaManager {
                     throw new IllegalStateException("SQLite index " + expected.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }
-                createIndex(connection, table.name(), expected);
+                createIndex(table.name(), expected, executor);
                 created = true;
             } else {
                 validateIndex(table.name(), expected, found);
@@ -215,15 +267,16 @@ public final class SqliteSchemaManager {
         return indexes;
     }
 
-    private static void createIndex(Connection connection, String table,
-                                    EntityIndexResolver.Definition index) throws SQLException {
+    private static void createIndex(String table, EntityIndexResolver.Definition index,
+                                    SchemaSqlExecutor executor) throws SQLException {
+        executor.execute(createIndexSql(table, index));
+    }
+
+    private static String createIndexSql(String table, EntityIndexResolver.Definition index) {
         String columns = index.columns().stream().map(SqliteSchemaManager::quote)
                 .collect(java.util.stream.Collectors.joining(", "));
-        String sql = "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
+        return "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
                 + quote(index.name()) + " ON " + quote(table) + " (" + columns + ")";
-        try (var statement = connection.createStatement()) {
-            statement.executeUpdate(sql);
-        }
     }
 
     private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {

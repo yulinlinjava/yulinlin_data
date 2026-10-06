@@ -16,7 +16,7 @@ import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinWhere;
 
-@JoinTable("ai_demo_user")
+@JoinTable(value = "ai_demo_user", autoSchema = true)
 public class DemoUser extends IdEntity<DemoUser> {
     @JoinField(name = "user_name")
     @JoinWhere
@@ -34,11 +34,11 @@ public class DemoUser extends IdEntity<DemoUser> {
 }
 ```
 
-MySQL/PostgreSQL 需要提前准备表；SQLite/H2 使用对应本地 Session 时，完整 DemoUser 实体的第一次请求会自动创建缺失表，不需要执行下列 DDL。手动建表仅在自己的示例数据库执行，不把它当作生产迁移脚本：
+PostgreSQL 需要提前准备表。MySQL/SQLite/H2 若已在第一专题配置启动扫描，DemoUser 由应用启动阶段创建/校验；否则也必须提前准备。下列 DDL 只在自己的示例数据库执行，不把它当作生产迁移脚本：
 
 ```sql
 CREATE TABLE ai_demo_user (
-    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    id VARCHAR(128) NOT NULL PRIMARY KEY,
     user_name VARCHAR(100),
     status INT
 );
@@ -48,12 +48,15 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 
 | 注解 | 用途 |
 | --- | --- |
-| JoinTable | 表或 SQL JOIN 映射 |
+| JoinTable | 表或 SQL JOIN 映射；autoSchema 默认 false，只有完整结构实体明确设为 true 才参与启动 Schema |
 | JoinField(name = "...") | Java 属性与列名映射 |
+| JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认且最多 128 |
+| JoinField(textType = TextTypeEnum.text) | 自动 Schema 使用大文本；不能作为主键或框架声明索引 |
+| JoinField(description = "...") | 列用途说明；新表写入 MySQL/H2 注释，SQLite 不落库 |
 | JoinField(exist = false) | 排除非数据库列 |
 | JoinField(update = false) | 排除更新字段 |
 | JoinMeta(primaryKey = true) | 主键元信息；不是 JoinPrimary |
-| JoinIndex(fields = {...}) | H2/SQLite 自动维护普通或唯一联合索引；字段写 Java 属性名 |
+| JoinIndex(fields = {...}) | MySQL/H2/SQLite 启动维护普通或唯一联合索引；字段写 Java 属性名 |
 | JoinWhere | 对象属性有值时参与条件 |
 | JoinField(version = true) | 版本字段；具体支持路径按代理与实际更新实现核对 |
 
@@ -330,7 +333,7 @@ DemoUser user = userRequest.selectOne();
 
 QueryRequest.newInstance(sql, params, clazz) 的 Map.class 返回按列标签组织的行 Map；对象结果按字段映射解码。selectOne 不检查“恰好一条”。多组时用 setSession 指定组；这是 void setter，不是可继续 selectList 的链式返回。
 
-SQLite/H2 按 `BaseRequest.getFromClass()` 自动建表，不按返回类型猜测实体。原始查询初始 fromClass 等于 clazz，原始写入初始为 Object；需要建表时调用 `request.setFromClass(DemoUser.class)` 指定完整表实体。不需要来源时可以设为 null 或 Object.class，框架跳过实体映射和自动建表，SQL 与参数绑定照常执行，结果仍按 entityClass 解码。设置实体不会改写 SQL，也不自动创建 SQL 中的其他表；完整示例见 [第一专题](01-接入与数据源.md#自定义-sql-指定建表实体)及 [H2 接入](01-接入与数据源.md#h2-接入)。
+自定义 SQL 不触发建表，`setFromClass` 也不再承担 Schema 初始化。MySQL/SQLite/H2 的结构只由启动扫描处理；原始 SQL 涉及但没有扫描实体的表，应由迁移脚本创建。`entityClass` 仅决定查询结果如何解码。
 
 原始 CommandNode 不自动补分页或计数 SQL。需要时在可信 SQL 中明确写 LIMIT/OFFSET 或 COUNT，并用 selectList/selectOne 读取；不要把包装器分页能力直接套到任意原始命令。
 

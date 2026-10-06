@@ -30,7 +30,7 @@ public class AdminApplicationTests {
 
 
 
-        List<SysUserEntity> sqllite = ModelSelectWrapper.newInstance("sqlite", SysUserEntity.class)
+        List<SysUserEntity> sqllite = ModelSelectWrapper.newInstance("mysql", SysUserEntity.class)
                 .selectList();
 
 

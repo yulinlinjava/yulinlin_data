@@ -9,9 +9,12 @@ import com.yulinlin.data.core.anno.JoinMetrics;
 import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
+import com.yulinlin.data.core.anno.TextTypeEnum;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
+import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
+import com.yulinlin.jdbc.schema.TextColumnResolver;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
@@ -19,6 +22,7 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -33,12 +37,14 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Describes simple entity tables and creates or validates them with H2 metadata. */
 public final class H2SchemaManager {
     private enum StorageType {
-        BOOLEAN("BOOLEAN"), INTEGER("INTEGER"), BIGINT("BIGINT"), REAL("DOUBLE PRECISION"), TEXT("CHARACTER VARYING");
+        BOOLEAN("BOOLEAN"), INTEGER("INTEGER"), BIGINT("BIGINT"), REAL("DOUBLE PRECISION"),
+        STRING("CHARACTER VARYING"), TEXT("CHARACTER LARGE OBJECT");
         private final String ddl;
         StorageType(String ddl) { this.ddl = ddl; }
     }
     private record EntityType(Class<?> type, boolean underscore) { }
-    private record Column(String name, StorageType type, boolean primary) { }
+    private record Column(String name, StorageType type, boolean primary, int textLength,
+                          boolean validateLength, String description) { }
     private record Table(String name, List<Column> columns, List<EntityIndexResolver.Definition> indexes) { }
     private record TableRef(String catalog, String schema, String name, String type) { }
     private record ActualIndex(List<String> columns, boolean unique, boolean ascending) { }
@@ -59,7 +65,7 @@ public final class H2SchemaManager {
     }
 
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
-                                            H2Properties.SchemaMode mode) {
+                                            H2Properties.SchemaMode mode, SchemaSqlExecutor executor) {
         Table table = table(entity, underscore);
         if (table == null || mode == H2Properties.SchemaMode.NONE) return false;
         try {
@@ -72,7 +78,7 @@ public final class H2SchemaManager {
                     throw new IllegalStateException("H2 table " + table.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }
-                create(connection, table);
+                create(table, executor);
                 actual = findObject(connection, table.name());
                 if (actual == null) throw new IllegalStateException("H2 table was not created: " + table.name());
             }
@@ -80,7 +86,7 @@ public final class H2SchemaManager {
                 throw new IllegalStateException("H2 object is not a table: " + table.name());
             }
             validate(connection, actual, table);
-            ensureIndexes(connection, actual, table, mode);
+            ensureIndexes(connection, actual, table, mode, executor);
             return true;
         } catch (SQLException error) {
             throw new IllegalStateException("H2 schema creation/validation failed for "
@@ -88,8 +94,14 @@ public final class H2SchemaManager {
         }
     }
 
+    /** Returns the exact initial DDL used by H2Session without touching the database. */
+    public List<String> createTableSql(Class<?> entity, boolean underscore) {
+        Table table = table(entity, underscore);
+        return table == null ? List.of() : createTableSql(table);
+    }
+
     private static boolean isSimpleTable(Class<?> type, JoinTable table) {
-        return table != null && !table.value().isBlank() && table.left().isEmpty() && table.right().isEmpty()
+        return table != null && table.autoSchema() && !table.value().isBlank() && table.left().isEmpty() && table.right().isEmpty()
                 && table.on().isEmpty() && AnnotationUtil.findAnnotation(type, JoinTableList.class) == null
                 && !type.isInterface() && !Modifier.isAbstract(type.getModifiers())
                 && ReflectionUtil.getAllDeclaredFields(type).stream().noneMatch(field ->
@@ -113,7 +125,20 @@ public final class H2SchemaManager {
                     "Qualified H2 column in " + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
-            Column column = new Column(name, storageType(field.getType()), meta != null && meta.primaryKey());
+            TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
+            boolean primary = meta != null && meta.primaryKey();
+            StorageType type = storageType(field.getType(), text);
+            if (primary && type == StorageType.TEXT) {
+                throw new IllegalArgumentException("H2 large-text column cannot be a primary key: "
+                        + table.value() + "." + name);
+            }
+            if (primary && type == StorageType.STRING && text.length() > 128) {
+                throw new IllegalArgumentException("String primary-key textLength cannot exceed 128: "
+                        + entity.getName() + "." + field.getName());
+            }
+            int textLength = primary && type == StorageType.STRING && text.length() == 0 ? 128 : text.length();
+            Column column = new Column(name, type, primary, textLength,
+                    text.explicitLength(), text.description());
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
                 throw new IllegalArgumentException("Duplicate H2 column " + table.value() + "." + name);
             }
@@ -124,11 +149,25 @@ public final class H2SchemaManager {
             throw new IllegalArgumentException(
                     "Composite primary keys are not supported by ORM model operations: " + entity.getName());
         }
-        return new Table(table.value(), List.copyOf(columns.values()),
-                EntityIndexResolver.resolve(entity, table.value(), persistentFields));
+        List<EntityIndexResolver.Definition> indexes =
+                EntityIndexResolver.resolve(entity, table.value(), persistentFields);
+        Map<String, Column> byName = new HashMap<>();
+        columns.values().forEach(column -> byName.put(column.name().toLowerCase(Locale.ROOT), column));
+        for (EntityIndexResolver.Definition index : indexes) {
+            for (String name : index.columns()) {
+                Column column = byName.get(name.toLowerCase(Locale.ROOT));
+                if (column != null && column.type() == StorageType.TEXT) {
+                    throw new IllegalArgumentException("H2 auto-schema cannot index CLOB column "
+                            + table.value() + "." + column.name());
+                }
+            }
+        }
+        return new Table(table.value(), List.copyOf(columns.values()), indexes);
     }
 
-    private static StorageType storageType(Class<?> type) {
+    private static StorageType storageType(Class<?> type, TextColumnResolver.Definition text) {
+        if (text.type() == TextTypeEnum.varchar) return StorageType.STRING;
+        if (text.type() == TextTypeEnum.text) return StorageType.TEXT;
         if (type == boolean.class || type == Boolean.class) return StorageType.BOOLEAN;
         if (type == byte.class || type == Byte.class || type == short.class || type == Short.class
                 || type == int.class || type == Integer.class) return StorageType.INTEGER;
@@ -137,18 +176,38 @@ public final class H2SchemaManager {
             return StorageType.REAL;
         }
         // Dates, enums, BigDecimal/BigInteger, byte[] and JSON values retain the shared text codecs.
-        return StorageType.TEXT;
+        return StorageType.STRING;
     }
 
-    private static void create(Connection connection, Table table) throws SQLException {
+    private static List<String> createTableSql(Table table) {
+        List<String> statements = new ArrayList<>(createBaseTableSql(table));
+        for (EntityIndexResolver.Definition index : table.indexes()) {
+            statements.add(createIndexSql(table.name(), index));
+        }
+        return List.copyOf(statements);
+    }
+
+    private static List<String> createBaseTableSql(Table table) {
         StringJoiner columns = new StringJoiner(", ");
         for (Column column : table.columns()) {
-            columns.add(quote(column.name()) + " " + column.type().ddl
+            String ddl = column.type() == StorageType.STRING && column.textLength() > 0
+                    ? "CHARACTER VARYING(" + column.textLength() + ")" : column.type().ddl;
+            columns.add(quote(column.name()) + " " + ddl
                     + (column.primary() ? " NOT NULL PRIMARY KEY" : ""));
         }
-        try (var statement = connection.createStatement()) {
-            statement.executeUpdate("CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")");
+        List<String> statements = new ArrayList<>();
+        statements.add("CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")");
+        for (Column column : table.columns()) {
+            if (!column.description().isBlank()) {
+                statements.add("COMMENT ON COLUMN " + quote(table.name()) + "." + quote(column.name())
+                        + " IS " + stringLiteral(column.description()));
+            }
         }
+        return List.copyOf(statements);
+    }
+
+    private static void create(Table table, SchemaSqlExecutor executor) throws SQLException {
+        for (String sql : createBaseTableSql(table)) executor.execute(sql);
     }
 
     private static TableRef findObject(Connection connection, String name) throws SQLException {
@@ -178,12 +237,15 @@ public final class H2SchemaManager {
                 String name = rows.getString("COLUMN_NAME");
                 StorageType type = jdbcStorageType(rows.getInt("DATA_TYPE"));
                 actual.put(name.toLowerCase(Locale.ROOT),
-                        new Column(name, type, primary.contains(name.toLowerCase(Locale.ROOT))));
+                        new Column(name, type, primary.contains(name.toLowerCase(Locale.ROOT)),
+                                rows.getInt("COLUMN_SIZE"), false, ""));
             }
         }
         for (Column column : expected.columns()) {
             Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
-            if (found == null || found.type() != column.type() || found.primary() != column.primary()) {
+            if (found == null || found.type() != column.type() || found.primary() != column.primary()
+                    || column.validateLength() && found.textLength() != column.textLength()
+                    || column.primary() && column.type() == StorageType.STRING && found.textLength() > 128) {
                 throw new IllegalStateException("Incompatible H2 column " + expected.name() + "." + column.name()
                         + ": expected " + column + ", actual " + found + "; migrate manually");
             }
@@ -195,7 +257,7 @@ public final class H2SchemaManager {
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
-                                      H2Properties.SchemaMode mode) throws SQLException {
+                                      H2Properties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, reference);
         boolean created = false;
@@ -209,7 +271,7 @@ public final class H2SchemaManager {
                     throw new IllegalStateException("H2 index " + expected.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }
-                createIndex(connection, table.name(), expected);
+                createIndex(table.name(), expected, executor);
                 created = true;
             } else {
                 validateIndex(table.name(), expected, found);
@@ -253,15 +315,16 @@ public final class H2SchemaManager {
         return indexes;
     }
 
-    private static void createIndex(Connection connection, String table,
-                                    EntityIndexResolver.Definition index) throws SQLException {
+    private static void createIndex(String table, EntityIndexResolver.Definition index,
+                                    SchemaSqlExecutor executor) throws SQLException {
+        executor.execute(createIndexSql(table, index));
+    }
+
+    private static String createIndexSql(String table, EntityIndexResolver.Definition index) {
         String columns = index.columns().stream().map(H2SchemaManager::quote)
                 .collect(java.util.stream.Collectors.joining(", "));
-        String sql = "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
+        return "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
                 + quote(index.name()) + " ON " + quote(table) + " (" + columns + ")";
-        try (var statement = connection.createStatement()) {
-            statement.executeUpdate(sql);
-        }
     }
 
     private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {
@@ -289,7 +352,8 @@ public final class H2SchemaManager {
             case Types.BIGINT -> StorageType.BIGINT;
             case Types.REAL, Types.FLOAT, Types.DOUBLE, Types.NUMERIC, Types.DECIMAL -> StorageType.REAL;
             case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR,
-                    Types.LONGNVARCHAR, Types.CLOB, Types.NCLOB -> StorageType.TEXT;
+                    Types.LONGNVARCHAR -> StorageType.STRING;
+            case Types.CLOB, Types.NCLOB -> StorageType.TEXT;
             default -> null;
         };
     }
@@ -302,4 +366,8 @@ public final class H2SchemaManager {
     }
 
     private static String quote(String name) { return "\"" + name.replace("\"", "\"\"") + "\""; }
+
+    private static String stringLiteral(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
 }

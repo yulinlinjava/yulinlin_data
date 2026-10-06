@@ -22,6 +22,7 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import lombok.SneakyThrows;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.locks.Lock;
@@ -47,6 +48,17 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
     private IFilterManager filterManager;
+
+    /** Non-relational or externally managed sessions have no automatic table DDL by default. */
+    @Override
+    public List<String> createTableSql(Class<?> entityClass) {
+        return List.of();
+    }
+
+    /** Non-relational or externally managed sessions require no relational schema initialization. */
+    @Override
+    public void initializeSchema(Collection<Class<?>> entityClasses) {
+    }
 
 
 

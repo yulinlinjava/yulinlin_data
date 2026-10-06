@@ -51,7 +51,9 @@ yulinlin:
   datasource:
     default-group: mysql
     log: true
-
-
+  mysql:
+    schema-mode: CREATE
+    schema-packages:
+      - "com.yulinlin.admin"
 
 

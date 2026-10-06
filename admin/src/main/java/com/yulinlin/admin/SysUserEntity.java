@@ -15,7 +15,7 @@ import java.util.Date;
 
 @Data
 
-@JoinTable("sys_user")
+@JoinTable(value = "objk", autoSchema = true)
 public class SysUserEntity extends SuperEntity<SysUserEntity>  {
 
 

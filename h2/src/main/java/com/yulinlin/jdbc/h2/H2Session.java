@@ -1,19 +1,16 @@
 package com.yulinlin.jdbc.h2;
 
-import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.jdbc.session.JdbcSession;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.sql.Statement;
+import java.util.Collection;
+import java.util.List;
 
-/** Shared JDBC execution with H2 SQL and on-demand local tables. */
+/** Shared JDBC execution with H2 SQL and startup schema initialization. */
 public class H2Session extends JdbcSession {
-    private record EntityType(Class<?> type, boolean underscore) { }
-
     private final H2SchemaManager schemaManager = new H2SchemaManager();
-    private final Set<EntityType> checkedTables = ConcurrentHashMap.newKeySet();
     private volatile DataSource schemaDataSource;
     private volatile H2Properties.SchemaMode schemaMode = H2Properties.SchemaMode.CREATE;
 
@@ -31,22 +28,25 @@ public class H2Session extends JdbcSession {
         setExecuteBatchSize(properties.getBatchSize());
     }
 
-    @Override protected void beforeExecute(BaseRequest<?> request) {
-        Class<?> fromClass = request.getFromClass();
-        if (fromClass == null || fromClass == Object.class || schemaMode == H2Properties.SchemaMode.NONE) return;
-        EntityType entity = new EntityType(fromClass, isMapUnderscoreToCamelCase());
-        if (checkedTables.contains(entity)
-                || !schemaManager.isTableEntity(fromClass, entity.underscore())) return;
+    @Override
+    public List<String> createTableSql(Class<?> entityClass) {
+        return schemaManager.createTableSql(entityClass, isMapUnderscoreToCamelCase());
+    }
 
-        // H2 DDL commits its own connection. A dedicated direct connection prevents an implicit
-        // commit of the caller's business transaction and avoids consuming its bounded worker pool.
-        try (Connection connection = schemaDataSource.getConnection()) {
-            schemaManager.ensureTable(connection, fromClass, entity.underscore(), schemaMode);
-            checkedTables.add(entity);
+    /** Creates or validates every scanned schema owner before the Session bean is published. */
+    @Override
+    public void initializeSchema(Collection<Class<?>> entities) {
+        if (schemaMode == H2Properties.SchemaMode.NONE || entities == null || entities.isEmpty()) return;
+        try (Connection connection = schemaDataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            for (Class<?> entity : entities) {
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode,
+                        sql -> executeSchemaSql(statement, sql));
+            }
         } catch (RuntimeException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalStateException("Cannot initialize H2 table for " + fromClass.getName(), error);
+            throw new IllegalStateException("Cannot initialize H2 schema", error);
         }
     }
 }

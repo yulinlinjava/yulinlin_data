@@ -47,11 +47,8 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     }
 
 
-    protected void bindParameter(java.sql.PreparedStatement statement, int index, Object value)
-            throws java.sql.SQLException {
-        if (value instanceof java.io.InputStream stream) statement.setBlob(index, stream);
-        else statement.setObject(index, value);
-    }
+
+
     protected Object readColumn(ResultSet rows, String label, int jdbcType) throws java.sql.SQLException {
         return rows.getString(label);
     }

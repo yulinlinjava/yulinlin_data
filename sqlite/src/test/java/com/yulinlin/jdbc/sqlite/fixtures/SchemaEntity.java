@@ -3,6 +3,7 @@ package com.yulinlin.jdbc.sqlite.fixtures;
 import com.yulinlin.common.domain.IdEntity;
 import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinTable;
+import com.yulinlin.data.core.anno.TextTypeEnum;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import java.math.BigDecimal;
@@ -11,12 +12,13 @@ import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@JoinTable("schema_entity")
+@JoinTable(value = "schema_entity", autoSchema = true)
 public class SchemaEntity extends IdEntity<SchemaEntity> {
-    @JoinField(name = "display_name") private String name;
+    @JoinField(name = "display_name", textLength = 80, description = "Display name") private String name;
     private Date createdAt;
     private State state;
     private BigDecimal amount;
+    @JoinField(textType = TextTypeEnum.text, description = "JSON details")
     private Map<String, String> details;
     private Payload payload;
     private byte[] bytes;

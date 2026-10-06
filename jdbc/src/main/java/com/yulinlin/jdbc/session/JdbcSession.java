@@ -10,7 +10,6 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.sql.DataSource;
-import java.io.InputStream;
 import java.sql.*;
 import java.util.*;
 
@@ -24,6 +23,17 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
     public JdbcSession(DataSource dataSource) {
         super(dataSource);
         setParseManager(new com.yulinlin.jdbc.sql.SqlParseManager());
+    }
+
+    /** Keeps schema logging and execution in the owning Session. */
+    protected int executeSchemaSql(Statement statement, String sql) throws SQLException {
+        log.info("[{}][schema]\n{}", group(), sql);
+        try {
+            return statement.executeUpdate(sql);
+        } catch (SQLException error) {
+            log.error("[{}][schema] execution failed\n{}", group(), sql, error);
+            throw error;
+        }
     }
 
 
@@ -73,9 +83,8 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
                 int index = 1;
                 preparedStatement.clearParameters();
                 if (node.getList() != null) for (Object row : node.getList()) {
-                    bindParameter(preparedStatement, index, row);
+                    preparedStatement.setObject(index, row);
                     index++;
-
                 }
                 preparedStatement.addBatch();
                 if (++pending == batchSize) {
@@ -125,7 +134,9 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
               int index = 1;
               for (Object row : node.getList()) {
 
-                  bindParameter(preparedStatement, index++, row);
+                  preparedStatement.setObject(index, row);
+                  index++;
+
               }
 
           }

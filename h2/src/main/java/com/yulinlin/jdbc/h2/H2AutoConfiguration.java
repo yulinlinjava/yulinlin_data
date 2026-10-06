@@ -3,6 +3,7 @@ package com.yulinlin.jdbc.h2;
 import com.yulinlin.jdbc.DataJdbcApplication;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
+import com.yulinlin.jdbc.schema.SchemaEntityScanner;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -36,6 +37,9 @@ public class H2AutoConfiguration {
                                  H2Properties properties, H2Database database) {
         H2Session session = (H2Session) factory.create(database.dataSource(), properties.getGroup());
         session.configure(properties, database.schemaDataSource());
+        if (properties.getSchemaMode() != H2Properties.SchemaMode.NONE) {
+            session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
+        }
         return session;
     }
 }

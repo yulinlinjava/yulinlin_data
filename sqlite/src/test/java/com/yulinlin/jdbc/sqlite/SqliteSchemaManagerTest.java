@@ -59,6 +59,10 @@ class SqliteSchemaManagerTest {
             sql.update("insert into schema_entity(id,display_name) values('1','keep')");
             assertThat(ensure(source, manager, SchemaEntity.class)).isTrue();
             assertThat(sql.queryForObject("select display_name from schema_entity", String.class)).isEqualTo("keep");
+            assertThat(ensure(source, manager, ExtendedSchemaEntity.class)).isTrue();
+            assertThat(sql.queryForList("pragma table_info(schema_entity)"))
+                    .extracting(column -> column.get("name")).contains("new_value");
+            assertThat(sql.queryForObject("select new_value from schema_entity where id='1'", String.class)).isNull();
             sql.execute("alter table schema_entity add column extra text");
             assertThat(ensure(source, manager, SchemaEntity.class)).isTrue();
         }
@@ -67,7 +71,7 @@ class SqliteSchemaManagerTest {
     @Test void callerControlsRollbackOfNewTables() throws Exception {
         try (var source = source()) {
             var sql = new JdbcTemplate(source);
-            sql.execute("create table schema_entity(id text primary key)");
+            sql.execute("create table schema_entity(id text primary key, display_name integer)");
             var manager = new SqliteSchemaManager();
             try (var connection = source.getConnection()) {
                 connection.setAutoCommit(false);
@@ -77,7 +81,7 @@ class SqliteSchemaManagerTest {
                 connection.rollback();
             }
             assertThat(sql.queryForObject("select count(*) from sqlite_schema where name='a_new_table'", Integer.class)).isZero();
-            assertThat(sql.queryForList("pragma table_info(schema_entity)")).hasSize(1);
+            assertThat(sql.queryForList("pragma table_info(schema_entity)")).hasSize(2);
         }
     }
 
@@ -157,7 +161,11 @@ class SqliteSchemaManagerTest {
     }
 
     @JoinTable(value = "a_new_table", autoSchema = true) public static class NewTable { public String value; }
-    @JoinTable(value = "schema_entity", autoSchema = true) public static class Conflict { public Integer value; }
+    @JoinTable(value = "schema_entity", autoSchema = true) public static class Conflict {
+        @JoinField(name = "display_name") public Integer value;
+    }
+    @JoinTable(value = "schema_entity", autoSchema = true)
+    public static class ExtendedSchemaEntity extends SchemaEntity { public String newValue; }
     @JoinTable(value = "unsafe;drop", autoSchema = true) public static class Unsafe { public String value; }
     @JoinTable(value = "statistics", autoSchema = true) public static class Statistics { @JoinAggregations public String name; }
     @JoinTable(value = "relations", autoSchema = true) public static class Relations {

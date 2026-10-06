@@ -89,6 +89,46 @@ class H2SessionTest {
         verify(schema, never()).getConnection();
     }
 
+    @Test void createModeAddsMissingOrdinaryColumnButValidateModeDoesNot() {
+        var properties = new H2Properties();
+        properties.setFile(directory.resolve("incremental").toString());
+        try (var database = new H2Database(properties)) {
+            var sql = new JdbcTemplate(database.dataSource());
+            sql.execute("create table \"incremental_user\" (\"id\" varchar(128) not null primary key)");
+
+            var session = new H2Session(database.dataSource());
+            session.setProperties(new JdbcProperties());
+            session.configure(properties, database.schemaDataSource());
+            session.initializeSchema(List.of(IncrementalUser.class));
+
+            assertThat(sql.queryForObject(
+                    "select character_maximum_length from information_schema.columns "
+                            + "where table_name='incremental_user' and column_name='nickname'", Long.class))
+                    .isEqualTo(64L);
+            assertThat(sql.queryForObject(
+                    "select remarks from information_schema.columns "
+                            + "where table_name='incremental_user' and column_name='nickname'", String.class))
+                    .isEqualTo("Nickname");
+        }
+
+        properties.setFile(directory.resolve("validate-only").toString());
+        properties.setSchemaMode(H2Properties.SchemaMode.VALIDATE);
+        try (var database = new H2Database(properties)) {
+            var sql = new JdbcTemplate(database.dataSource());
+            sql.execute("create table \"incremental_user\" (\"id\" varchar(128) not null primary key)");
+            var session = new H2Session(database.dataSource());
+            session.setProperties(new JdbcProperties());
+            session.configure(properties, database.schemaDataSource());
+
+            assertThatThrownBy(() -> session.initializeSchema(List.of(IncrementalUser.class)))
+                    .hasMessageContaining("nickname");
+            assertThat(sql.queryForObject(
+                    "select count(*) from information_schema.columns "
+                            + "where table_name='incremental_user' and column_name='nickname'", Integer.class))
+                    .isZero();
+        }
+    }
+
     @JoinTable(value = "startup_user", autoSchema = true)
     @JoinIndex(fields = "name")
     public static class User {
@@ -109,5 +149,11 @@ class H2SessionTest {
         @JoinMeta(primaryKey = true)
         @JoinField(textType = TextTypeEnum.text)
         private String id;
+    }
+
+    @JoinTable(value = "incremental_user", autoSchema = true)
+    public static class IncrementalUser {
+        @JoinMeta(primaryKey = true) private String id;
+        @JoinField(textLength = 64, description = "Nickname") private String nickname;
     }
 }

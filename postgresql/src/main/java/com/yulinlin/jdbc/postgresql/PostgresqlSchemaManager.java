@@ -1,4 +1,4 @@
-package com.yulinlin.jdbc.h2;
+package com.yulinlin.jdbc.postgresql;
 
 import com.yulinlin.data.core.alias.AliasContent;
 import com.yulinlin.data.core.anno.JoinAggregations;
@@ -15,9 +15,10 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
@@ -34,25 +35,60 @@ import java.util.StringJoiner;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Describes simple entity tables and creates or validates them with H2 metadata. */
-public final class H2SchemaManager {
+/** Creates and validates conservative PostgreSQL tables from one schema owner per table. */
+public final class PostgresqlSchemaManager {
     private enum StorageType {
         BOOLEAN("BOOLEAN"), INTEGER("INTEGER"), BIGINT("BIGINT"), REAL("DOUBLE PRECISION"),
-        STRING("CHARACTER VARYING"), TEXT("CHARACTER LARGE OBJECT");
+        STRING("VARCHAR(255)"), TEXT("TEXT");
         private final String ddl;
         StorageType(String ddl) { this.ddl = ddl; }
     }
+
     private record EntityType(Class<?> type, boolean underscore) { }
     private record Column(String name, StorageType type, boolean primary, int textLength,
                           boolean validateLength, String description) { }
-    private record Table(String name, List<Column> columns, List<EntityIndexResolver.Definition> indexes) { }
+    private record Table(String schema, String name, List<Column> columns,
+                         List<EntityIndexResolver.Definition> indexes) { }
     private record TableRef(String catalog, String schema, String name, String type) { }
     private record ActualIndex(List<String> columns, boolean unique, boolean ascending) { }
 
     private final Map<EntityType, Optional<Table>> mappings = new ConcurrentHashMap<>();
 
-    boolean isTableEntity(Class<?> entity, boolean underscore) {
-        return table(entity, underscore) != null;
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            PostgresqlProperties.SchemaMode mode,
+                                            SchemaSqlExecutor executor) {
+        Table table = table(entity, underscore);
+        if (table == null || mode == PostgresqlProperties.SchemaMode.NONE) return false;
+        try {
+            TableRef actual = findTable(connection, table);
+            if (actual == null) {
+                if (mode == PostgresqlProperties.SchemaMode.VALIDATE) {
+                    throw new IllegalStateException("PostgreSQL table is missing: " + displayName(table));
+                }
+                create(table, executor);
+                actual = findTable(connection, table);
+                if (actual == null) {
+                    throw new IllegalStateException("PostgreSQL table was not created: " + displayName(table));
+                }
+            }
+            if (!"TABLE".equalsIgnoreCase(actual.type())
+                    && !"PARTITIONED TABLE".equalsIgnoreCase(actual.type())) {
+                throw new IllegalStateException("PostgreSQL object is not a table: " + displayName(table));
+            }
+            ensureColumns(connection, actual, table, mode, executor);
+            validate(connection, actual, table);
+            ensureIndexes(connection, actual, table, mode, executor);
+            return true;
+        } catch (SQLException error) {
+            throw new IllegalStateException("PostgreSQL schema creation/validation failed for "
+                    + entity.getName() + " (" + displayName(table) + "): " + error.getMessage(), error);
+        }
+    }
+
+    /** Returns the exact initial DDL used by PostgresqlSession without touching the database. */
+    public List<String> createTableSql(Class<?> entity, boolean underscore) {
+        Table table = table(entity, underscore);
+        return table == null ? List.of() : createTableSql(table);
     }
 
     private Table table(Class<?> entity, boolean underscore) {
@@ -64,73 +100,38 @@ public final class H2SchemaManager {
         }).orElse(null);
     }
 
-    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
-                                            H2Properties.SchemaMode mode, SchemaSqlExecutor executor) {
-        Table table = table(entity, underscore);
-        if (table == null || mode == H2Properties.SchemaMode.NONE) return false;
-        try {
-            TableRef actual = findObject(connection, table.name());
-            if (actual == null) {
-                if (mode == H2Properties.SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("H2 table is missing: " + table.name());
-                }
-                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
-                    throw new IllegalStateException("H2 table " + table.name()
-                            + " is missing; initialize it outside a read-only transaction");
-                }
-                create(table, executor);
-                actual = findObject(connection, table.name());
-                if (actual == null) throw new IllegalStateException("H2 table was not created: " + table.name());
-            }
-            if (!"BASE TABLE".equalsIgnoreCase(actual.type()) && !"TABLE".equalsIgnoreCase(actual.type())) {
-                throw new IllegalStateException("H2 object is not a table: " + table.name());
-            }
-            ensureColumns(connection, actual, table, mode, executor);
-            validate(connection, actual, table);
-            ensureIndexes(connection, actual, table, mode, executor);
-            return true;
-        } catch (SQLException error) {
-            throw new IllegalStateException("H2 schema creation/validation failed for "
-                    + entity.getName() + " (" + table.name() + "): " + error.getMessage(), error);
-        }
-    }
-
-    /** Returns the exact initial DDL used by H2Session without touching the database. */
-    public List<String> createTableSql(Class<?> entity, boolean underscore) {
-        Table table = table(entity, underscore);
-        return table == null ? List.of() : createTableSql(table);
-    }
-
     private static boolean isSimpleTable(Class<?> type, JoinTable table) {
-        return table != null && table.autoSchema() && !table.value().isBlank() && table.left().isEmpty() && table.right().isEmpty()
-                && table.on().isEmpty() && AnnotationUtil.findAnnotation(type, JoinTableList.class) == null
+        return table != null && table.autoSchema() && !table.value().isBlank()
+                && table.left().isEmpty() && table.right().isEmpty() && table.on().isEmpty()
+                && AnnotationUtil.findAnnotation(type, JoinTableList.class) == null
                 && !type.isInterface() && !Modifier.isAbstract(type.getModifiers())
                 && ReflectionUtil.getAllDeclaredFields(type).stream().noneMatch(field ->
-                        AnnotationUtil.findAnnotation(field, JoinAggregations.class) != null
-                                || AnnotationUtil.findAnnotation(field, JoinMetrics.class) != null);
+                AnnotationUtil.findAnnotation(field, JoinAggregations.class) != null
+                        || AnnotationUtil.findAnnotation(field, JoinMetrics.class) != null);
     }
 
     private static Table describe(Class<?> entity, JoinTable table, boolean underscore) {
-        identifier(table.value());
+        String[] tableName = tableName(table.value());
         AliasContent aliases = AliasContent.newInstance(entity, underscore);
         Map<String, Column> columns = new TreeMap<>();
         Map<String, String> persistentFields = new HashMap<>();
         for (var field : ReflectionUtil.getAllDeclaredFields(entity)) {
-            if (Modifier.isStatic(field.getModifiers()) || Modifier.isTransient(field.getModifiers()) || field.isSynthetic()) continue;
+            if (Modifier.isStatic(field.getModifiers()) || Modifier.isTransient(field.getModifiers())
+                    || field.isSynthetic()) continue;
             JoinField mapping = AnnotationUtil.findAnnotation(field, JoinField.class);
             if (mapping != null && (!mapping.exist() || !mapping.function().isEmpty())) continue;
             if (AnnotationUtil.findAnnotation(field, JoinQuery.class) != null
                     || AnnotationUtil.findAnnotation(field, JoinLazy.class) != null) continue;
             String name = aliases.toColumn(field.getName());
             if (name.contains(".")) throw new IllegalArgumentException(
-                    "Qualified H2 column in " + entity.getName() + ": " + name);
+                    "Qualified PostgreSQL column in " + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
             TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
             boolean primary = meta != null && meta.primaryKey();
             StorageType type = storageType(field.getType(), text);
             if (primary && type == StorageType.TEXT) {
-                throw new IllegalArgumentException("H2 large-text column cannot be a primary key: "
+                throw new IllegalArgumentException("PostgreSQL large-text column cannot be a primary key: "
                         + table.value() + "." + name);
             }
             if (primary && type == StorageType.STRING && text.length() > 128) {
@@ -141,7 +142,7 @@ public final class H2SchemaManager {
             Column column = new Column(name, type, primary, textLength,
                     text.explicitLength(), text.description());
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
-                throw new IllegalArgumentException("Duplicate H2 column " + table.value() + "." + name);
+                throw new IllegalArgumentException("Duplicate PostgreSQL column " + table.value() + "." + name);
             }
             persistentFields.putIfAbsent(field.getName(), name);
         }
@@ -151,19 +152,33 @@ public final class H2SchemaManager {
                     "Composite primary keys are not supported by ORM model operations: " + entity.getName());
         }
         List<EntityIndexResolver.Definition> indexes =
-                EntityIndexResolver.resolve(entity, table.value(), persistentFields);
+                EntityIndexResolver.resolve(entity, tableName[1], persistentFields);
         Map<String, Column> byName = new HashMap<>();
         columns.values().forEach(column -> byName.put(column.name().toLowerCase(Locale.ROOT), column));
         for (EntityIndexResolver.Definition index : indexes) {
             for (String name : index.columns()) {
                 Column column = byName.get(name.toLowerCase(Locale.ROOT));
                 if (column != null && column.type() == StorageType.TEXT) {
-                    throw new IllegalArgumentException("H2 auto-schema cannot index CLOB column "
+                    throw new IllegalArgumentException("PostgreSQL auto-schema cannot index TEXT column "
                             + table.value() + "." + column.name());
                 }
             }
         }
-        return new Table(table.value(), List.copyOf(columns.values()), indexes);
+        return new Table(tableName[0], tableName[1], List.copyOf(columns.values()), indexes);
+    }
+
+    private static String[] tableName(String value) {
+        String[] parts = value.split("\\.", -1);
+        if (parts.length == 1) {
+            identifier(parts[0]);
+            return new String[]{null, parts[0]};
+        }
+        if (parts.length == 2) {
+            identifier(parts[0]);
+            identifier(parts[1]);
+            return new String[]{parts[0], parts[1]};
+        }
+        throw new IllegalArgumentException("PostgreSQL schema needs table or schema.table: " + value);
     }
 
     private static StorageType storageType(Class<?> type, TextColumnResolver.Definition text) {
@@ -176,29 +191,27 @@ public final class H2SchemaManager {
         if (type == float.class || type == Float.class || type == double.class || type == Double.class) {
             return StorageType.REAL;
         }
-        // Dates, enums, BigDecimal/BigInteger, byte[] and JSON values retain the shared text codecs.
-        return StorageType.STRING;
+        if (type == String.class || type == char.class || type == Character.class
+                || java.util.Date.class.isAssignableFrom(type) || type.isEnum()
+                || type == BigDecimal.class || type == BigInteger.class) return StorageType.STRING;
+        return StorageType.TEXT;
     }
 
     private static List<String> createTableSql(Table table) {
         List<String> statements = new ArrayList<>(createBaseTableSql(table));
         for (EntityIndexResolver.Definition index : table.indexes()) {
-            statements.add(createIndexSql(table.name(), index));
+            statements.add(createIndexSql(table, index));
         }
         return List.copyOf(statements);
     }
 
     private static List<String> createBaseTableSql(Table table) {
         StringJoiner columns = new StringJoiner(", ");
-        for (Column column : table.columns()) {
-            columns.add(columnDefinition(column));
-        }
+        for (Column column : table.columns()) columns.add(columnDefinition(column));
         List<String> statements = new ArrayList<>();
-        statements.add("CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")");
+        statements.add("CREATE TABLE IF NOT EXISTS " + qualified(table) + " (" + columns + ")");
         for (Column column : table.columns()) {
-            if (!column.description().isBlank()) {
-                statements.add(commentSql(table.name(), column));
-            }
+            if (!column.description().isBlank()) statements.add(commentSql(table, column));
         }
         return List.copyOf(statements);
     }
@@ -209,26 +222,26 @@ public final class H2SchemaManager {
 
     private static String columnDefinition(Column column) {
         String ddl = column.type() == StorageType.STRING && column.textLength() > 0
-                ? "CHARACTER VARYING(" + column.textLength() + ")" : column.type().ddl;
+                ? "VARCHAR(" + column.textLength() + ")" : column.type().ddl;
         return quote(column.name()) + " " + ddl
                 + (column.primary() ? " NOT NULL PRIMARY KEY" : "");
     }
 
-    private static String addColumnSql(String table, Column column) {
-        return "ALTER TABLE " + quote(table) + " ADD COLUMN IF NOT EXISTS " + columnDefinition(column);
+    private static String addColumnSql(Table table, Column column) {
+        return "ALTER TABLE " + qualified(table) + " ADD COLUMN IF NOT EXISTS " + columnDefinition(column);
     }
 
-    private static String commentSql(String table, Column column) {
-        return "COMMENT ON COLUMN " + quote(table) + "." + quote(column.name())
+    private static String commentSql(Table table, Column column) {
+        return "COMMENT ON COLUMN " + qualified(table) + "." + quote(column.name())
                 + " IS " + stringLiteral(column.description());
     }
 
-    private static TableRef findObject(Connection connection, String name) throws SQLException {
+    private static TableRef findTable(Connection connection, Table table) throws SQLException {
         DatabaseMetaData metadata = connection.getMetaData();
-        String schema = connection.getSchema();
+        String schema = table.schema() == null ? connection.getSchema() : table.schema();
         try (var rows = metadata.getTables(connection.getCatalog(), schema, "%", null)) {
             while (rows.next()) {
-                if (name.equalsIgnoreCase(rows.getString("TABLE_NAME"))) {
+                if (table.name().equalsIgnoreCase(rows.getString("TABLE_NAME"))) {
                     return new TableRef(rows.getString("TABLE_CAT"), rows.getString("TABLE_SCHEM"),
                             rows.getString("TABLE_NAME"), rows.getString("TABLE_TYPE"));
                 }
@@ -238,39 +251,32 @@ public final class H2SchemaManager {
     }
 
     private static void ensureColumns(Connection connection, TableRef reference, Table table,
-                                      H2Properties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+                                      PostgresqlProperties.SchemaMode mode,
+                                      SchemaSqlExecutor executor) throws SQLException {
         Map<String, Column> actual = readColumns(connection, reference);
         boolean changed = false;
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
-            if (expected.primary() || mode == H2Properties.SchemaMode.VALIDATE) {
+            if (expected.primary() || mode == PostgresqlProperties.SchemaMode.VALIDATE) {
                 throw incompatibleColumn(table, expected, null);
             }
-            if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
-                throw new IllegalStateException("H2 column " + table.name() + "." + expected.name()
-                        + " is missing; initialize it outside a read-only transaction");
-            }
-            executor.execute(addColumnSql(table.name(), expected));
-            if (!expected.description().isBlank()) executor.execute(commentSql(table.name(), expected));
+            executor.execute(addColumnSql(table, expected));
+            if (!expected.description().isBlank()) executor.execute(commentSql(table, expected));
             changed = true;
         }
         if (changed) {
             actual = readColumns(connection, reference);
             for (Column expected : table.columns()) {
                 if (!actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
-                    throw new IllegalStateException("H2 column was not created: "
-                            + table.name() + "." + expected.name());
+                    throw new IllegalStateException("PostgreSQL column was not created: "
+                            + displayName(table) + "." + expected.name());
                 }
             }
         }
     }
 
     private static void validate(Connection connection, TableRef reference, Table expected) throws SQLException {
-        DatabaseMetaData metadata = connection.getMetaData();
-        Set<String> primary = new HashSet<>();
-        try (var rows = metadata.getPrimaryKeys(reference.catalog(), reference.schema(), reference.name())) {
-            while (rows.next()) primary.add(rows.getString("COLUMN_NAME").toLowerCase(Locale.ROOT));
-        }
+        Set<String> primary = readPrimaryKeys(connection, reference);
         Map<String, Column> actual = readColumns(connection, reference, primary);
         for (Column column : expected.columns()) {
             Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
@@ -282,67 +288,69 @@ public final class H2SchemaManager {
         }
         long expectedPrimary = expected.columns().stream().filter(Column::primary).count();
         if (primary.size() != expectedPrimary) {
-            throw new IllegalStateException("Incompatible H2 primary key: " + expected.name());
+            throw new IllegalStateException("Incompatible PostgreSQL primary key: " + displayName(expected));
         }
     }
 
-    private static Map<String, Column> readColumns(Connection connection, TableRef reference) throws SQLException {
+    private static Set<String> readPrimaryKeys(Connection connection, TableRef reference) throws SQLException {
         Set<String> primary = new HashSet<>();
         try (var rows = connection.getMetaData().getPrimaryKeys(
                 reference.catalog(), reference.schema(), reference.name())) {
             while (rows.next()) primary.add(rows.getString("COLUMN_NAME").toLowerCase(Locale.ROOT));
         }
-        return readColumns(connection, reference, primary);
+        return primary;
+    }
+
+    private static Map<String, Column> readColumns(Connection connection, TableRef reference) throws SQLException {
+        return readColumns(connection, reference, readPrimaryKeys(connection, reference));
     }
 
     private static Map<String, Column> readColumns(Connection connection, TableRef reference,
                                                     Set<String> primary) throws SQLException {
         Map<String, Column> actual = new HashMap<>();
-        DatabaseMetaData metadata = connection.getMetaData();
-        try (var rows = metadata.getColumns(reference.catalog(), reference.schema(), reference.name(), "%")) {
+        try (var rows = connection.getMetaData().getColumns(
+                reference.catalog(), reference.schema(), reference.name(), "%")) {
             while (rows.next()) {
                 String name = rows.getString("COLUMN_NAME");
-                StorageType type = jdbcStorageType(rows.getInt("DATA_TYPE"));
-                actual.put(name.toLowerCase(Locale.ROOT),
-                        new Column(name, type, primary.contains(name.toLowerCase(Locale.ROOT)),
-                                rows.getInt("COLUMN_SIZE"), false, ""));
+                actual.put(name.toLowerCase(Locale.ROOT), new Column(name,
+                        jdbcStorageType(rows.getInt("DATA_TYPE"), rows.getString("TYPE_NAME")),
+                        primary.contains(name.toLowerCase(Locale.ROOT)), rows.getInt("COLUMN_SIZE"), false, ""));
             }
         }
         return actual;
     }
 
     private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
-        return new IllegalStateException("Incompatible H2 column " + table.name() + "." + expected.name()
-                + ": expected " + expected + ", actual " + actual + "; migrate manually");
+        return new IllegalStateException("Incompatible PostgreSQL column " + displayName(table) + "."
+                + expected.name() + ": expected " + expected + ", actual " + actual + "; migrate manually");
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
-                                      H2Properties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+                                      PostgresqlProperties.SchemaMode mode,
+                                      SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, reference);
-        boolean created = false;
+        boolean changed = false;
         for (EntityIndexResolver.Definition expected : table.indexes()) {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
-                if (mode == H2Properties.SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("H2 index is missing: " + expected.name());
+                if (mode == PostgresqlProperties.SchemaMode.VALIDATE) {
+                    throw new IllegalStateException("PostgreSQL index is missing: " + expected.name());
                 }
-                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
-                    throw new IllegalStateException("H2 index " + expected.name()
-                            + " is missing; initialize it outside a read-only transaction");
-                }
-                createIndex(table.name(), expected, executor);
-                created = true;
+                executor.execute(createIndexSql(table, expected));
+                changed = true;
             } else {
-                validateIndex(table.name(), expected, found);
+                validateIndex(table, expected, found);
             }
         }
-        if (created) {
+        if (changed) {
             actual = readIndexes(connection, reference);
             for (EntityIndexResolver.Definition expected : table.indexes()) {
                 ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
-                if (found == null) throw new IllegalStateException("H2 index was not created: " + expected.name());
-                validateIndex(table.name(), expected, found);
+                if (found == null) {
+                    throw new IllegalStateException("PostgreSQL index was not created: " + expected.name());
+                }
+                validateIndex(table, expected, found);
             }
         }
     }
@@ -375,23 +383,18 @@ public final class H2SchemaManager {
         return indexes;
     }
 
-    private static void createIndex(String table, EntityIndexResolver.Definition index,
-                                    SchemaSqlExecutor executor) throws SQLException {
-        executor.execute(createIndexSql(table, index));
-    }
-
-    private static String createIndexSql(String table, EntityIndexResolver.Definition index) {
-        String columns = index.columns().stream().map(H2SchemaManager::quote)
+    private static String createIndexSql(Table table, EntityIndexResolver.Definition index) {
+        String columns = index.columns().stream().map(PostgresqlSchemaManager::quote)
                 .collect(java.util.stream.Collectors.joining(", "));
         return "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
-                + quote(index.name()) + " ON " + quote(table) + " (" + columns + ")";
+                + quote(index.name()) + " ON " + qualified(table) + " (" + columns + ")";
     }
 
-    private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {
+    private static void validateIndex(Table table, EntityIndexResolver.Definition expected, ActualIndex actual) {
         if (expected.unique() != actual.unique() || !actual.ascending()
                 || !sameColumns(expected.columns(), actual.columns())) {
-            throw new IllegalStateException("Incompatible H2 index " + table + "." + expected.name()
-                    + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
+            throw new IllegalStateException("Incompatible PostgreSQL index " + displayName(table) + "."
+                    + expected.name() + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
                     + "; actual columns=" + actual.columns() + ", unique=" + actual.unique()
                     + "; migrate manually");
         }
@@ -405,12 +408,16 @@ public final class H2SchemaManager {
         return true;
     }
 
-    private static StorageType jdbcStorageType(int type) {
+    private static StorageType jdbcStorageType(int type, String typeName) {
+        String normalized = typeName == null ? "" : typeName.toLowerCase(Locale.ROOT);
+        if (normalized.equals("text") || normalized.equals("json") || normalized.equals("jsonb")) {
+            return StorageType.TEXT;
+        }
         return switch (type) {
             case Types.BOOLEAN, Types.BIT -> StorageType.BOOLEAN;
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> StorageType.INTEGER;
             case Types.BIGINT -> StorageType.BIGINT;
-            case Types.REAL, Types.FLOAT, Types.DOUBLE, Types.NUMERIC, Types.DECIMAL -> StorageType.REAL;
+            case Types.REAL, Types.FLOAT, Types.DOUBLE -> StorageType.REAL;
             case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR,
                     Types.LONGNVARCHAR -> StorageType.STRING;
             case Types.CLOB, Types.NCLOB -> StorageType.TEXT;
@@ -420,14 +427,20 @@ public final class H2SchemaManager {
 
     private static void identifier(String name) {
         if (!name.matches("[\\p{L}_][\\p{L}\\p{N}_]*")
-                || name.toLowerCase(Locale.ROOT).startsWith("information_schema")) {
-            throw new IllegalArgumentException("H2 schema needs a plain table/column name: " + name);
+                || name.toLowerCase(Locale.ROOT).startsWith("pg_")
+                || name.equalsIgnoreCase("information_schema")) {
+            throw new IllegalArgumentException("PostgreSQL schema needs a plain identifier: " + name);
         }
     }
 
-    private static String quote(String name) { return "\"" + name.replace("\"", "\"\"") + "\""; }
-
-    private static String stringLiteral(String value) {
-        return "'" + value.replace("'", "''") + "'";
+    private static String qualified(Table table) {
+        return table.schema() == null ? quote(table.name()) : quote(table.schema()) + "." + quote(table.name());
     }
+
+    private static String displayName(Table table) {
+        return table.schema() == null ? table.name() : table.schema() + "." + table.name();
+    }
+
+    private static String quote(String name) { return "\"" + name.replace("\"", "\"\"") + "\""; }
+    private static String stringLiteral(String value) { return "'" + value.replace("'", "''") + "'"; }
 }

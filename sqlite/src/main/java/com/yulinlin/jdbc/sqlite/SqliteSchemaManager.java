@@ -59,7 +59,9 @@ public final class SqliteSchemaManager {
                 }
                 executor.execute(createBaseTableSql(table));
             }
-            validate(connection, table);
+            Map<String, Column> actual = readColumns(connection, table);
+            actual = ensureColumns(connection, table, actual, executor);
+            validate(table, actual);
             ensureIndexes(connection, table, executor);
             return true;
         } catch (SQLException e) {
@@ -86,10 +88,18 @@ public final class SqliteSchemaManager {
     private static String createBaseTableSql(Table table) {
         StringJoiner columns = new StringJoiner(", ");
         for (Column column : table.columns()) {
-            columns.add(quote(column.name()) + " " + column.ddl()
-                    + (column.primary() ? " NOT NULL PRIMARY KEY" : ""));
+            columns.add(columnDefinition(column));
         }
         return "CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns + ")";
+    }
+
+    private static String columnDefinition(Column column) {
+        return quote(column.name()) + " " + column.ddl()
+                + (column.primary() ? " NOT NULL PRIMARY KEY" : "");
+    }
+
+    private static String addColumnSql(String table, Column column) {
+        return "ALTER TABLE " + quote(table) + " ADD COLUMN " + columnDefinition(column);
     }
 
     private static boolean isSimpleTable(Class<?> type, JoinTable table) {
@@ -179,7 +189,39 @@ public final class SqliteSchemaManager {
         }
     }
 
-    private static void validate(Connection connection, Table table) throws SQLException {
+    private static Map<String, Column> ensureColumns(Connection connection, Table table,
+                                                     Map<String, Column> actual,
+                                                     SchemaSqlExecutor executor) throws SQLException {
+        boolean changed = false;
+        for (Column expected : table.columns()) {
+            if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
+            if (expected.primary()) throw incompatibleColumn(table, expected, null);
+            if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                throw new IllegalStateException("SQLite column " + table.name() + "." + expected.name()
+                        + " is missing; initialize it outside a read-only transaction");
+            }
+            try {
+                executor.execute(addColumnSql(table.name(), expected));
+            } catch (SQLException error) {
+                // Another application instance may have added the same column after our metadata read.
+                if (!readColumns(connection, table).containsKey(expected.name().toLowerCase(Locale.ROOT))) {
+                    throw error;
+                }
+            }
+            changed = true;
+        }
+        if (!changed) return actual;
+        Map<String, Column> updated = readColumns(connection, table);
+        for (Column expected : table.columns()) {
+            if (!updated.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
+                throw new IllegalStateException("SQLite column was not created: "
+                        + table.name() + "." + expected.name());
+            }
+        }
+        return updated;
+    }
+
+    private static Map<String, Column> readColumns(Connection connection, Table table) throws SQLException {
         Map<String, Column> actual = new HashMap<>();
         try (var statement = connection.createStatement(); var rows = statement.executeQuery("PRAGMA table_xinfo(" + quote(table.name()) + ")")) {
             while (rows.next()) {
@@ -195,16 +237,24 @@ public final class SqliteSchemaManager {
                         rows.getInt("pk") != 0, false, 0));
             }
         }
+        return actual;
+    }
+
+    private static void validate(Table table, Map<String, Column> actual) {
         for (Column expected : table.columns()) {
             Column column = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (column == null || !column.type().equals(expected.type()) || column.primary() != expected.primary()) {
-                throw new IllegalStateException("Incompatible SQLite column " + table.name() + "." + expected.name()
-                        + ": expected " + expected + ", actual " + column + "; migrate manually");
+                throw incompatibleColumn(table, expected, column);
             }
         }
         if (actual.values().stream().filter(Column::primary).count() != table.columns().stream().filter(Column::primary).count()) {
             throw new IllegalStateException("Incompatible SQLite primary key: " + table.name());
         }
+    }
+
+    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
+        return new IllegalStateException("Incompatible SQLite column " + table.name() + "." + expected.name()
+                + ": expected " + expected + ", actual " + actual + "; migrate manually");
     }
 
     private static void ensureIndexes(Connection connection, Table table,

@@ -15,14 +15,14 @@ import java.util.Date;
 
 @Data
 
-@JoinTable(value = "objk", autoSchema = true)
+@JoinTable(value = "obj2ka", autoSchema = true)
 public class SysUserEntity extends SuperEntity<SysUserEntity>  {
 
 
 
         @JoinWhere
         @JoinField
-        private String secretKey;
+        private String secretKey2;
 
 
         @JoinWhere

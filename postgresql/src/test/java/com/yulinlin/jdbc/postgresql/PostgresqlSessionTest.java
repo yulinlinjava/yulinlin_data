@@ -183,13 +183,12 @@ class PostgresqlSessionTest {
         verify(dataSource, never()).getConnection();
     }
 
-    @Test void inheritedQueryExecutionUsesPostgresqlBindingAndBooleanReading() throws Exception {
+    @Test void inheritedQueryExecutionUsesSharedObjectBindingAndBooleanReading() throws Exception {
         var connection = mock(java.sql.Connection.class);
         var statement = mock(PreparedStatement.class);
         var rows = mock(java.sql.ResultSet.class);
         var metadata = mock(java.sql.ResultSetMetaData.class);
-        var stream = new java.io.ByteArrayInputStream(new byte[]{1, 2});
-        var buffer = new JdbcCoderManager().createDecoderBuffer().put("data", stream);
+        var buffer = new JdbcCoderManager().createDecoderBuffer().put("data", "payload");
         var query = new SqlNode("select enabled from users where payload = #{data}", buffer);
         when(connection.prepareStatement(query.getSql())).thenReturn(statement);
         when(statement.executeQuery()).thenReturn(rows);
@@ -204,18 +203,16 @@ class PostgresqlSessionTest {
         var result = pg.executeSelectNode(connection, query);
         assertThat(result).hasSize(1);
         assertThat(result.getFirst().<Boolean>getObject("enabled")).isFalse();
-        verify(statement).setBinaryStream(1, stream);
-        verify(statement, never()).setBlob(anyInt(), any(java.io.InputStream.class));
+        verify(statement).setObject(1, "payload");
         verify(rows, never()).getString("enabled");
         verify(rows).close();
         verify(statement).close();
     }
 
-    @Test void inheritedBatchExecutionUsesPostgresqlBinderAndSharedBatchSize() throws Exception {
+    @Test void inheritedBatchExecutionUsesSharedObjectBindingAndBatchSize() throws Exception {
         var connection = mock(java.sql.Connection.class);
         var statement = mock(PreparedStatement.class);
-        var stream = new java.io.ByteArrayInputStream(new byte[]{1, 2});
-        var buffer = new JdbcCoderManager().createDecoderBuffer().put("data", stream);
+        var buffer = new JdbcCoderManager().createDecoderBuffer().put("data", "payload");
         var insert = new SqlNode("insert into users(payload) values(#{data})", buffer);
         when(connection.prepareStatement(insert.getSql())).thenReturn(statement);
         when(statement.executeBatch()).thenReturn(new int[]{1});
@@ -224,10 +221,9 @@ class PostgresqlSessionTest {
         session.setExecuteBatchSize(1);
         assertThat(session.write(connection, List.of(request, request))).isEqualTo(2);
         verify(connection).prepareStatement(insert.getSql());
-        verify(statement, times(2)).setBinaryStream(1, stream);
+        verify(statement, times(2)).setObject(1, "payload");
         verify(statement, times(2)).executeBatch();
         verify(statement, times(2)).clearBatch();
-        verify(statement, never()).setBlob(anyInt(), any(java.io.InputStream.class));
         verify(connection, never()).commit();
         verify(statement).close();
     }
@@ -259,14 +255,6 @@ class PostgresqlSessionTest {
             for (int i = 0; i < results.size(); i++) assertThat(results.get(i).get())
                     .endsWith(i % 2 == 0 ? "LIMIT 3 OFFSET 3" : "LIMIT 3, 3");
         }
-    }
-
-    @Test void binaryStreamsUseByteaInsteadOfLargeObjectBlobBinding() throws Exception {
-        var statement = mock(PreparedStatement.class);
-        var stream = new java.io.ByteArrayInputStream(new byte[]{1, 2});
-        pg.bindParameter(statement, 1, stream);
-        verify(statement).setBinaryStream(1, stream);
-        verify(statement, never()).setBlob(anyInt(), any(java.io.InputStream.class));
     }
 
     @Test void selectAliasesAreRequestLocalAndDoNotMutateCachedModelMapping() {

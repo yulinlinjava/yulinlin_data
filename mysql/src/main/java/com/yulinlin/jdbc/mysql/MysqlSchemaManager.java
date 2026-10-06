@@ -68,6 +68,7 @@ public final class MysqlSchemaManager {
                 actual = findTable(connection, table.name());
                 if (actual == null) throw new IllegalStateException("MySQL table was not created: " + table.name());
             }
+            ensureColumns(connection, actual, table, mode, executor);
             validate(connection, actual, table);
             ensureIndexes(connection, actual, table, mode, executor);
             return true;
@@ -190,11 +191,7 @@ public final class MysqlSchemaManager {
     private static String createBaseTableSql(Table table) {
         StringJoiner columns = new StringJoiner(", ");
         for (Column column : table.columns()) {
-            String ddl = column.type() == StorageType.STRING && column.textLength() > 0
-                    ? "VARCHAR(" + column.textLength() + ")" : column.type().ddl;
-            columns.add(quote(column.name()) + " " + ddl
-                    + (column.primary() ? " NOT NULL PRIMARY KEY" : "")
-                    + (column.description().isBlank() ? "" : " COMMENT " + stringLiteral(column.description())));
+            columns.add(columnDefinition(column));
         }
         return "CREATE TABLE IF NOT EXISTS " + quote(table.name()) + " (" + columns
                 + ") ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4";
@@ -202,6 +199,18 @@ public final class MysqlSchemaManager {
 
     private static void create(Table table, SchemaSqlExecutor executor) throws SQLException {
         executor.execute(createBaseTableSql(table));
+    }
+
+    private static String columnDefinition(Column column) {
+        String ddl = column.type() == StorageType.STRING && column.textLength() > 0
+                ? "VARCHAR(" + column.textLength() + ")" : column.type().ddl;
+        return quote(column.name()) + " " + ddl
+                + (column.primary() ? " NOT NULL PRIMARY KEY" : "")
+                + (column.description().isBlank() ? "" : " COMMENT " + stringLiteral(column.description()));
+    }
+
+    private static String addColumnSql(String table, Column column) {
+        return "ALTER TABLE " + quote(table) + " ADD COLUMN " + columnDefinition(column);
     }
 
     private static TableRef findTable(Connection connection, String name) throws SQLException {
@@ -218,13 +227,73 @@ public final class MysqlSchemaManager {
         return null;
     }
 
+    private static void ensureColumns(Connection connection, TableRef reference, Table table,
+                                      MysqlProperties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+        Map<String, Column> actual = readColumns(connection, reference);
+        boolean changed = false;
+        for (Column expected : table.columns()) {
+            if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
+            if (expected.primary()) {
+                throw incompatibleColumn(table, expected, null);
+            }
+            if (mode == MysqlProperties.SchemaMode.VALIDATE) {
+                throw incompatibleColumn(table, expected, null);
+            }
+            try {
+                executor.execute(addColumnSql(table.name(), expected));
+            } catch (SQLException error) {
+                // Another application instance may have added the same column after our metadata read.
+                if (!readColumns(connection, reference).containsKey(expected.name().toLowerCase(Locale.ROOT))) {
+                    throw error;
+                }
+            }
+            changed = true;
+        }
+        if (changed) {
+            actual = readColumns(connection, reference);
+            for (Column expected : table.columns()) {
+                if (!actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
+                    throw new IllegalStateException("MySQL column was not created: "
+                            + table.name() + "." + expected.name());
+                }
+            }
+        }
+    }
+
     private static void validate(Connection connection, TableRef reference, Table expected) throws SQLException {
         DatabaseMetaData metadata = connection.getMetaData();
         Set<String> primary = new HashSet<>();
         try (var rows = metadata.getPrimaryKeys(reference.catalog(), reference.schema(), reference.name())) {
             while (rows.next()) primary.add(rows.getString("COLUMN_NAME").toLowerCase(Locale.ROOT));
         }
+        Map<String, Column> actual = readColumns(connection, reference, primary);
+        for (Column column : expected.columns()) {
+            Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
+            if (found == null || found.type() != column.type() || found.primary() != column.primary()
+                    || column.validateLength() && found.textLength() != column.textLength()
+                    || column.primary() && column.type() == StorageType.STRING && found.textLength() > 128) {
+                throw incompatibleColumn(expected, column, found);
+            }
+        }
+        long expectedPrimary = expected.columns().stream().filter(Column::primary).count();
+        if (primary.size() != expectedPrimary) {
+            throw new IllegalStateException("Incompatible MySQL primary key: " + expected.name());
+        }
+    }
+
+    private static Map<String, Column> readColumns(Connection connection, TableRef reference) throws SQLException {
+        Set<String> primary = new HashSet<>();
+        try (var rows = connection.getMetaData().getPrimaryKeys(
+                reference.catalog(), reference.schema(), reference.name())) {
+            while (rows.next()) primary.add(rows.getString("COLUMN_NAME").toLowerCase(Locale.ROOT));
+        }
+        return readColumns(connection, reference, primary);
+    }
+
+    private static Map<String, Column> readColumns(Connection connection, TableRef reference,
+                                                    Set<String> primary) throws SQLException {
         Map<String, Column> actual = new HashMap<>();
+        DatabaseMetaData metadata = connection.getMetaData();
         try (var rows = metadata.getColumns(reference.catalog(), reference.schema(), reference.name(), "%")) {
             while (rows.next()) {
                 String name = rows.getString("COLUMN_NAME");
@@ -234,19 +303,12 @@ public final class MysqlSchemaManager {
                                 rows.getInt("COLUMN_SIZE"), false, ""));
             }
         }
-        for (Column column : expected.columns()) {
-            Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
-            if (found == null || found.type() != column.type() || found.primary() != column.primary()
-                    || column.validateLength() && found.textLength() != column.textLength()
-                    || column.primary() && column.type() == StorageType.STRING && found.textLength() > 128) {
-                throw new IllegalStateException("Incompatible MySQL column " + expected.name() + "." + column.name()
-                        + ": expected " + column + ", actual " + found + "; migrate manually");
-            }
-        }
-        long expectedPrimary = expected.columns().stream().filter(Column::primary).count();
-        if (primary.size() != expectedPrimary) {
-            throw new IllegalStateException("Incompatible MySQL primary key: " + expected.name());
-        }
+        return actual;
+    }
+
+    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
+        return new IllegalStateException("Incompatible MySQL column " + table.name() + "." + expected.name()
+                + ": expected " + expected + ", actual " + actual + "; migrate manually");
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,

@@ -129,6 +129,16 @@ public class BaseModelSelectWrapper<E,
         return (R)this;
     }
 
+    public R highlight(String name) {
+        wrapper.highlight(name);
+        return (R)this;
+    }
+
+    public R highlight(LambdaPropertyFunction<E> name) {
+        wrapper.highlight(name);
+        return (R)this;
+    }
+
     public  R orderBy(String name, boolean asc) {
         wrapper.orderBy(name,asc);
         return (R)this;

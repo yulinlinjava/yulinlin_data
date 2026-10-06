@@ -44,9 +44,9 @@ spring:
   session:
     store-type: redis
 yulinlin:
-  datasource:
-    elasticsearch:
-      log: true
+  elasticsearch:
+    url: http://localhost:9200
+    log: true
 
 
 

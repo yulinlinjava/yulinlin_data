@@ -144,8 +144,7 @@ class LoadBalanceTest {
 
     @Test void springPropertyConfiguresFrameworkDefaultLoadBalancer() {
         new ApplicationContextRunner().withUserConfiguration(PropertiesConfiguration.class)
-                .withPropertyValues("yulinlin.datasource.default-group=postgresql",
-                        "yulinlin.datasource.jdbc.parallel-connections=2")
+                .withPropertyValues("yulinlin.datasource.default-group=postgresql")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     var balance = context.getBean(LoadBalance.class);

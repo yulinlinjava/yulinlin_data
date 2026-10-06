@@ -21,6 +21,10 @@ public interface IAsFieldListWrapper<E,R extends IAsFieldListWrapper<E,R>> exten
 
     R field(LambdaPropertyFunction<E> name, String value);
 
+    R highlight(String name);
+
+    R highlight(LambdaPropertyFunction<E> name);
+
 
 
 

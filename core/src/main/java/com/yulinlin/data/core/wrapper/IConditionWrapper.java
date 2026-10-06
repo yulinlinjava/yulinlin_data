@@ -44,6 +44,8 @@ public interface IConditionWrapper<E,R extends IConditionWrapper<E,R>>  extends 
 
     R like(String name, String value);
 
+    R match(String name, String value);
+
     R between(String name, Collection value);
 
 
@@ -101,6 +103,8 @@ public interface IConditionWrapper<E,R extends IConditionWrapper<E,R>>  extends 
 
 
       R like(LambdaPropertyFunction<E> name, String value);
+
+      R match(LambdaPropertyFunction<E> name, String value);
 
 
       R likeRight(LambdaPropertyFunction<E> name, String value);

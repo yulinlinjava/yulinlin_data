@@ -20,6 +20,8 @@ public class SimpParamsContext implements IParamsContext {
 
     RequestType requestType;
 
+    private final Class<?> sourceClass;
+
 
     public SimpParamsContext(
             RequestType requestType,
@@ -31,6 +33,7 @@ public class SimpParamsContext implements IParamsContext {
         this.requestType = requestType;
         this.root = root;
         this.dataBuffer = dataBuffer;
+        this.sourceClass = clazz == null ? Object.class : clazz;
         this.aliasContent =AliasContent.newInstance(clazz,mapUnderscoreToCamelCase);
 
 
@@ -39,6 +42,11 @@ public class SimpParamsContext implements IParamsContext {
 
     public Object getRoot() {
         return root;
+    }
+
+    @Override
+    public Class<?> getSourceClass() {
+        return sourceClass;
     }
 
     public RequestType getRequestType() {

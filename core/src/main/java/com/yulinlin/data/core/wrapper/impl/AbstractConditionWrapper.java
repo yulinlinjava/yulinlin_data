@@ -131,6 +131,11 @@ public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrap
         return (R)this;
     }
 
+    public R match(LambdaPropertyFunction<E> name, String value) {
+        condition(name,ConditionEnum.match,value);
+        return (R)this;
+    }
+
 
 
 
@@ -234,6 +239,10 @@ public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrap
                 node = new Like(name,value);
 
                 break;
+            }case match:{
+                node = new Match(name, value.toString());
+
+                break;
             }case likeRight:{
                 node = new LikeRight(name,value);
                 break;
@@ -283,6 +292,10 @@ public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrap
     public R like(String name, String value){
 
         return condition(name,ConditionEnum.like,value);
+    }
+
+    public R match(String name, String value){
+        return condition(name,ConditionEnum.match,value);
     }
 
     public R between(String name, Collection value){

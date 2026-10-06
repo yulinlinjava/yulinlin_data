@@ -27,6 +27,11 @@ public @interface JoinField {
 	/** 数据库列用途说明；MySQL/H2 写入列注释，SQLite 无原生列注释。 */
 	String description() default "";
 
+	/**
+	 * 声明该文本列需要全文索引。PostgreSQL 与 Elasticsearch 模块实现；其他数据源会忽略此属性。
+	 */
+	boolean fullText() default false;
+
 	//函数
 	String function() default "";
 

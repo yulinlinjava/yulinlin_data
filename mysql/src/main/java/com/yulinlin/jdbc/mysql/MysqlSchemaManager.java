@@ -10,6 +10,7 @@ import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
 import com.yulinlin.data.core.anno.TextTypeEnum;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
@@ -55,13 +56,14 @@ public final class MysqlSchemaManager {
     private final Map<EntityType, Optional<Table>> mappings = new ConcurrentHashMap<>();
 
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
-                                            MysqlProperties.SchemaMode mode, SchemaSqlExecutor executor) {
+                                            SchemaMode mode,
+                                            SchemaSqlExecutor executor) {
         Table table = table(entity, underscore);
-        if (table == null || mode == MysqlProperties.SchemaMode.NONE) return false;
+        if (table == null || mode == SchemaMode.NONE) return false;
         try {
             TableRef actual = findTable(connection, table.name());
             if (actual == null) {
-                if (mode == MysqlProperties.SchemaMode.VALIDATE) {
+                if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("MySQL table is missing: " + table.name());
                 }
                 create(table, executor);
@@ -228,7 +230,8 @@ public final class MysqlSchemaManager {
     }
 
     private static void ensureColumns(Connection connection, TableRef reference, Table table,
-                                      MysqlProperties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+                                      SchemaMode mode,
+                                      SchemaSqlExecutor executor) throws SQLException {
         Map<String, Column> actual = readColumns(connection, reference);
         boolean changed = false;
         for (Column expected : table.columns()) {
@@ -236,7 +239,7 @@ public final class MysqlSchemaManager {
             if (expected.primary()) {
                 throw incompatibleColumn(table, expected, null);
             }
-            if (mode == MysqlProperties.SchemaMode.VALIDATE) {
+            if (mode == SchemaMode.VALIDATE) {
                 throw incompatibleColumn(table, expected, null);
             }
             try {
@@ -312,14 +315,15 @@ public final class MysqlSchemaManager {
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
-                                      MysqlProperties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+                                      SchemaMode mode,
+                                      SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, reference);
         boolean attempted = false;
         for (EntityIndexResolver.Definition expected : table.indexes()) {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
-                if (mode == MysqlProperties.SchemaMode.VALIDATE) {
+                if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("MySQL index is missing: " + expected.name());
                 }
                 createIndex(table.name(), expected, executor);

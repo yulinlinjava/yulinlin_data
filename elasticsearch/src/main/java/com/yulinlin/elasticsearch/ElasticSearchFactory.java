@@ -39,6 +39,7 @@ public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient>
     public ElasticsearchSession create(ElasticsearchClient restClient, String group){
 
         ElasticsearchSession searchSession =  new ElasticsearchSession(restClient);
+        searchSession.setSessionProperties(properties);
         searchSession.setParseManager(parseManager);
 
         searchSession.setCoderManager(coderManager);

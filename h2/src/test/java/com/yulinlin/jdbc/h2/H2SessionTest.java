@@ -1,18 +1,22 @@
 package com.yulinlin.jdbc.h2;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.core.anno.JoinIndex;
 import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.TextTypeEnum;
-import com.yulinlin.jdbc.JdbcProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -23,12 +27,26 @@ import static org.mockito.Mockito.verify;
 class H2SessionTest {
     @TempDir Path directory;
 
+    @Test void bindsModuleOwnedCommonSettings() {
+        var source = new MapConfigurationPropertySource(Map.of(
+                "yulinlin.h2.log", true,
+                "yulinlin.h2.map-underscore-to-camel-case", false,
+                "yulinlin.h2.parallel-connections", 2,
+                "yulinlin.h2.execute-batch-size", 64));
+        var properties = new Binder(source).bind("yulinlin.h2", Bindable.of(H2Properties.class))
+                .orElseThrow(() -> new AssertionError("H2 properties were not bound"));
+        assertThat(properties.isLog()).isTrue();
+        assertThat(properties.isMapUnderscoreToCamelCase()).isFalse();
+        assertThat(properties.getParallelConnections()).isEqualTo(2);
+        assertThat(properties.getExecuteBatchSize()).isEqualTo(64);
+    }
+
     @Test void startupInitializationCreatesTableAndDeclaredIndex() {
         var properties = new H2Properties();
         properties.setFile(directory.resolve("startup").toString());
         try (var database = new H2Database(properties)) {
             var session = new H2Session(database.dataSource());
-            session.setProperties(new JdbcProperties());
+            session.setProperties(properties);
             session.configure(properties, database.schemaDataSource());
             assertThat(session.createTableSql(User.class))
                     .anyMatch(sql -> sql.startsWith("CREATE TABLE IF NOT EXISTS"))
@@ -65,7 +83,7 @@ class H2SessionTest {
         properties.setFile(directory.resolve("invalid-primary").toString());
         try (var database = new H2Database(properties)) {
             var session = new H2Session(database.dataSource());
-            session.setProperties(new JdbcProperties());
+            session.setProperties(properties);
             session.configure(properties, database.schemaDataSource());
 
             assertThatThrownBy(() -> session.initializeSchema(List.of(TooLongPrimary.class)))
@@ -81,9 +99,9 @@ class H2SessionTest {
         DataSource business = mock(DataSource.class);
         DataSource schema = mock(DataSource.class);
         var properties = new H2Properties();
-        properties.setSchemaMode(H2Properties.SchemaMode.NONE);
+        properties.setSchemaMode(SchemaMode.NONE);
         var session = new H2Session(business);
-        session.setProperties(new JdbcProperties());
+        session.setProperties(properties);
         session.configure(properties, schema);
         session.initializeSchema(List.of(User.class));
         verify(schema, never()).getConnection();
@@ -97,7 +115,7 @@ class H2SessionTest {
             sql.execute("create table \"incremental_user\" (\"id\" varchar(128) not null primary key)");
 
             var session = new H2Session(database.dataSource());
-            session.setProperties(new JdbcProperties());
+            session.setProperties(properties);
             session.configure(properties, database.schemaDataSource());
             session.initializeSchema(List.of(IncrementalUser.class));
 
@@ -112,12 +130,12 @@ class H2SessionTest {
         }
 
         properties.setFile(directory.resolve("validate-only").toString());
-        properties.setSchemaMode(H2Properties.SchemaMode.VALIDATE);
+        properties.setSchemaMode(SchemaMode.VALIDATE);
         try (var database = new H2Database(properties)) {
             var sql = new JdbcTemplate(database.dataSource());
             sql.execute("create table \"incremental_user\" (\"id\" varchar(128) not null primary key)");
             var session = new H2Session(database.dataSource());
-            session.setProperties(new JdbcProperties());
+            session.setProperties(properties);
             session.configure(properties, database.schemaDataSource());
 
             assertThatThrownBy(() -> session.initializeSchema(List.of(IncrementalUser.class)))

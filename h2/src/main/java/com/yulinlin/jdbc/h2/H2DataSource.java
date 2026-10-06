@@ -58,7 +58,7 @@ public final class H2DataSource extends HikariDataSource {
 
         HikariConfig pool = new HikariConfig();
         pool.setDataSource(delegate);
-        pool.setMaximumPoolSize(properties.getMaxConnections());
+        pool.setMaximumPoolSize(properties.getParallelConnections());
         pool.setMinimumIdle(1);
         pool.setPoolName("h2-" + properties.getGroup());
         pool.setConnectionTimeout(Math.max(250L, properties.getConnectionTimeout().toMillis()));
@@ -75,7 +75,7 @@ public final class H2DataSource extends HikariDataSource {
         }
         if (properties.getGroup() == null || properties.getGroup().isBlank()
                 || properties.getUsername() == null || properties.getMode() != H2Properties.Mode.MYSQL
-                || properties.getMaxConnections() < 1 || properties.getBatchSize() < 1
+                || properties.getParallelConnections() < 1 || properties.getExecuteBatchSize() < 1
                 || properties.getConnectionTimeout() == null || properties.getConnectionTimeout().isNegative()
                 || properties.getConnectionTimeout().isZero()
                 || properties.getLockTimeout() == null || properties.getLockTimeout().isNegative()

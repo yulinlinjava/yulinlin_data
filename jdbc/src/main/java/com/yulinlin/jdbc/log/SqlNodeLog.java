@@ -5,10 +5,9 @@ import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.lang.util.DateTime;
-import com.yulinlin.jdbc.JdbcProperties;
+import com.yulinlin.jdbc.session.AbstractJdbcSession;
 import com.yulinlin.jdbc.session.SqlNode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Date;
 import java.util.List;
@@ -16,14 +15,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 public class SqlNodeLog implements LogPrint<SqlNode> {
-
-
-
-
-
-    @Autowired
-    JdbcProperties jdbcProperties;
-
 
     public SqlNodeLog() {
 
@@ -45,39 +36,52 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
 
     @Override
     public void success(long time, ParseResult result) {
+        success(time, result, currentSession());
+    }
 
-        if(!jdbcProperties.isLog()){
+    @Override
+    public void success(long time, ParseResult result, EntitySession session) {
+        if (session instanceof AbstractJdbcSession jdbcSession && !jdbcSession.getProperties().isLog()) {
             return;
         }
         SqlNode request = (SqlNode)result.getRequest();
-
-
-        EntitySession session =  SessionUtil.route().session();
-
-
         log.info("[{}][{}]" +
                         "[{}]\n" +
                         "[{}]\n" +
                         "{}",
-                session.group(),session.cluster(),
+                group(session), cluster(session),
                 time,request.getSql(),format(request));
 
     }
 
     @Override
     public void error(Throwable e, ParseResult result) {
+        error(e, result, currentSession());
+    }
 
-
-        EntitySession session =  SessionUtil.route().session();
+    @Override
+    public void error(Throwable e, ParseResult result, EntitySession session) {
         SqlNode request =(SqlNode) result.getRequest();
 
         log.error("[{}][{}]" +
                         "[{}]\n" +
                         "\n{}",
-                session.group(),session.cluster(),
+                group(session), cluster(session),
                 request.getSql(),format(request));
         log.error("sql异常:"+e.getMessage(),e);
 
+    }
+
+    private EntitySession currentSession() {
+        return SessionUtil.route() == null ? null : SessionUtil.route().session();
+    }
+
+    private String group(EntitySession session) {
+        return session == null ? "jdbc" : session.group();
+    }
+
+    private Object cluster(EntitySession session) {
+        return session == null ? "unknown" : session.cluster();
     }
 
 

@@ -6,6 +6,7 @@ import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.TextTypeEnum;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.sqlite.fixtures.QueryOnly;
 import com.yulinlin.jdbc.sqlite.fixtures.SchemaEntity;
 import org.junit.jupiter.api.Test;
@@ -36,7 +37,14 @@ class SqliteSchemaManagerTest {
     private boolean ensure(java.sql.Connection connection, SqliteSchemaManager manager,
                            Class<?> entity) throws Exception {
         try (var statement = connection.createStatement()) {
-            return manager.ensureTable(connection, entity, true, statement::executeUpdate);
+            return manager.ensureTable(connection, entity, true, SchemaMode.CREATE, statement::executeUpdate);
+        }
+    }
+
+    private boolean ensure(java.sql.Connection connection, SqliteSchemaManager manager,
+                           Class<?> entity, SchemaMode mode) throws Exception {
+        try (var statement = connection.createStatement()) {
+            return manager.ensureTable(connection, entity, true, mode, statement::executeUpdate);
         }
     }
 
@@ -108,11 +116,30 @@ class SqliteSchemaManagerTest {
         }
     }
 
+    @Test void validateModeNeverCreatesMissingTablesOrColumns() throws Exception {
+        try (var source = source(); var connection = source.getConnection()) {
+            var manager = new SqliteSchemaManager();
+            assertThatThrownBy(() -> ensure(connection, manager, SchemaEntity.class, SchemaMode.VALIDATE))
+                    .hasMessageContaining("SQLite table is missing");
+
+            ensure(connection, manager, SchemaEntity.class, SchemaMode.CREATE);
+            assertThatThrownBy(() -> ensure(connection, manager, ExtendedSchemaEntity.class, SchemaMode.VALIDATE))
+                    .hasMessageContaining("new_value");
+            try (var statement = connection.createStatement();
+                 var columns = statement.executeQuery("pragma table_info(schema_entity)")) {
+                while (columns.next()) {
+                    assertThat(columns.getString("name")).isNotEqualTo("new_value");
+                }
+            }
+        }
+    }
+
     @Test void skipsUnmappedJoinAndStatisticsModelsWithoutTouchingConnection() {
         var manager = new SqliteSchemaManager();
         var connection = mock(java.sql.Connection.class);
         for (Class<?> entity : new Class<?>[]{null, Object.class, java.util.Map.class, QueryOnly.class, Statistics.class}) {
-            assertThat(manager.ensureTable(connection, entity, true, sql -> fail("unexpected DDL"))).isFalse();
+            assertThat(manager.ensureTable(connection, entity, true, SchemaMode.CREATE,
+                    sql -> fail("unexpected DDL"))).isFalse();
         }
         verifyNoInteractions(connection);
     }

@@ -3,7 +3,8 @@ package com.yulinlin.jdbc.postgresql;
 import com.yulinlin.jdbc.DataJdbcApplication;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
-import com.yulinlin.jdbc.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaMode;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -18,8 +19,8 @@ import javax.sql.DataSource;
 public class PostgresqlAutoConfiguration {
     @Bean("postgresqlSessionFactory")
     @ConditionalOnMissingBean(name = "postgresqlSessionFactory")
-    public JdbcSessionFactory postgresqlSessionFactory() {
-        return new JdbcSessionFactory("jdbc:postgresql:", PostgresqlSession::new);
+    public JdbcSessionFactory postgresqlSessionFactory(PostgresqlProperties properties) {
+        return new JdbcSessionFactory("jdbc:postgresql:", PostgresqlSession::new, properties);
     }
 
     @Bean("postgresqlSession")
@@ -30,7 +31,7 @@ public class PostgresqlAutoConfiguration {
             PostgresqlProperties properties) {
         PostgresqlSession session = (PostgresqlSession) factory.create(dataSource, "postgresql");
         session.configure(properties);
-        if (properties.getSchemaMode() != PostgresqlProperties.SchemaMode.NONE) {
+        if (properties.getSchemaMode() != SchemaMode.NONE) {
             session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
         }
         return session;

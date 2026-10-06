@@ -1,5 +1,6 @@
 package com.yulinlin.jdbc.postgresql;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.session.JdbcSession;
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -13,7 +14,8 @@ import java.util.List;
 /** Shared JDBC execution with PostgreSQL parsers and driver-specific value handling. */
 public class PostgresqlSession extends JdbcSession {
     private final PostgresqlSchemaManager schemaManager = new PostgresqlSchemaManager();
-    private volatile PostgresqlProperties.SchemaMode schemaMode = PostgresqlProperties.SchemaMode.NONE;
+    private volatile SchemaMode schemaMode = SchemaMode.NONE;
+    private volatile PostgresqlFullTextOptions fullText = PostgresqlFullTextOptions.defaults();
 
     public PostgresqlSession(DataSource dataSource) {
         super(dataSource);
@@ -25,21 +27,24 @@ public class PostgresqlSession extends JdbcSession {
             throw new IllegalArgumentException("Invalid yulinlin.postgresql configuration");
         }
         schemaMode = properties.getSchemaMode();
+        fullText = PostgresqlFullTextOptions.from(properties);
+        setParseManager(new PostgresqlParseManager(fullText));
     }
 
     @Override
     public List<String> createTableSql(Class<?> entityClass) {
-        return schemaManager.createTableSql(entityClass, isMapUnderscoreToCamelCase());
+        return schemaManager.createTableSql(entityClass, isMapUnderscoreToCamelCase(), fullText);
     }
 
     /** Uses a dedicated startup connection, never a business transaction connection. */
     @Override
     public void initializeSchema(Collection<Class<?>> entities) {
-        if (schemaMode == PostgresqlProperties.SchemaMode.NONE || entities == null || entities.isEmpty()) return;
+        if (schemaMode == SchemaMode.NONE
+                || entities == null || entities.isEmpty()) return;
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {
-                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode,
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode, fullText,
                         sql -> executeSchemaSql(statement, sql));
             }
         } catch (RuntimeException error) {

@@ -10,6 +10,7 @@ import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
 import com.yulinlin.data.core.anno.TextTypeEnum;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
@@ -19,8 +20,12 @@ import com.yulinlin.jdbc.schema.TextColumnResolver;
 import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
@@ -33,6 +38,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.TreeMap;
+import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Creates and validates conservative PostgreSQL tables from one schema owner per table. */
@@ -46,7 +52,7 @@ public final class PostgresqlSchemaManager {
 
     private record EntityType(Class<?> type, boolean underscore) { }
     private record Column(String name, StorageType type, boolean primary, int textLength,
-                          boolean validateLength, String description) { }
+                          boolean validateLength, String description, boolean fullText) { }
     private record Table(String schema, String name, List<Column> columns,
                          List<EntityIndexResolver.Definition> indexes) { }
     private record TableRef(String catalog, String schema, String name, String type) { }
@@ -55,14 +61,24 @@ public final class PostgresqlSchemaManager {
     private final Map<EntityType, Optional<Table>> mappings = new ConcurrentHashMap<>();
 
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
-                                            PostgresqlProperties.SchemaMode mode,
+                                            SchemaMode mode,
+                                            SchemaSqlExecutor executor) {
+        return ensureTable(connection, entity, underscore, mode, PostgresqlFullTextOptions.defaults(), executor);
+    }
+
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            SchemaMode mode,
+                                            PostgresqlFullTextOptions fullText,
                                             SchemaSqlExecutor executor) {
         Table table = table(entity, underscore);
-        if (table == null || mode == PostgresqlProperties.SchemaMode.NONE) return false;
+        if (table == null || mode == SchemaMode.NONE) return false;
         try {
+            if (table.columns().stream().anyMatch(Column::fullText)) {
+                validateFullTextConfigurations(connection, fullText);
+            }
             TableRef actual = findTable(connection, table);
             if (actual == null) {
-                if (mode == PostgresqlProperties.SchemaMode.VALIDATE) {
+                if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("PostgreSQL table is missing: " + displayName(table));
                 }
                 create(table, executor);
@@ -78,6 +94,7 @@ public final class PostgresqlSchemaManager {
             ensureColumns(connection, actual, table, mode, executor);
             validate(connection, actual, table);
             ensureIndexes(connection, actual, table, mode, executor);
+            ensureFullTextIndexes(connection, actual, table, mode, fullText, executor);
             return true;
         } catch (SQLException error) {
             throw new IllegalStateException("PostgreSQL schema creation/validation failed for "
@@ -87,8 +104,13 @@ public final class PostgresqlSchemaManager {
 
     /** Returns the exact initial DDL used by PostgresqlSession without touching the database. */
     public List<String> createTableSql(Class<?> entity, boolean underscore) {
+        return createTableSql(entity, underscore, PostgresqlFullTextOptions.defaults());
+    }
+
+    public List<String> createTableSql(Class<?> entity, boolean underscore,
+                                       PostgresqlFullTextOptions fullText) {
         Table table = table(entity, underscore);
-        return table == null ? List.of() : createTableSql(table);
+        return table == null ? List.of() : createTableSql(table, fullText);
     }
 
     private Table table(Class<?> entity, boolean underscore) {
@@ -130,6 +152,11 @@ public final class PostgresqlSchemaManager {
             TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
             boolean primary = meta != null && meta.primaryKey();
             StorageType type = storageType(field.getType(), text);
+            boolean fullText = mapping != null && mapping.fullText();
+            if (fullText && type != StorageType.STRING && type != StorageType.TEXT) {
+                throw new IllegalArgumentException("PostgreSQL full-text index needs a text column: "
+                        + entity.getName() + "." + field.getName());
+            }
             if (primary && type == StorageType.TEXT) {
                 throw new IllegalArgumentException("PostgreSQL large-text column cannot be a primary key: "
                         + table.value() + "." + name);
@@ -140,7 +167,7 @@ public final class PostgresqlSchemaManager {
             }
             int textLength = primary && type == StorageType.STRING && text.length() == 0 ? 128 : text.length();
             Column column = new Column(name, type, primary, textLength,
-                    text.explicitLength(), text.description());
+                    text.explicitLength(), text.description(), fullText);
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
                 throw new IllegalArgumentException("Duplicate PostgreSQL column " + table.value() + "." + name);
             }
@@ -197,10 +224,13 @@ public final class PostgresqlSchemaManager {
         return StorageType.TEXT;
     }
 
-    private static List<String> createTableSql(Table table) {
+    private static List<String> createTableSql(Table table, PostgresqlFullTextOptions fullText) {
         List<String> statements = new ArrayList<>(createBaseTableSql(table));
         for (EntityIndexResolver.Definition index : table.indexes()) {
             statements.add(createIndexSql(table, index));
+        }
+        for (Column column : table.columns()) {
+            if (column.fullText()) statements.add(createFullTextIndexSql(table, column, fullText));
         }
         return List.copyOf(statements);
     }
@@ -251,13 +281,13 @@ public final class PostgresqlSchemaManager {
     }
 
     private static void ensureColumns(Connection connection, TableRef reference, Table table,
-                                      PostgresqlProperties.SchemaMode mode,
+                                      SchemaMode mode,
                                       SchemaSqlExecutor executor) throws SQLException {
         Map<String, Column> actual = readColumns(connection, reference);
         boolean changed = false;
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
-            if (expected.primary() || mode == PostgresqlProperties.SchemaMode.VALIDATE) {
+            if (expected.primary() || mode == SchemaMode.VALIDATE) {
                 throw incompatibleColumn(table, expected, null);
             }
             executor.execute(addColumnSql(table, expected));
@@ -314,7 +344,7 @@ public final class PostgresqlSchemaManager {
                 String name = rows.getString("COLUMN_NAME");
                 actual.put(name.toLowerCase(Locale.ROOT), new Column(name,
                         jdbcStorageType(rows.getInt("DATA_TYPE"), rows.getString("TYPE_NAME")),
-                        primary.contains(name.toLowerCase(Locale.ROOT)), rows.getInt("COLUMN_SIZE"), false, ""));
+                        primary.contains(name.toLowerCase(Locale.ROOT)), rows.getInt("COLUMN_SIZE"), false, "", false));
             }
         }
         return actual;
@@ -326,7 +356,7 @@ public final class PostgresqlSchemaManager {
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
-                                      PostgresqlProperties.SchemaMode mode,
+                                      SchemaMode mode,
                                       SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, reference);
@@ -334,7 +364,7 @@ public final class PostgresqlSchemaManager {
         for (EntityIndexResolver.Definition expected : table.indexes()) {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
-                if (mode == PostgresqlProperties.SchemaMode.VALIDATE) {
+                if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("PostgreSQL index is missing: " + expected.name());
                 }
                 executor.execute(createIndexSql(table, expected));
@@ -351,6 +381,33 @@ public final class PostgresqlSchemaManager {
                     throw new IllegalStateException("PostgreSQL index was not created: " + expected.name());
                 }
                 validateIndex(table, expected, found);
+            }
+        }
+    }
+
+    private static void ensureFullTextIndexes(Connection connection, TableRef reference, Table table,
+                                              SchemaMode mode,
+                                              PostgresqlFullTextOptions fullText,
+                                              SchemaSqlExecutor executor) throws SQLException {
+        List<Column> columns = table.columns().stream().filter(Column::fullText).toList();
+        if (columns.isEmpty()) return;
+        Map<String, ActualIndex> actual = readIndexes(connection, reference);
+        boolean changed = false;
+        for (Column column : columns) {
+            String name = fullTextIndexName(table, column, fullText);
+            if (actual.containsKey(name.toLowerCase(Locale.ROOT))) continue;
+            if (mode == SchemaMode.VALIDATE) {
+                throw new IllegalStateException("PostgreSQL full-text index is missing: " + name);
+            }
+            executor.execute(createFullTextIndexSql(table, column, fullText));
+            changed = true;
+        }
+        if (!changed) return;
+        actual = readIndexes(connection, reference);
+        for (Column column : columns) {
+            String name = fullTextIndexName(table, column, fullText);
+            if (!actual.containsKey(name.toLowerCase(Locale.ROOT))) {
+                throw new IllegalStateException("PostgreSQL full-text index was not created: " + name);
             }
         }
     }
@@ -388,6 +445,52 @@ public final class PostgresqlSchemaManager {
                 .collect(java.util.stream.Collectors.joining(", "));
         return "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
                 + quote(index.name()) + " ON " + qualified(table) + " (" + columns + ")";
+    }
+
+    private static String createFullTextIndexSql(Table table, Column column,
+                                                 PostgresqlFullTextOptions fullText) {
+        return "CREATE INDEX IF NOT EXISTS " + quote(fullTextIndexName(table, column, fullText))
+                + " ON " + qualified(table) + " USING GIN (to_tsvector("
+                + fullText.indexConfigLiteral() + "::regconfig, COALESCE("
+                + quote(column.name()) + ", '')))";
+    }
+
+    private static String fullTextIndexName(Table table, Column column,
+                                            PostgresqlFullTextOptions fullText) {
+        String raw = ("idx_" + table.name() + "_" + column.name() + "_fts_"
+                + sha256(fullText.indexConfig()).substring(0, 8)).toLowerCase(Locale.ROOT);
+        if (raw.length() <= 63) return raw;
+        String suffix = "_" + sha256(raw).substring(0, 8);
+        return raw.substring(0, 63 - suffix.length()) + suffix;
+    }
+
+    private static void validateFullTextConfigurations(Connection connection,
+                                                       PostgresqlFullTextOptions fullText) throws SQLException {
+        Set<String> configs = new java.util.LinkedHashSet<>();
+        configs.add(fullText.indexConfig());
+        configs.add(fullText.queryConfig());
+        try (PreparedStatement statement = connection.prepareStatement("SELECT to_regconfig(?)")) {
+            for (String config : configs) {
+                statement.clearParameters();
+                statement.setString(1, config);
+                try (var rows = statement.executeQuery()) {
+                    if (!rows.next() || rows.getString(1) == null) {
+                        throw new IllegalStateException("PostgreSQL full-text configuration '" + config
+                                + "' is unavailable. Install pg_jieba on the PostgreSQL server, run "
+                                + "CREATE EXTENSION pg_jieba, and verify yulinlin.postgresql.full-text settings");
+                    }
+                }
+            }
+        }
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException("JDK does not provide SHA-256", error);
+        }
     }
 
     private static void validateIndex(Table table, EntityIndexResolver.Definition expected, ActualIndex actual) {

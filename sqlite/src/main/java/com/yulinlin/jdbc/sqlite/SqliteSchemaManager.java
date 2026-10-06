@@ -10,6 +10,7 @@ import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
 import com.yulinlin.data.core.anno.TextTypeEnum;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
@@ -47,12 +48,15 @@ public final class SqliteSchemaManager {
 
     /** Does not close the connection, change autoCommit, or complete the caller's transaction. */
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
-                                            SchemaSqlExecutor executor) {
+                                            SchemaMode mode, SchemaSqlExecutor executor) {
         Table table = table(entity, underscore);
-        if (table == null) return false;
+        if (table == null || mode == SchemaMode.NONE) return false;
         Objects.requireNonNull(connection, "connection");
         try {
             if (!exists(connection, table.name())) {
+                if (mode == SchemaMode.VALIDATE) {
+                    throw new IllegalStateException("SQLite table is missing: " + table.name());
+                }
                 if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
                     throw new IllegalStateException("SQLite table " + table.name()
                             + " is missing; initialize it outside a read-only transaction");
@@ -60,14 +64,21 @@ public final class SqliteSchemaManager {
                 executor.execute(createBaseTableSql(table));
             }
             Map<String, Column> actual = readColumns(connection, table);
-            actual = ensureColumns(connection, table, actual, executor);
+            actual = ensureColumns(connection, table, actual, mode, executor);
             validate(table, actual);
-            ensureIndexes(connection, table, executor);
+            ensureIndexes(connection, table, mode, executor);
             return true;
         } catch (SQLException e) {
             throw new IllegalStateException("SQLite schema creation/validation failed for "
                     + entity.getName() + " (" + table.name() + "): " + e.getMessage(), e);
         }
+    }
+
+    /** @deprecated Use the overload that supplies an explicit schema mode. */
+    @Deprecated
+    public boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                               SchemaSqlExecutor executor) {
+        return ensureTable(connection, entity, underscore, SchemaMode.CREATE, executor);
     }
 
     /** Returns the exact initial DDL used by SqliteSession without touching the database. */
@@ -191,11 +202,13 @@ public final class SqliteSchemaManager {
 
     private static Map<String, Column> ensureColumns(Connection connection, Table table,
                                                      Map<String, Column> actual,
+                                                     SchemaMode mode,
                                                      SchemaSqlExecutor executor) throws SQLException {
         boolean changed = false;
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
             if (expected.primary()) throw incompatibleColumn(table, expected, null);
+            if (mode == SchemaMode.VALIDATE) throw incompatibleColumn(table, expected, null);
             if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
                 throw new IllegalStateException("SQLite column " + table.name() + "." + expected.name()
                         + " is missing; initialize it outside a read-only transaction");
@@ -258,6 +271,7 @@ public final class SqliteSchemaManager {
     }
 
     private static void ensureIndexes(Connection connection, Table table,
+                                      SchemaMode mode,
                                       SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, table.name());
@@ -265,6 +279,9 @@ public final class SqliteSchemaManager {
         for (EntityIndexResolver.Definition expected : table.indexes()) {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
+                if (mode == SchemaMode.VALIDATE) {
+                    throw new IllegalStateException("SQLite index is missing: " + expected.name());
+                }
                 if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
                     throw new IllegalStateException("SQLite index " + expected.name()
                             + " is missing; initialize it outside a read-only transaction");

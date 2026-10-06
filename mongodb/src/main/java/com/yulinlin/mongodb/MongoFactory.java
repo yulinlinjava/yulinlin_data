@@ -38,6 +38,7 @@ public class MongoFactory implements SessionFactory<MongoDatabase> {
     public MongoSession create(MongoDatabase restClient, String group){
 
         MongoSession searchSession =  new MongoSession(restClient);
+        searchSession.setSessionProperties(properties);
 
         searchSession.setCoderManager(coderManager);
         searchSession.setParseManager(parseManager);

@@ -95,12 +95,18 @@ public class AggregationUtil {
     }
     public static List<IDataBuffer> toBufferList(List<Hit> hits, ICoderManager coderManager ) {
 
+        return toBufferList(hits, coderManager, "...");
+    }
+
+    public static List<IDataBuffer> toBufferList(List<Hit> hits, ICoderManager coderManager,
+                                                  String fragmentDelimiter) {
+
         return   hits.stream().map(row -> {
-            return toBuffer(row,coderManager);
+            return toBuffer(row, coderManager, fragmentDelimiter);
         }).collect(Collectors.toList());
 
     }
-    private static IDataBuffer toBuffer( Hit hit,ICoderManager coderManager ){
+    private static IDataBuffer toBuffer(Hit hit, ICoderManager coderManager, String fragmentDelimiter){
         IDataBuffer buffer =coderManager.createDecoderBuffer();
         Collection<Map.Entry<String, JsonData>> entries = hit.fields().entrySet();
         for (Map.Entry<String, JsonData>  entry : entries) {
@@ -111,12 +117,11 @@ public class AggregationUtil {
         }
         Set<Map.Entry<String, List<String>>>  set = hit.highlight().entrySet();
         for (Map.Entry<String, List<String>> entry : set) {
-            buffer.put( entry.getKey(),entry.getValue().get(0));
+            buffer.put(entry.getKey(), String.join(fragmentDelimiter, entry.getValue()));
         }
 
         buffer.put(    "_id",hit.id());
         buffer.put(     "_index",hit.index());
-        buffer.put(     "_type",hit.type());
         buffer.put(    "_score",hit.score());
         return buffer;
     }

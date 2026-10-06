@@ -4,6 +4,7 @@ import com.yulinlin.data.core.cache.DbCache;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.DataJdbcApplication;
 import com.yulinlin.jdbc.session.JdbcSession;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ class SqliteDefaultsTest {
         var properties = new SqliteProperties();
         assertThat(properties.getFile()).isEqualTo("data/local.db");
         assertThat(properties.getGroup()).isEqualTo("sqlite");
+        assertThat(properties.getSchemaMode()).isEqualTo(SchemaMode.CREATE);
     }
 
     @Test void noYamlFilePropertyStillCreatesConfiguredSessionWithoutTouchingDisk() throws Exception {
@@ -38,15 +40,23 @@ class SqliteDefaultsTest {
                 })
                 .withUserConfiguration(Infrastructure.class)
                 .withBean(SqliteDatabase.class, () -> database)
+                .withPropertyValues(
+                        "yulinlin.sqlite.log=true",
+                        "yulinlin.sqlite.map-underscore-to-camel-case=false",
+                        "yulinlin.sqlite.execute-batch-size=64")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     var properties = context.getBean(SqliteProperties.class);
                     assertThat(properties.getFile()).isEqualTo("data/local.db");
                     assertThat(properties.getGroup()).isEqualTo("sqlite");
+                    assertThat(properties.isLog()).isTrue();
+                    assertThat(properties.isMapUnderscoreToCamelCase()).isFalse();
                     var session = context.getBean("sqliteSession", JdbcSession.class);
                     assertThat(session).isExactlyInstanceOf(SqliteSession.class);
                     assertThat(session.group()).isEqualTo("sqlite");
                     assertThat(session.getParallelConnections()).isEqualTo(1);
+                    assertThat(session.getExecuteBatchSize()).isEqualTo(64);
+                    assertThat(session.getProperties()).isSameAs(properties);
                 });
         verify(dataSource, never()).getConnection();
     }

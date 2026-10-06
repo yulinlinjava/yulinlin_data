@@ -18,9 +18,8 @@ public class GteParse implements IParse<Gte> {
         Object value =  condition.getValue();
 
 
-       return   QueryBuilders.range()
-               .field(key)
-                .gte(JsonData.of(value))
+       return QueryBuilders.range()
+               .untyped(range -> range.field(key).gte(JsonData.of(value)))
                .build()._toQuery();
 
 

@@ -1,21 +1,20 @@
 package com.yulinlin.elasticsearch;
 
-import lombok.Data;
-import org.springframework.beans.factory.annotation.Value;
+import com.yulinlin.data.core.session.EntitySessionProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+@ConfigurationProperties("yulinlin.elasticsearch")
+public class ElasticSearchProperties extends EntitySessionProperties {
+    private String url = "http://localhost:9200";
 
-@Data
-@ConfigurationProperties("yulinlin.datasource.elasticsearch")
-public class ElasticSearchProperties {
+    public String getUrl() {
+        return url;
+    }
 
-    @Value("${log:false}")
-    private boolean log;
-
-
-
-    @Value("${mapUnderscoreToCamelCase:true}")
-    private boolean mapUnderscoreToCamelCase;
-
-
+    public void setUrl(String url) {
+        if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+            throw new IllegalArgumentException("yulinlin.elasticsearch.url must start with http:// or https://");
+        }
+        this.url = url;
+    }
 }

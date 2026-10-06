@@ -1,4 +1,4 @@
-yulinlin.datasource.mongodb.log: true
+yulinlin.mongodb.log: true
 spring:
   data:
     mongodb:

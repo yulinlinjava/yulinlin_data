@@ -22,6 +22,10 @@ public interface ISelectWrapper<
 
        R fields(Consumer<C> consumer);
 
+    R highlight(String name);
+
+    R highlight(LambdaPropertyFunction<E> name);
+
 
 
     R lock();

@@ -176,6 +176,17 @@ public abstract class ModelConditionWrapper<
         return (R)this;
     }
 
+    /** Full-text match where supported; otherwise uses the data source's fallback semantics. */
+    public R match(String name, String value){
+        where().match(name,value);
+        return (R)this;
+    }
+
+    public R match(LambdaPropertyFunction<E> name, String value){
+        where().match(name,value);
+        return (R)this;
+    }
+
 
 
     //右模糊

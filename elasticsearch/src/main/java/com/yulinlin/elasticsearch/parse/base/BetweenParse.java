@@ -19,10 +19,9 @@ public class BetweenParse implements IParse<Between> {
 
 
         return QueryBuilders.range()
-                .field(key)
-                .gte(JsonData.of(value[0]))
-                .lte(JsonData.of(value[1]))
-
+                .untyped(range -> range.field(key)
+                        .gte(JsonData.of(value[0]))
+                        .lte(JsonData.of(value[1])))
                 .build()._toQuery();
     }
 

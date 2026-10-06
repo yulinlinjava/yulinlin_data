@@ -9,11 +9,9 @@ import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionListenerManager;
-import com.yulinlin.jdbc.JdbcProperties;
+import com.yulinlin.jdbc.JdbcSessionProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -36,17 +34,11 @@ class JdbcSessionTransactionTest {
         sessions.forEach(session -> session.getThreadPoolExecutor().shutdownNow());
     }
 
-    @Test void defaultFourAndExternalPropertyBinding() {
-        assertThat(new JdbcProperties().getParallelConnections()).isEqualTo(4);
+    @Test void commonDefaultsAndValidation() {
+        assertThat(new JdbcSessionProperties().getParallelConnections()).isEqualTo(4);
         assertThat(session(new Database()).getParallelConnections()).isEqualTo(4);
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(com.yulinlin.jdbc.DataJdbcApplication.class))
-                .withPropertyValues("yulinlin.datasource.jdbc.parallel-connections=2", "yulinlin.datasource.jdbc.execute-batch-size=64")
-                .run(context -> {
-                    assertThat(context.getBean(JdbcProperties.class).getParallelConnections()).isEqualTo(2);
-                    assertThat(context.getBean(JdbcProperties.class).getExecuteBatchSize()).isEqualTo(64);
-                });
-        assertThatThrownBy(() -> new JdbcProperties().setParallelConnections(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new JdbcSessionProperties().setParallelConnections(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new JdbcSessionProperties().setExecuteBatchSize(0)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test void standaloneSessionAutoCommitsAndReleasesWithoutRouter() throws Exception {

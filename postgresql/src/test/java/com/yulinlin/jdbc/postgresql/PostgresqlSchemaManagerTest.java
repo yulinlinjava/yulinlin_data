@@ -1,14 +1,15 @@
 package com.yulinlin.jdbc.postgresql;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinIndex;
 import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinTable;
-import com.yulinlin.jdbc.JdbcProperties;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Types;
 import java.util.ArrayList;
@@ -25,14 +26,16 @@ import static org.mockito.Mockito.*;
 class PostgresqlSchemaManagerTest {
     @Test void sessionPreviewsSchemaQualifiedTableCommentsAndIndexesWithoutAConnection() {
         var session = new PostgresqlSession(null);
-        session.setProperties(new JdbcProperties());
+        session.setProperties(new PostgresqlProperties());
 
         assertThat(session.createTableSql(PreviewUser.class))
                 .anyMatch(sql -> sql.startsWith("CREATE TABLE IF NOT EXISTS \"app\".\"preview_user\""))
                 .anyMatch(sql -> sql.equals(
                         "COMMENT ON COLUMN \"app\".\"preview_user\".\"name\" IS 'Display name'"))
                 .anyMatch(sql -> sql.startsWith(
-                        "CREATE INDEX IF NOT EXISTS \"idx_preview_user_name\" ON \"app\".\"preview_user\""));
+                        "CREATE INDEX IF NOT EXISTS \"idx_preview_user_name\" ON \"app\".\"preview_user\""))
+                .anyMatch(sql -> sql.contains("USING GIN (to_tsvector('jiebacfg'::regconfig")
+                        && sql.contains("COALESCE(\"name\", '')"));
     }
 
     @Test void createModeAddsMissingOrdinaryColumnAndValidateModeDoesNot() throws Exception {
@@ -42,7 +45,7 @@ class PostgresqlSchemaManagerTest {
         var manager = new PostgresqlSchemaManager();
 
         assertThat(manager.ensureTable(connection, IncrementalUser.class, true,
-                PostgresqlProperties.SchemaMode.CREATE, sql -> {
+                SchemaMode.CREATE, sql -> {
                     executed.add(sql);
                     added.set(true);
                 })).isTrue();
@@ -52,8 +55,21 @@ class PostgresqlSchemaManagerTest {
 
         added.set(false);
         assertThatThrownBy(() -> manager.ensureTable(connection, IncrementalUser.class, true,
-                PostgresqlProperties.SchemaMode.VALIDATE, sql -> { throw new AssertionError("unexpected DDL"); }))
+                SchemaMode.VALIDATE, sql -> { throw new AssertionError("unexpected DDL"); }))
                 .hasMessageContaining("nickname");
+    }
+
+    @Test void fullTextSchemaFailsClearlyWhenPgJiebaConfigurationIsMissing() throws Exception {
+        Connection connection = mock(Connection.class);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(connection.prepareStatement("SELECT to_regconfig(?)")).thenReturn(statement);
+        when(statement.executeQuery()).thenAnswer(ignored -> rows(List.of()));
+
+        assertThatThrownBy(() -> new PostgresqlSchemaManager().ensureTable(connection, PreviewUser.class, true,
+                SchemaMode.CREATE, sql -> { throw new AssertionError("unexpected DDL"); }))
+                .hasMessageContaining("pg_jieba")
+                .hasMessageContaining("jiebacfg");
+        verify(statement).setString(1, "jiebacfg");
     }
 
     private static Connection connection(AtomicBoolean added) throws Exception {
@@ -99,7 +115,7 @@ class PostgresqlSchemaManagerTest {
     @JoinIndex(fields = "name")
     static class PreviewUser {
         @JoinMeta(primaryKey = true) String id;
-        @JoinField(description = "Display name") String name;
+        @JoinField(description = "Display name", fullText = true) String name;
     }
 
     @JoinTable(value = "incremental_user", autoSchema = true)

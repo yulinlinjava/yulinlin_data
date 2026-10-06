@@ -10,6 +10,7 @@ import com.yulinlin.data.core.anno.JoinQuery;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
 import com.yulinlin.data.core.anno.TextTypeEnum;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
@@ -65,13 +66,14 @@ public final class H2SchemaManager {
     }
 
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
-                                            H2Properties.SchemaMode mode, SchemaSqlExecutor executor) {
+                                            SchemaMode mode,
+                                            SchemaSqlExecutor executor) {
         Table table = table(entity, underscore);
-        if (table == null || mode == H2Properties.SchemaMode.NONE) return false;
+        if (table == null || mode == SchemaMode.NONE) return false;
         try {
             TableRef actual = findObject(connection, table.name());
             if (actual == null) {
-                if (mode == H2Properties.SchemaMode.VALIDATE) {
+                if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("H2 table is missing: " + table.name());
                 }
                 if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
@@ -238,12 +240,13 @@ public final class H2SchemaManager {
     }
 
     private static void ensureColumns(Connection connection, TableRef reference, Table table,
-                                      H2Properties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+                                      SchemaMode mode,
+                                      SchemaSqlExecutor executor) throws SQLException {
         Map<String, Column> actual = readColumns(connection, reference);
         boolean changed = false;
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
-            if (expected.primary() || mode == H2Properties.SchemaMode.VALIDATE) {
+            if (expected.primary() || mode == SchemaMode.VALIDATE) {
                 throw incompatibleColumn(table, expected, null);
             }
             if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
@@ -317,14 +320,15 @@ public final class H2SchemaManager {
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
-                                      H2Properties.SchemaMode mode, SchemaSqlExecutor executor) throws SQLException {
+                                      SchemaMode mode,
+                                      SchemaSqlExecutor executor) throws SQLException {
         if (table.indexes().isEmpty()) return;
         Map<String, ActualIndex> actual = readIndexes(connection, reference);
         boolean created = false;
         for (EntityIndexResolver.Definition expected : table.indexes()) {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
-                if (mode == H2Properties.SchemaMode.VALIDATE) {
+                if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("H2 index is missing: " + expected.name());
                 }
                 if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {

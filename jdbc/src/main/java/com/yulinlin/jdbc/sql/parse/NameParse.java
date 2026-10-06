@@ -22,7 +22,8 @@ public class NameParse implements IParse<AbstractMetaNode> {
         if (!(node instanceof MetaNode meta)) throw new NoticeException("解析key失败");
         Object value = node instanceof AbstractCondition condition ? condition.getValue() : null;
         if (value != null && (node instanceof com.yulinlin.data.core.node.base.Like
-                || node instanceof com.yulinlin.data.core.node.base.LikeRight)) value = value.toString();
+                || node instanceof com.yulinlin.data.core.node.base.LikeRight
+                || node instanceof com.yulinlin.data.core.node.base.Match)) value = value.toString();
         return resolve(meta.getKey(), params, value);
     }
 

@@ -2,14 +2,11 @@
 package com.yulinlin.elasticsearch;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import co.elastic.clients.json.jackson.JacksonJsonpMapper;
-import co.elastic.clients.transport.ElasticsearchTransport;
-import co.elastic.clients.transport.rest_client.RestClientTransport;
+import com.yulinlin.data.core.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.elasticsearch.log.EsLogPrint;
 import com.yulinlin.elasticsearch.parse.ElasticSearchParseManager;
 import com.yulinlin.elasticsearch.session.ElasticsearchSession;
-import org.apache.http.HttpHost;
-import org.elasticsearch.client.RestClient;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -24,25 +21,15 @@ public class ElasticSearchAutoConfig {
     }
 
     @Bean
-    public ElasticSearchFactory elasticSearchFactory(){
-
-
-        
-        return new ElasticSearchFactory(new ElasticSearchParseManager());
+    public ElasticSearchFactory elasticSearchFactory(ElasticSearchProperties properties){
+        return new ElasticSearchFactory(new ElasticSearchParseManager(properties.getHighlight()));
     }
 
-    @Bean
-    public ElasticsearchClient restClient() {
-
-        RestClient restClient = RestClient.builder(
-                new HttpHost("localhost", 9200)).build();
-        ElasticsearchTransport transport = new RestClientTransport(
-                restClient, new JacksonJsonpMapper());
-
-        ElasticsearchClient client = new ElasticsearchClient(transport);
-
-
-        return client;
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(ElasticsearchClient.class)
+    public ElasticsearchClient restClient(ElasticSearchProperties properties) {
+        // Elasticsearch Java Client 9.x uses Rest5Client through this official factory.
+        return ElasticsearchClient.of(builder -> builder.host(properties.getUrl()));
     }
 
 
@@ -51,8 +38,13 @@ public class ElasticSearchAutoConfig {
     @Bean
     public ElasticsearchSession elasticSearchSession(
             ElasticSearchFactory factory,
-            ElasticsearchClient restClient){
-        return factory.create(restClient,"elasticsearch");
+            ElasticsearchClient restClient,
+            ElasticSearchProperties properties){
+        ElasticsearchSession session = factory.create(restClient,"elasticsearch");
+        if (properties.getSchemaMode() != SchemaMode.NONE) {
+            session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
+        }
+        return session;
     }
 
 }

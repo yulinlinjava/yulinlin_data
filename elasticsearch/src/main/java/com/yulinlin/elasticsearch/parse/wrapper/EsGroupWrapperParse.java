@@ -1,6 +1,5 @@
 package com.yulinlin.elasticsearch.parse.wrapper;
 
-import co.elastic.clients.elasticsearch._types.InlineScript;
 import co.elastic.clients.elasticsearch._types.Script;
 import co.elastic.clients.elasticsearch._types.aggregations.Aggregation;
 import co.elastic.clients.elasticsearch._types.aggregations.AggregationVariant;
@@ -49,15 +48,10 @@ public class EsGroupWrapperParse implements IParse<GroupWrapper> {
         Map<String, String> dict = node.getKeys().stream().collect(Collectors.toMap(row -> row, row -> row));
 
         builder.bucketsPath(s -> s.dict(dict));
-        InlineScript.Builder inlineScript = new InlineScript.Builder();
-        inlineScript.lang("painless");
-        inlineScript.source(node.getJs());
-
-
-
-
-
-        Script script = new Script.Builder().inline(inlineScript.build()).build();
+        Script script = new Script.Builder()
+                .lang("painless")
+                .source(source -> source.scriptString(node.getJs()))
+                .build();
 
         builder.script(script);
 

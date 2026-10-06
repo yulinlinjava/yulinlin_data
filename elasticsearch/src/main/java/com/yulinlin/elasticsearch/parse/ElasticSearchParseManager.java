@@ -1,7 +1,7 @@
 package com.yulinlin.elasticsearch.parse;
 
-import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.parse.SimpParseManager;
+import com.yulinlin.data.core.session.HighlightProperties;
 import com.yulinlin.elasticsearch.parse.base.*;
 import com.yulinlin.elasticsearch.parse.from.StoreParse;
 import com.yulinlin.elasticsearch.parse.group.BucketParse;
@@ -13,7 +13,14 @@ import com.yulinlin.elasticsearch.parse.wrapper.*;
 
 public class ElasticSearchParseManager extends SimpParseManager  {
 
+    public ElasticSearchParseManager() {
+        this(new HighlightProperties());
+    }
 
+    public ElasticSearchParseManager(HighlightProperties highlight) {
+        // SimpParseManager invokes init() first; replace the default select parser with configured options.
+        register(new EsSelectWrapperParse(java.util.Objects.requireNonNull(highlight, "highlight")));
+    }
 
     protected void init(){
 
@@ -32,6 +39,7 @@ public class ElasticSearchParseManager extends SimpParseManager  {
         this.register(new LteParse());
         this.register(new LtParse());
         this.register(new LikeParse());
+        this.register(new MatchParse());
         this.register(new LikeRightParse());
         this.register(new InParse());
         this.register(new BetweenParse());

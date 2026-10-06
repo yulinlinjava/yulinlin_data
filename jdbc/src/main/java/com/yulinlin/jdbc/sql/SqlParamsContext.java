@@ -7,6 +7,7 @@ import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.jdbc.sql.parse.NameParse;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /** Request-local parser and SELECT expressions, never shared between requests or threads. */
 public final class SqlParamsContext implements IParamsContext {
@@ -15,6 +16,7 @@ public final class SqlParamsContext implements IParamsContext {
     private final NameParse nameParse;
     private AliasContent aliases;
     private Map<String, String> expressions;
+    private Map<String, Object> attributes;
 
     public SqlParamsContext(IParamsContext delegate, SqlParseManager parseManager) {
         this.delegate = java.util.Objects.requireNonNull(delegate, "delegate");
@@ -38,6 +40,19 @@ public final class SqlParamsContext implements IParamsContext {
         expressions.put(alias, expression);
     }
     public String selectExpression(String alias) { return expressions == null ? null : expressions.get(alias); }
+    public Object attribute(String key) { return attributes == null ? null : attributes.get(key); }
+    public void attribute(String key, Object value) {
+        if (attributes == null) attributes = new HashMap<>();
+        attributes.put(key, value);
+    }
+    @SuppressWarnings("unchecked")
+    public <T> T computeAttribute(String key, Supplier<T> supplier) {
+        Object current = attribute(key);
+        if (current != null) return (T) current;
+        T value = supplier.get();
+        attribute(key, value);
+        return value;
+    }
     @Override public String putGetKey(Object value) { return delegate.putGetKey(value); }
     @Override public void put(String key, Object value) { delegate.put(key, value); }
     @Override public IDataBuffer getDataBuffer() { return delegate.getDataBuffer(); }
@@ -55,5 +70,6 @@ public final class SqlParamsContext implements IParamsContext {
     }
     @Override public RequestType getRequestType() { return delegate.getRequestType(); }
     @Override public Object getRoot() { return delegate.getRoot(); }
+    @Override public Class<?> getSourceClass() { return delegate.getSourceClass(); }
     @Override public Object parse(String path) { return delegate.parse(path); }
 }

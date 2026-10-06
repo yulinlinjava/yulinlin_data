@@ -34,6 +34,7 @@ public class MongoParseManager extends SimpParseManager  {
         this.register(new LteParse());
         this.register(new LtParse());
         this.register(new LikeParse());
+        this.register(new MatchParse());
         this.register(new LikeRightParse());
         this.register(new InParse());
         this.register(new BetweenParse());

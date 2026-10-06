@@ -9,6 +9,8 @@ public class AsField extends MetaNode implements INode {
 
     private String alias;
 
+    private boolean highlight;
+
     public AsField(Object name, String alias) {
         super(name);
         this.alias = alias;
@@ -16,6 +18,14 @@ public class AsField extends MetaNode implements INode {
 
     public String getAlias() {
         return alias;
+    }
+
+    public boolean isHighlight() {
+        return highlight;
+    }
+
+    public void setHighlight(boolean highlight) {
+        this.highlight = highlight;
     }
 
 

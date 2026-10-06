@@ -4,7 +4,7 @@ import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.session.RequestType;
-import com.yulinlin.jdbc.JdbcProperties;
+import com.yulinlin.jdbc.JdbcSessionProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -182,11 +182,11 @@ class JdbcBatchExecutionTest {
     }
 
     @Test void invalidConfigurationAndActiveTransactionReconfigurationAreRejected() throws Exception {
-        assertThat(new JdbcProperties().getExecuteBatchSize()).isEqualTo(256);
-        assertThatThrownBy(() -> new JdbcProperties().setExecuteBatchSize(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(new JdbcSessionProperties().getExecuteBatchSize()).isEqualTo(256);
+        assertThatThrownBy(() -> new JdbcSessionProperties().setExecuteBatchSize(0)).isInstanceOf(IllegalArgumentException.class);
         Database db = new Database(); RecordingSession session = session(db, 0);
         assertThatThrownBy(() -> session.setExecuteBatchSize(-1)).isInstanceOf(IllegalArgumentException.class);
-        JdbcProperties properties = new JdbcProperties(); properties.setExecuteBatchSize(64); properties.setParallelConnections(2);
+        JdbcSessionProperties properties = new JdbcSessionProperties(); properties.setExecuteBatchSize(64); properties.setParallelConnections(2);
         session.setProperties(properties);
         assertThat(session.getExecuteBatchSize()).isEqualTo(64);
         assertThat(session.getParallelConnections()).isEqualTo(2);

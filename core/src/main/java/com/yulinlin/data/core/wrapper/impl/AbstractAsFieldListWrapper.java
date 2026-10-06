@@ -33,6 +33,8 @@ public abstract class AbstractAsFieldListWrapper<E,R extends AbstractAsFieldList
     public R field(String name, String alias) {
 
         AsField asField = new AsField(name, alias);
+        AsField existing = map.get(name);
+        if (existing != null) asField.setHighlight(existing.isHighlight());
         asField.put(getMetaAndReset());
         map.put(name,asField);
         return (R)this;
@@ -44,8 +46,25 @@ public abstract class AbstractAsFieldListWrapper<E,R extends AbstractAsFieldList
     @Override
     public R field(LambdaPropertyFunction<E> name, String alias) {
         AsField asField = new AsField(name, alias);
+        AsField existing = map.get(asField.getKey());
+        if (existing != null) asField.setHighlight(existing.isHighlight());
         asField.put(getMetaAndReset());
         map.put(asField.getKey(),asField);
+        return (R)this;
+    }
+
+    @Override
+    public R highlight(String name) {
+        AsField field = map.computeIfAbsent(name, key -> new AsField(key, key));
+        field.setHighlight(true);
+        return (R)this;
+    }
+
+    @Override
+    public R highlight(LambdaPropertyFunction<E> name) {
+        AsField candidate = new AsField(name, "");
+        AsField field = map.computeIfAbsent(candidate.getKey(), key -> new AsField(name, key));
+        field.setHighlight(true);
         return (R)this;
     }
 

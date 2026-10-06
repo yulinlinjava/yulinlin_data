@@ -70,7 +70,7 @@ public class ElasticSearchApplicationTests {
 
         Aggregation.Builder builder = new Aggregation.Builder();
         Aggregation build = builder.terms(f -> {
-            return f.name("job").field("job");
+            return f.field("job");
         })
 
                 .aggregations("avg",f ->f.cardinality( s -> s.field("avg")))

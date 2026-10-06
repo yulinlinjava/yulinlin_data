@@ -104,13 +104,12 @@ public class LocalDatabaseWriteBenchmark {
                         "yulinlin.sqlite.schema-packages=com.yulinlin.admin.benchmark",
                         "yulinlin.h2.file=" + h2File,
                         "yulinlin.h2.group=" + H2_GROUP,
-                        "yulinlin.h2.max-connections=" + businessThreads,
-                        "yulinlin.h2.batch-size=256",
+                        "yulinlin.h2.parallel-connections=" + businessThreads,
+                        "yulinlin.h2.execute-batch-size=256",
                         "yulinlin.h2.schema-mode=CREATE",
                         "yulinlin.h2.schema-packages=com.yulinlin.admin.benchmark",
                         "yulinlin.h2.auto-server=false",
-                        "yulinlin.datasource.parallel-connections=" + businessThreads,
-                        "yulinlin.datasource.execute-batch-size=256")
+                        "yulinlin.sqlite.execute-batch-size=256")
                 .run();
 
         List<WriteRow> rows = createRows(size);

@@ -1,5 +1,6 @@
 package com.yulinlin.jdbc.mysql;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.session.JdbcSession;
 
 import javax.sql.DataSource;
@@ -11,7 +12,7 @@ import java.util.List;
 /** MySQL execution plus optional startup-only schema creation/validation. */
 public class MysqlSession extends JdbcSession {
     private final MysqlSchemaManager schemaManager = new MysqlSchemaManager();
-    private volatile MysqlProperties.SchemaMode schemaMode = MysqlProperties.SchemaMode.NONE;
+    private volatile SchemaMode schemaMode = SchemaMode.NONE;
 
     public MysqlSession(DataSource dataSource) {
         super(dataSource);
@@ -33,7 +34,8 @@ public class MysqlSession extends JdbcSession {
     /** Uses a dedicated startup connection, never a business transaction connection. */
     @Override
     public void initializeSchema(Collection<Class<?>> entities) {
-        if (schemaMode == MysqlProperties.SchemaMode.NONE || entities == null || entities.isEmpty()) return;
+        if (schemaMode == SchemaMode.NONE
+                || entities == null || entities.isEmpty()) return;
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {

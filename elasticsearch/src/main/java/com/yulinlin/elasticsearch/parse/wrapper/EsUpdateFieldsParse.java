@@ -1,7 +1,7 @@
 package com.yulinlin.elasticsearch.parse.wrapper;
 
-import co.elastic.clients.elasticsearch._types.InlineScript;
 import co.elastic.clients.elasticsearch._types.Script;
+import co.elastic.clients.json.JsonData;
 import com.yulinlin.data.core.anno.KeyEnum;
 import com.yulinlin.data.core.node.atomic.AtomicValue;
 import com.yulinlin.data.core.parse.IParamsContext;
@@ -20,7 +20,7 @@ public class EsUpdateFieldsParse implements IParse<UpdateFieldsWrapper> {
     public Script parse(UpdateFieldsWrapper condition, IParamsContext params, IParseManager parseManager) {
 
 
-        Map map = new LinkedHashMap();
+        Map<String, JsonData> map = new LinkedHashMap<>();
         String   js="";
 
 
@@ -35,7 +35,7 @@ public class EsUpdateFieldsParse implements IParse<UpdateFieldsWrapper> {
 
             Object value = keyValue.getValue();
 
-            map.put(name,value);
+            map.put(name, JsonData.of(value));
 
 
             AtomicValue atomicValue =keyValue;
@@ -49,11 +49,12 @@ public class EsUpdateFieldsParse implements IParse<UpdateFieldsWrapper> {
 
         }
 
-        InlineScript.Builder inlineScript = new InlineScript.Builder();
-        inlineScript.lang("painless");
-        inlineScript.source(js);
-        inlineScript.params(map);
-        Script script = new Script.Builder().inline(inlineScript.build()).build();
+        String source = js;
+        Script script = new Script.Builder()
+                .lang("painless")
+                .source(scriptSource -> scriptSource.scriptString(source))
+                .params(map)
+                .build();
 
 
         return script;

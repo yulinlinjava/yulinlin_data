@@ -21,6 +21,7 @@
 - MySQL ORM：starter + mysql。
 - 本地 SQLite：starter + sqlite，默认文件 data/local.db、group 为 sqlite，单写连接；适合单文件和可串行写入。
 - 本地 H2：starter + h2，默认数据库基路径 data/local、group 为 h2，默认最多 4 个连接；适合多线程小批量写入。SQLite/H2 可在启动时递归扫描配置包，为显式 `autoSchema=true` 的完整实体创建表、文本列说明与 `JoinIndex`；MySQL 也可启用同一机制。字符串主键默认且最多 128 字符。`autoSchema` 默认 false，CRUD 阶段不再根据 `fromClass` 执行 DDL；简要实测见[第一专题](doc/01-接入与数据源.md#sqliteh2-选型)。
+- PostgreSQL 可用 `@JoinField(fullText=true)`、`match()` 和 `highlight()` 接入 pg_jieba 中文分词、GIN 索引与原字段高亮；其他 SQL 数据源保持 LIKE/原字段兼容语义。
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆和 JSON：lang。
 - 接口报文加密：security；当前提供显式注解启用的 AES-256-GCM JSON 加解密。

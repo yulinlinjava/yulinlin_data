@@ -26,6 +26,8 @@ MySQL、SQLite、H2 的自动 Schema 都是启动行为。分别配置 yulinlin.
 
 JoinField.textLength=n 声明自动 Schema 的 VARCHAR 字符上限，textType=text 声明大文本，description 描述列用途。字符串主键默认生成 VARCHAR(128)，显式长度不能超过 128；大文本不能作为主键或框架自动索引。MySQL/H2 为新表写入列注释，SQLite 忽略注释且不强制 VARCHAR 长度。这些选项不改变运行期编解码，也不迁移已有列。
 
+PostgreSQL 中文全文检索使用 @JoinField(fullText=true) 声明字段，match(field, keyword) 生成 pg_jieba tsvector/tsquery 条件，highlight(field) 将 ts_headline 结果写回原字段。服务器必须预装并启用 pg_jieba；默认配置名为 jiebacfg/jiebaqry，专属分词和摘要长度在 yulinlin.postgresql.full-text，共用高亮标签与片段设置在各模块的 highlight 下。MySQL/SQLite/H2 忽略全文索引声明，match 退化为 LIKE，highlight 返回原字段；Elasticsearch 9.5.4 使用 Rest5Client、原生 MatchQuery 和公共高亮配置。
+
 EntitySession.createTableSql(Entity.class) 无连接地预览当前 Session 方言的建表、注释和索引 SQL；initializeSchema(...) 才实际初始化。MySQL/H2/SQLite 启动扫描使用同一入口，执行前以 INFO 输出 [group][schema] DDL，因此预览与实际执行共用生成逻辑。schema-mode=NONE 只跳过自动初始化，不影响 SQL 预览。
 
 SQLite 配置扫描包后启动即创建缺失结构。H2 默认 schema-mode=CREATE，MySQL 为兼容现有项目默认 NONE；MySQL 要自动建表需显式改为 CREATE。VALIDATE 只校验，NONE 不处理。H2/MySQL 使用独立启动连接，SQLite 在会话初始化时完成；DDL 不属于后续业务事务。

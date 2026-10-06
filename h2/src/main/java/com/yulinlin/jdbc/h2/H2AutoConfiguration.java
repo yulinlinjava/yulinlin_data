@@ -3,7 +3,8 @@ package com.yulinlin.jdbc.h2;
 import com.yulinlin.jdbc.DataJdbcApplication;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
-import com.yulinlin.jdbc.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaMode;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -27,8 +28,8 @@ public class H2AutoConfiguration {
 
     @Bean("h2SessionFactory")
     @ConditionalOnMissingBean(name = "h2SessionFactory")
-    public JdbcSessionFactory h2SessionFactory() {
-        return new JdbcSessionFactory("jdbc:h2:", H2Session::new);
+    public JdbcSessionFactory h2SessionFactory(H2Properties properties) {
+        return new JdbcSessionFactory("jdbc:h2:", H2Session::new, properties);
     }
 
     @Bean("h2Session")
@@ -37,7 +38,7 @@ public class H2AutoConfiguration {
                                  H2Properties properties, H2Database database) {
         H2Session session = (H2Session) factory.create(database.dataSource(), properties.getGroup());
         session.configure(properties, database.schemaDataSource());
-        if (properties.getSchemaMode() != H2Properties.SchemaMode.NONE) {
+        if (properties.getSchemaMode() != SchemaMode.NONE) {
             session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
         }
         return session;

@@ -1,8 +1,9 @@
 package com.yulinlin.jdbc.sqlite;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
-import com.yulinlin.jdbc.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaEntityScanner;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -27,14 +28,18 @@ public class SqliteAutoConfiguration {
 
     @Bean("sqliteSessionFactory")
     @ConditionalOnMissingBean(name = "sqliteSessionFactory")
-    public JdbcSessionFactory sqliteSessionFactory() { return new JdbcSessionFactory("jdbc:sqlite:", SqliteSession::new); }
+    public JdbcSessionFactory sqliteSessionFactory(SqliteProperties properties) {
+        return new JdbcSessionFactory("jdbc:sqlite:", SqliteSession::new, properties);
+    }
 
     @Bean("sqliteSession")
     public JdbcSession sqliteSession(@Qualifier("sqliteSessionFactory") JdbcSessionFactory factory, SqliteProperties properties,
                                       SqliteDatabase database) {
         SqliteSession session = (SqliteSession) factory.create(database.dataSource(), properties.getGroup());
-        session.setParallelConnections(1); // WAL still permits only one simultaneous writer per file.
-        session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
+        session.configure(properties);
+        if (properties.getSchemaMode() != SchemaMode.NONE) {
+            session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
+        }
         return session;
     }
 

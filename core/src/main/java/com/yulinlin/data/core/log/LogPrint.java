@@ -2,6 +2,7 @@ package com.yulinlin.data.core.log;
 
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.parse.ParseResult;
+import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.lang.reflection.GenericUtil;
 
 //日志打印对象
@@ -11,8 +12,18 @@ public interface LogPrint<E> {
     //执行成功
     void success(long time,ParseResult request);
 
+    /** Session-aware hook; existing log implementations keep working through the default delegate. */
+    default void success(long time, ParseResult request, EntitySession session) {
+        success(time, request);
+    }
+
     //执行失败
     void error(Throwable e,  ParseResult request);
+
+    /** Session-aware hook; existing log implementations keep working through the default delegate. */
+    default void error(Throwable e, ParseResult request, EntitySession session) {
+        error(e, request);
+    }
 
      default boolean isHandle( ParseResult result){
          Class<?> generic = GenericUtil.getGeneric(this.getClass(), LogPrint.class, 0);

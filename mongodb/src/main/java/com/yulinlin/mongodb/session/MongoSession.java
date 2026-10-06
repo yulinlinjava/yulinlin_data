@@ -41,13 +41,6 @@ public class MongoSession extends AbstractSession  {
     }
 
     @Override
-    protected boolean isMapUnderscoreToCamelCase() {
-        return true;
-    }
-
-
-
-    @Override
     protected Integer executeUpdate(List<ParseResult> list, RequestType requestType) {
 
         List<ParseResult> results = (List)list;

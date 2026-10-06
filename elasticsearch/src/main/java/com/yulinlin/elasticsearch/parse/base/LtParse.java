@@ -16,9 +16,8 @@ public class LtParse implements IParse<Lt> {
 
         String key =AliasUtil.parse(condition,params);
         Object value =  condition.getValue();
-        return   QueryBuilders.range()
-                .field(key)
-                .lt(JsonData.of(value))
+        return QueryBuilders.range()
+                .untyped(range -> range.field(key).lt(JsonData.of(value)))
                 .build()._toQuery();
 
 

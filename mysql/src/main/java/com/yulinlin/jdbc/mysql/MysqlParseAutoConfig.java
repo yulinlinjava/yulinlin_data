@@ -3,7 +3,8 @@ package com.yulinlin.jdbc.mysql;
 import com.yulinlin.jdbc.DataJdbcApplication;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
-import com.yulinlin.jdbc.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaEntityScanner;
+import com.yulinlin.data.core.schema.SchemaMode;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -18,8 +19,8 @@ import javax.sql.DataSource;
 public class MysqlParseAutoConfig {
     @Bean("mysqlSessionFactory")
     @ConditionalOnMissingBean(name = "mysqlSessionFactory")
-    public JdbcSessionFactory mysqlSessionFactory() {
-        return new JdbcSessionFactory("jdbc:mysql:", MysqlSession::new);
+    public JdbcSessionFactory mysqlSessionFactory(MysqlProperties properties) {
+        return new JdbcSessionFactory("jdbc:mysql:", MysqlSession::new, properties);
     }
 
     @Bean("mysqlSession")
@@ -30,7 +31,7 @@ public class MysqlParseAutoConfig {
             MysqlProperties properties) {
         MysqlSession session = (MysqlSession) factory.create(dataSource, "mysql");
         session.configure(properties);
-        if (properties.getSchemaMode() != MysqlProperties.SchemaMode.NONE) {
+        if (properties.getSchemaMode() != SchemaMode.NONE) {
             session.initializeSchema(SchemaEntityScanner.scan(properties.getSchemaPackages()));
         }
         return session;

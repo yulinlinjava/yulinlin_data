@@ -50,8 +50,8 @@ spring:
 yulinlin:
   datasource:
     default-group: mysql
-    log: true
   mysql:
+    log: true
     schema-mode: CREATE
     schema-packages:
       - "com.yulinlin.admin"

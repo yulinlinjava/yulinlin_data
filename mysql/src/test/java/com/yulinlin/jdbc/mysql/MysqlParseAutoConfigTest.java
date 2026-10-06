@@ -1,5 +1,6 @@
 package com.yulinlin.jdbc.mysql;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.core.cache.DbCache;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
@@ -28,12 +29,24 @@ class MysqlParseAutoConfigTest {
     }
 
     @Test void mysqlModuleCreatesNamedSessionWithoutBorrowingConnection() {
-        runner().withUserConfiguration(PrimaryDataSource.class).run(context -> {
+        runner().withUserConfiguration(PrimaryDataSource.class)
+                .withPropertyValues(
+                        "yulinlin.mysql.log=true",
+                        "yulinlin.mysql.map-underscore-to-camel-case=false",
+                        "yulinlin.mysql.parallel-connections=2",
+                        "yulinlin.mysql.execute-batch-size=64")
+                .run(context -> {
             assertThat(context).hasNotFailed().hasBean("mysqlSessionFactory").hasBean("mysqlSession");
             var session = context.getBean("mysqlSession", JdbcSession.class);
+            var properties = context.getBean(MysqlProperties.class);
             assertThat(session).isExactlyInstanceOf(MysqlSession.class);
             assertThat(session.getParseManager()).isExactlyInstanceOf(MysqlParseManager.class);
             assertThat(session.group()).isEqualTo("mysql");
+            assertThat(properties.isLog()).isTrue();
+            assertThat(properties.isMapUnderscoreToCamelCase()).isFalse();
+            assertThat(session.getProperties()).isSameAs(properties);
+            assertThat(session.getParallelConnections()).isEqualTo(2);
+            assertThat(session.getExecuteBatchSize()).isEqualTo(64);
             assertThat(context).doesNotHaveBean("jdbcSession");
             assertThat(context.getBean(HikariDataSource.class).getHikariPoolMXBean()).isNull();
         });
@@ -55,7 +68,7 @@ class MysqlParseAutoConfigTest {
 
     @Test void schemaCreationIsOptInAndDoesNotBorrowAConnectionByDefault() {
         var properties = new MysqlProperties();
-        assertThat(properties.getSchemaMode()).isEqualTo(MysqlProperties.SchemaMode.NONE);
+        assertThat(properties.getSchemaMode()).isEqualTo(SchemaMode.NONE);
         assertThat(properties.getSchemaPackages()).isEmpty();
     }
 

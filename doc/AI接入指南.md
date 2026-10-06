@@ -70,6 +70,10 @@ spring:
 
 yulinlin:
   mysql:
+    log: true
+    map-underscore-to-camel-case: true
+    parallel-connections: 4
+    execute-batch-size: 256
     schema-mode: CREATE
     schema-packages:
       - demo.domain
@@ -101,17 +105,21 @@ yulinlin:
   sqlite:
     file: data/app.db
     group: sqlite
+    log: true
+    map-underscore-to-camel-case: true
+    execute-batch-size: 256
     busy-timeout: 5000
     synchronous: NORMAL
+    schema-mode: CREATE
     schema-packages:
       - demo.domain
 ```
 
-启动时创建父目录与文件，启用 WAL、外键约束和单连接池，然后递归扫描 `schema-packages` 并创建/校验业务表。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
+启动时创建父目录与文件，启用 WAL、外键约束和单连接池。SQLite 的 `schema-mode` 默认 `CREATE`：递归扫描 `schema-packages` 并创建缺失结构；`VALIDATE` 只校验；`NONE` 完全跳过扫描。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
 
 #### 启动扫描与表结构拥有者
 
-MySQL、PostgreSQL、SQLite 和 H2 共用相同的扫描规则。每个配置包都会递归扫描子包，但只处理显式声明 `@JoinTable(..., autoSchema = true)` 的具体普通单表类。`autoSchema` 默认 `false`；普通查询实体、DTO、接口、抽象类、JOIN 模型和统计模型不参与。未配置扫描包时也不扫描任何类。
+MySQL、PostgreSQL、SQLite、H2 和 Elasticsearch 共用 core 中相同的扫描规则。每个配置包都会递归扫描子包，但只处理显式声明 `@JoinTable(..., autoSchema = true)` 的具体普通结构类。`autoSchema` 默认 `false`；普通查询实体、DTO、接口、抽象类、JOIN 模型和统计模型不参与。未配置扫描包时也不扫描任何类。
 
 包配置支持通配符：`*` 只匹配一级包，`**` 匹配零到任意多级包；匹配到的包仍会递归扫描子包。建议在 YAML 中加引号。例如 `"com.example.*.*.local"` 会匹配 `com.example` 与 `local` 之间恰好两级的目录，而 `"com.example.**.local"` 允许中间为任意层级。只允许完整包段使用通配符，`jdbc*`、`***` 和空包段会在启动时报配置错误。多个配置项命中的同一个类会自动去重。
 
@@ -181,7 +189,7 @@ List<String> ddl = mysqlSession.createTableSql(DemoUser.class);
 ddl.forEach(System.out::println);
 ```
 
-`initializeSchema(Collection<Class<?>>)` 才执行初始化。MySQL、PostgreSQL、H2、SQLite 的启动扫描调用该 Session 接口；Session 自己管理连接和 Statement，并在执行每条语句前以 INFO 输出 `[group][schema]` 和完整 DDL。预览和实际初始化共用相同的 SQL 生成函数。`schema-mode=NONE` 会跳过自动初始化，但不妨碍手动调用 `createTableSql` 预览。
+`initializeSchema(Collection<Class<?>>)` 才执行初始化。MySQL、PostgreSQL、H2、SQLite 和 Elasticsearch 的启动扫描调用该 Session 接口；JDBC Session 自己管理连接和 Statement，并在执行每条语句前以 INFO 输出 `[group][schema]` 和完整 DDL。预览和实际初始化共用相同的结构描述函数。`schema-mode=NONE` 会跳过自动初始化，但不妨碍手动调用 `createTableSql` 预览。
 
 #### Schema 边界
 
@@ -226,10 +234,12 @@ yulinlin:
     username: sa
     password: ""
     mode: MYSQL
-    max-connections: 4
+    log: true
+    map-underscore-to-camel-case: true
+    parallel-connections: 4
     connection-timeout: 10s
     lock-timeout: 5s
-    batch-size: 256
+    execute-batch-size: 256
     schema-mode: CREATE
     schema-packages:
       - demo.domain
@@ -251,7 +261,7 @@ H2 在 Session Bean 初始化时扫描配置包。schema-mode 的含义是：CRE
 
 H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
 
-H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 max-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
+H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 parallel-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
 
 #### SQLite/H2 选型
 
@@ -307,9 +317,23 @@ spring:
 
 yulinlin:
   postgresql:
+    log: true
+    map-underscore-to-camel-case: true
+    parallel-connections: 4
+    execute-batch-size: 256
     schema-mode: CREATE
     schema-packages:
       - demo.domain
+    full-text:
+      index-config: jiebacfg
+      query-config: jiebaqry
+      max-words: 40
+      min-words: 15
+    highlight:
+      start-tag: __HL_START__
+      end-tag: __HL_END__
+      max-fragments: 2
+      fragment-delimiter: "..."
 ```
 
 模块创建 `postgresqlSessionFactory` 和 `postgresqlSession`，默认 group 为 `postgresql`，实际会话类型为 PostgresqlSession。`schema-mode` 默认 `NONE`；设为 `CREATE` 后会扫描实体并自动创建缺失表、普通列和声明索引，`VALIDATE` 只校验。`@JoinTable` 可使用普通表名，也可使用 `schema.table`，两段都会独立引用。
@@ -322,6 +346,42 @@ JSON 读取支持合法 JSON 的路径，例如 `payload->profile->name`；数�
 
 JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream、bytea/oid 等二进制对象；需要保存时应先由明确的编解码策略转成文本，或把文件放到对象存储后只保存地址。原生布尔列保留 false/NULL；除布尔列外结果大多沿用字符串解码，不能推定 timestamptz 等扩展类型完整往返已验证。
 
+#### PostgreSQL 中文全文检索
+
+全文检索是 PostgreSQL 模块的可选能力，中文分词依赖数据库服务器已安装 `pg_jieba`。框架不会下载或安装 PostgreSQL 扩展二进制；运维先按服务器版本安装插件，再由有权限的账号执行：
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_jieba;
+```
+
+默认索引配置是 `jiebacfg`，查询配置是 `jiebaqry`。只有结构拥有者实体上显式声明 `@JoinField(fullText = true)` 的文本列才生成 GIN 表达式索引。`schema-mode=CREATE` 会创建缺失索引，`VALIDATE` 只校验；初始化遇到配置不存在时会直接说明需要安装/启用 pg_jieba。修改 index-config 会使用新的索引名称创建新索引，旧索引不会自动删除。
+
+`index-config` 同时用于 `to_tsvector`、GIN 索引和 `ts_headline`，不能随意设置为不同分词配置；`query-config` 用于 `websearch_to_tsquery`。`max-words/min-words` 是 PostgreSQL 专属摘要长度；高亮标签、片段数和分隔符来自所有 EntitySession 共用的 `highlight` 配置，并作为 JDBC 参数绑定，不拼接用户输入。默认标记不是 HTML，前端可安全地按 `__HL_START__` / `__HL_END__` 转义后渲染；若改成 `<mark>`，仍须遵循项目的 XSS 输出策略。查询用法见[全文匹配与高亮](02-CRUD与统计分析.md#全文匹配与高亮)。
+
+MySQL、SQLite、H2 当前不会创建全文索引：`fullText=true` 被忽略，`match()` 退化为包含式 LIKE，`highlight()` 返回原字段。这保证同一业务调用可以运行，但不代表大表查询具有全文检索性能。
+
+### Elasticsearch 结构初始化
+
+Elasticsearch 与 JDBC 模块复用 core 的实体扫描和 Schema 配置。默认 `schema-mode=NONE`，不会访问或修改索引；启用时配置：
+
+```yaml
+yulinlin:
+  elasticsearch:
+    url: http://localhost:9200
+    log: true
+    map-underscore-to-camel-case: true
+    schema-mode: CREATE
+    schema-packages:
+      - com.example.search.entity
+    highlight:
+      start-tag: "<mark>"
+      end-tag: "</mark>"
+      max-fragments: 2
+      fragment-delimiter: "..."
+```
+
+模块使用 Elasticsearch Java Client `9.5.4` 和其默认 `Rest5Client`。`CREATE` 会创建缺失索引和基础 Mapping，并给已有索引补充缺失字段；`VALIDATE` 只检查索引、字段和字段类型，不修改结构。普通字符串映射为 `keyword`，`@JoinField(fullText = true)` 或 `textType = text` 映射为 `text`；复杂 JSON 对象保留 Elasticsearch 动态映射。已存在字段类型不一致时不会强制修改，而是要求手工迁移索引。查询调用 `.highlight(field)` 后使用公共标签与片段数，并按 `fragment-delimiter` 合并返回的多个片段到原字段。
+
 ### 多数据源注册
 
 三个名字不要混用：
@@ -332,7 +392,7 @@ JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream
 | Session Bean 名 | 容器管理会话对象 |
 | group | 框架运行请求时选库 |
 
-工厂 `create(dataSource, group)` 返回已配置的 Session，但不注册路由。把它声明为 EntitySession Bean，core 就会收集到 RouteSession；无需在 Bean 创建方法中反向注入 RouteSession。
+工厂 `create(dataSource, group)` 返回已配置的 Session，并继承该工厂所属模块的配置，但不注册路由。把它声明为 EntitySession Bean，core 就会收集到 RouteSession；无需在 Bean 创建方法中反向注入 RouteSession。某个同类 Session 需要独立参数时，可调用 `create(dataSource, group, properties)` 显式覆盖。
 
 #### 两个 MySQL 数据源
 
@@ -454,32 +514,44 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | yulinlin.datasource.default-group | 未设置 | 单组自动；多组指定默认 |
+| yulinlin.`<module>`.log | false | 当前模块 SQL 成功日志；module 为 mysql、postgresql、sqlite 或 h2 |
+| yulinlin.`<module>`.map-underscore-to-camel-case | true | 当前模块下划线与驼峰映射 |
+| yulinlin.`<module>`.parallel-connections | 4 | 当前模块每框架事务连接上限；SQLite 最终固定为 1 |
+| yulinlin.`<module>`.execute-batch-size | 256 | 当前模块一次 executeBatch 的行数，不是 commit |
 | yulinlin.mysql.schema-mode | NONE | CREATE、VALIDATE 或 NONE；默认不改生产结构 |
 | yulinlin.mysql.schema-packages | 空 | MySQL 启动递归扫描包列表 |
 | yulinlin.postgresql.schema-mode | NONE | CREATE、VALIDATE 或 NONE；默认不改生产结构 |
 | yulinlin.postgresql.schema-packages | 空 | PostgreSQL 启动递归扫描包列表 |
+| yulinlin.postgresql.full-text.index-config | jiebacfg | PostgreSQL 建索引、匹配和高亮使用的分词配置 |
+| yulinlin.postgresql.full-text.query-config | jiebaqry | PostgreSQL 查询分词配置 |
+| yulinlin.postgresql.full-text.max-words/min-words | 40 / 15 | PostgreSQL ts_headline 摘要长度 |
+| yulinlin.`<module>`.highlight.start-tag/end-tag | `__HL_START__` / `__HL_END__` | PostgreSQL/Elasticsearch 返回到原字段中的高亮边界 |
+| yulinlin.`<module>`.highlight.max-fragments | 2 | 最大高亮片段数，必须大于 0 |
+| yulinlin.`<module>`.highlight.fragment-delimiter | `...` | 返回多个片段时的合并文本 |
 | yulinlin.sqlite.file | data/local.db | 进程工作目录下的路径 |
 | yulinlin.sqlite.group | sqlite | 本地会话组 |
 | yulinlin.sqlite.busy-timeout | 5000 ms | 等锁，不是查询超时 |
 | yulinlin.sqlite.synchronous | NORMAL | 可选 FULL |
+| yulinlin.sqlite.schema-mode | CREATE | CREATE、VALIDATE 或 NONE |
 | yulinlin.sqlite.schema-packages | 空 | SQLite 启动递归扫描包列表 |
 | yulinlin.h2.file | data/local | 数据库基路径，实际文件追加 .mv.db |
 | yulinlin.h2.group | h2 | H2 会话组 |
 | yulinlin.h2.username/password | sa / 空 | 内部文件库凭据 |
 | yulinlin.h2.mode | MYSQL | 当前唯一支持的兼容模式 |
-| yulinlin.h2.max-connections | 4 | H2 每框架事务的连接上限 |
 | yulinlin.h2.connection-timeout | 10s | 连接池取连接等待时间 |
 | yulinlin.h2.lock-timeout | 5s | H2 锁等待时间 |
-| yulinlin.h2.batch-size | 256 | H2 每次 executeBatch 行数 |
 | yulinlin.h2.schema-mode | CREATE | CREATE、VALIDATE 或 NONE |
 | yulinlin.h2.schema-packages | 空 | H2 启动递归扫描包列表 |
 | yulinlin.h2.auto-server | false | 是否允许多 JVM 打开同一文件 |
-| yulinlin.datasource.jdbc.parallel-connections | 4 | 公共 JdbcSession 每框架事务连接上限；SQLite 固定 1，H2 使用自己的配置 |
-| yulinlin.datasource.jdbc.execute-batch-size | 256 | 一次 executeBatch 的行数，不是 commit |
+| yulinlin.elasticsearch.log | false | Elasticsearch 成功请求日志 |
+| yulinlin.elasticsearch.url | http://localhost:9200 | Elasticsearch 服务地址 |
+| yulinlin.elasticsearch.map-underscore-to-camel-case | true | Elasticsearch 实体字段命名转换 |
+| yulinlin.elasticsearch.schema-mode | NONE | CREATE、VALIDATE 或 NONE |
+| yulinlin.elasticsearch.schema-packages | 空 | Elasticsearch 启动递归扫描实体包 |
 
 ### 接入边界与排障
 
-- 单数据源也必须等待容器初始化，不在静态初始化块里查询。MySQL/PostgreSQL/H2 只有配置扫描包并启用相应模式时才在启动阶段处理结构；SQLite 引入模块后按扫描包初始化。未扫描的表由业务迁移脚本准备。
+- 单数据源也必须等待容器初始化，不在静态初始化块里查询。所有模块只有配置扫描包并启用相应模式时才处理结构；SQLite/H2 默认模式为 CREATE，MySQL/PostgreSQL/Elasticsearch 默认为 NONE。未扫描的结构由业务迁移工具准备。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
 - 多库事务与多连接事务不是 XA，详细规则见 [第二专题](02-CRUD与统计分析.md#事务使用)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
@@ -548,6 +620,7 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 | JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认且最多 128 |
 | JoinField(textType = TextTypeEnum.text) | 自动 Schema 使用大文本；不能作为主键或框架声明索引 |
 | JoinField(description = "...") | 列用途说明；MySQL/PostgreSQL/H2 新表或新列写入注释，SQLite 不落库 |
+| JoinField(fullText = true) | PostgreSQL 为该文本列维护 pg_jieba GIN 全文索引；其他数据库忽略 |
 | JoinField(exist = false) | 排除非数据库列 |
 | JoinField(update = false) | 排除更新字段 |
 | JoinMeta(primaryKey = true) | 主键元信息；不是 JoinPrimary |
@@ -755,6 +828,7 @@ var users = query.selectList();
 | --- | --- |
 | eq / ne / gt / gte / lt / lte | 比较条件，可用属性字符串或 Lambda |
 | like / likeRight | 模糊条件 |
+| match | 全文匹配；PostgreSQL 的 fullText 字段使用分词索引，其他 SQL 数据源退化为包含式 LIKE |
 | in | 集合条件 |
 | between | 范围；字符串字段与列类型的排序规则需要一致 |
 | isNull | SQL NULL 条件 |
@@ -774,6 +848,54 @@ var users = ModelSelectWrapper.newInstance("mysql", filter).selectList();
 ```
 
 不是所有非 null 属性都自动成为 WHERE 条件。字符串条件优先使用 Java 属性名，使 JoinField 映射生效。没有默认的全表写入保护；UPDATE/DELETE 前业务必须验证主键或条件。
+
+#### 全文匹配与高亮
+
+PostgreSQL 中文全文检索先在完整表实体上标记需要建立索引的文本字段：
+
+```java
+@JoinTable(value = "video", autoSchema = true)
+public class Video {
+    @JoinMeta(primaryKey = true)
+    private String id;
+
+    @JoinField(name = "title", fullText = true, textLength = 200)
+    private String title;
+
+    @JoinField(name = "content", fullText = true, textType = TextTypeEnum.text)
+    private String content;
+
+    // getter/setter
+}
+```
+
+启动扫描在 PostgreSQL 上为 title、content 分别生成可单字段命中的 GIN 表达式索引。查询时 `match` 指定检索字段，`highlight` 把高亮后的摘要直接写回同名结果字段，不需要额外的 titleHighlight DTO 属性：
+
+```java
+List<Video> videos = ModelSelectWrapper.newInstance("postgresql", Video.class)
+        .match(Video::getTitle, "Java 性能")
+        .highlight(Video::getTitle)
+        .orderByDesc("id")
+        .selectList();
+```
+
+也可以同时检索多个字段：
+
+```java
+List<Video> videos = ModelSelectWrapper.newInstance("postgresql", Video.class)
+        .or(or -> or.match(Video::getTitle, keyword)
+                    .match(Video::getContent, keyword))
+        .fieldMeta(fields -> fields
+                .field("title")
+                .field("content")
+                .highlight("title")
+                .highlight("content"))
+        .selectList();
+```
+
+只有同一查询中实际出现原生 `match(field, ...)` 的字段才调用 `ts_headline`。单独写 `highlight()`、字段未声明 `fullText=true`、原始 SQL查询，都会返回普通原字段。计数只解析 WHERE，不生成高亮表达式。公共高亮标记与片段设置在 `yulinlin.postgresql.highlight`，PostgreSQL 专属摘要长度在 `yulinlin.postgresql.full-text`；pg_jieba 的安装和完整 YAML 见[PostgreSQL 中文全文检索](01-接入与数据源.md#postgresql-中文全文检索)。
+
+MySQL、SQLite、H2 当前把 `match()` 解释为 `%关键词%` LIKE，并忽略 `highlight()`；这只是兼容回退，大表检索应改用 PostgreSQL 原生全文能力或 Elasticsearch。Elasticsearch 的 `match()` 使用原生 MatchQuery；MongoDB 保持现有正则兼容语义。
 
 #### SQL JOIN
 
@@ -960,16 +1082,20 @@ ModelInsertWrapper.newInstance("mysql", usersToInsert).batch().execute(); // 申
 
 ```yaml
 yulinlin:
-  datasource:
-    jdbc:
-      parallel-connections: 4
-      execute-batch-size: 256
+  mysql:
+    parallel-connections: 4
+    execute-batch-size: 256
+  postgresql:
+    parallel-connections: 2
+    execute-batch-size: 128
   h2:
-    max-connections: 4
-    batch-size: 256
+    parallel-connections: 4
+    execute-batch-size: 256
+  sqlite:
+    execute-batch-size: 256
 ```
 
-这些数都必须是正整数。公共 JdbcSession 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满 256 行执行一次 executeBatch，尾批也执行。H2 使用 yulinlin.h2 下的两个覆盖值。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
+这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
 
 只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
 

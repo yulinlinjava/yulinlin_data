@@ -53,6 +53,7 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 | JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认且最多 128 |
 | JoinField(textType = TextTypeEnum.text) | 自动 Schema 使用大文本；不能作为主键或框架声明索引 |
 | JoinField(description = "...") | 列用途说明；MySQL/PostgreSQL/H2 新表或新列写入注释，SQLite 不落库 |
+| JoinField(fullText = true) | PostgreSQL 为该文本列维护 pg_jieba GIN 全文索引；其他数据库忽略 |
 | JoinField(exist = false) | 排除非数据库列 |
 | JoinField(update = false) | 排除更新字段 |
 | JoinMeta(primaryKey = true) | 主键元信息；不是 JoinPrimary |
@@ -260,6 +261,7 @@ var users = query.selectList();
 | --- | --- |
 | eq / ne / gt / gte / lt / lte | 比较条件，可用属性字符串或 Lambda |
 | like / likeRight | 模糊条件 |
+| match | 全文匹配；PostgreSQL 的 fullText 字段使用分词索引，其他 SQL 数据源退化为包含式 LIKE |
 | in | 集合条件 |
 | between | 范围；字符串字段与列类型的排序规则需要一致 |
 | isNull | SQL NULL 条件 |
@@ -279,6 +281,54 @@ var users = ModelSelectWrapper.newInstance("mysql", filter).selectList();
 ```
 
 不是所有非 null 属性都自动成为 WHERE 条件。字符串条件优先使用 Java 属性名，使 JoinField 映射生效。没有默认的全表写入保护；UPDATE/DELETE 前业务必须验证主键或条件。
+
+### 全文匹配与高亮
+
+PostgreSQL 中文全文检索先在完整表实体上标记需要建立索引的文本字段：
+
+```java
+@JoinTable(value = "video", autoSchema = true)
+public class Video {
+    @JoinMeta(primaryKey = true)
+    private String id;
+
+    @JoinField(name = "title", fullText = true, textLength = 200)
+    private String title;
+
+    @JoinField(name = "content", fullText = true, textType = TextTypeEnum.text)
+    private String content;
+
+    // getter/setter
+}
+```
+
+启动扫描在 PostgreSQL 上为 title、content 分别生成可单字段命中的 GIN 表达式索引。查询时 `match` 指定检索字段，`highlight` 把高亮后的摘要直接写回同名结果字段，不需要额外的 titleHighlight DTO 属性：
+
+```java
+List<Video> videos = ModelSelectWrapper.newInstance("postgresql", Video.class)
+        .match(Video::getTitle, "Java 性能")
+        .highlight(Video::getTitle)
+        .orderByDesc("id")
+        .selectList();
+```
+
+也可以同时检索多个字段：
+
+```java
+List<Video> videos = ModelSelectWrapper.newInstance("postgresql", Video.class)
+        .or(or -> or.match(Video::getTitle, keyword)
+                    .match(Video::getContent, keyword))
+        .fieldMeta(fields -> fields
+                .field("title")
+                .field("content")
+                .highlight("title")
+                .highlight("content"))
+        .selectList();
+```
+
+只有同一查询中实际出现原生 `match(field, ...)` 的字段才调用 `ts_headline`。单独写 `highlight()`、字段未声明 `fullText=true`、原始 SQL查询，都会返回普通原字段。计数只解析 WHERE，不生成高亮表达式。公共高亮标记与片段设置在 `yulinlin.postgresql.highlight`，PostgreSQL 专属摘要长度在 `yulinlin.postgresql.full-text`；pg_jieba 的安装和完整 YAML 见[PostgreSQL 中文全文检索](01-接入与数据源.md#postgresql-中文全文检索)。
+
+MySQL、SQLite、H2 当前把 `match()` 解释为 `%关键词%` LIKE，并忽略 `highlight()`；这只是兼容回退，大表检索应改用 PostgreSQL 原生全文能力或 Elasticsearch。Elasticsearch 的 `match()` 使用原生 MatchQuery；MongoDB 保持现有正则兼容语义。
 
 ### SQL JOIN
 
@@ -465,16 +515,20 @@ ModelInsertWrapper.newInstance("mysql", usersToInsert).batch().execute(); // 申
 
 ```yaml
 yulinlin:
-  datasource:
-    jdbc:
-      parallel-connections: 4
-      execute-batch-size: 256
+  mysql:
+    parallel-connections: 4
+    execute-batch-size: 256
+  postgresql:
+    parallel-connections: 2
+    execute-batch-size: 128
   h2:
-    max-connections: 4
-    batch-size: 256
+    parallel-connections: 4
+    execute-batch-size: 256
+  sqlite:
+    execute-batch-size: 256
 ```
 
-这些数都必须是正整数。公共 JdbcSession 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满 256 行执行一次 executeBatch，尾批也执行。H2 使用 yulinlin.h2 下的两个覆盖值。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
+这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
 
 只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
 

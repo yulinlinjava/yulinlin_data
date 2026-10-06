@@ -92,6 +92,18 @@ public abstract class AbstractSelectWrapper<
         return (R)this;
     }
 
+    @Override
+    public R highlight(String name) {
+        selects.highlight(name);
+        return (R)this;
+    }
+
+    @Override
+    public R highlight(LambdaPropertyFunction<E> name) {
+        selects.highlight(name);
+        return (R)this;
+    }
+
 
 
     @Override

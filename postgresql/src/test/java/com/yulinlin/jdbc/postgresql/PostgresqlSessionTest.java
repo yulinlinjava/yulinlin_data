@@ -3,6 +3,8 @@ package com.yulinlin.jdbc.postgresql;
 import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.node.base.Eq;
+import com.yulinlin.data.core.node.base.Match;
+import com.yulinlin.data.core.node.select.AsField;
 import com.yulinlin.data.core.node.group.DateGroup;
 import com.yulinlin.data.core.node.group.IntervalGroup;
 import com.yulinlin.data.core.parse.ParseResult;
@@ -17,6 +19,9 @@ import com.yulinlin.jdbc.sql.parse.SqlJsonUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +39,21 @@ class PostgresqlSessionTest {
     }
     private String sql(SqlNode node) { return node.getSql().replaceAll("\\s+", " ").trim(); }
 
+    @Test void bindsModuleOwnedCommonSettings() {
+        var source = new MapConfigurationPropertySource(Map.of(
+                "yulinlin.postgresql.log", true,
+                "yulinlin.postgresql.map-underscore-to-camel-case", false,
+                "yulinlin.postgresql.parallel-connections", 2,
+                "yulinlin.postgresql.execute-batch-size", 64));
+        var properties = new Binder(source).bind(
+                "yulinlin.postgresql", Bindable.of(PostgresqlProperties.class))
+                .orElseThrow(() -> new AssertionError("PostgreSQL properties were not bound"));
+        assertThat(properties.isLog()).isTrue();
+        assertThat(properties.isMapUnderscoreToCamelCase()).isFalse();
+        assertThat(properties.getParallelConnections()).isEqualTo(2);
+        assertThat(properties.getExecuteBatchSize()).isEqualTo(64);
+    }
+
     @Test void registersSharedParsersDirectlyWithoutCompatibilitySubclasses() {
         var shared = new SqlParseManager();
         var actual = (SqlParseManager) pg.getParseManager();
@@ -41,11 +61,15 @@ class PostgresqlSessionTest {
         assertThat(shared.parse(null, null)).isNull();
         for (Class<?> wrapper : List.of(SelectWrapper.class, InsertWrapper.class, UpdateWrapper.class,
                 DeleteWrapper.class, CountWrapper.class, GroupWrapper.class)) {
+            if (wrapper == SelectWrapper.class) continue;
             assertThat(actual.parseMap.get(wrapper).getClass()).isEqualTo(shared.parseMap.get(wrapper).getClass());
         }
         for (var entry : shared.parseMap.entrySet()) {
             if (entry.getKey() == com.yulinlin.data.core.node.AbstractMetaNode.class
-                    || entry.getKey() == com.yulinlin.jdbc.sql.SqlPage.class) continue;
+                    || entry.getKey() == com.yulinlin.jdbc.sql.SqlPage.class
+                    || entry.getKey() == SelectWrapper.class
+                    || entry.getKey() == Match.class
+                    || entry.getKey() == AsField.class) continue;
             assertThat(actual.parseMap.get(entry.getKey()).getClass()).isEqualTo(entry.getValue().getClass());
         }
         assertThat(actual.nameParse()).isExactlyInstanceOf(com.yulinlin.jdbc.postgresql.parse.NameParse.class);
@@ -55,6 +79,10 @@ class PostgresqlSessionTest {
                 com.yulinlin.jdbc.postgresql.parse.group.DateParse.class);
         assertThat(actual.parseMap.get(IntervalGroup.class)).isExactlyInstanceOf(
                 com.yulinlin.jdbc.postgresql.parse.group.IntervalParse.class);
+        assertThat(actual.parseMap.get(Match.class)).isExactlyInstanceOf(
+                com.yulinlin.jdbc.postgresql.parse.base.MatchParse.class);
+        assertThat(actual.parseMap.get(AsField.class)).isExactlyInstanceOf(
+                com.yulinlin.jdbc.postgresql.parse.select.AsFieldParse.class);
     }
 
     @Test void quotesSchemaColumnsCamelCaseAliasesAndPagesWithLock() {
@@ -89,6 +117,58 @@ class PostgresqlSessionTest {
                 new JdbcCoderManager().createEncoderBuffer(), Mapped.class, true);
         var parsed = (SqlNode) ((ParseResult) pg.parseSql(query, context)).getRequest();
         assertThat(sql(parsed)).contains("\"user_name\" as \"userName\"", "\"user_name\" =", "order by \"user_name\" asc");
+    }
+
+    @Test void nativeMatchAndHighlightReplaceTheOriginalFieldOnlyForIndexedProperties() {
+        var query = new SelectWrapper<FullTextVideo>().table("video");
+        query.fields().field("title", "title").field("author", "author");
+        query.highlight("title").highlight("author");
+        query.where().match("title", "Java 性能").match("author", "Alice");
+        var context = new SimpParamsContext(RequestType.select, Map.of(),
+                new JdbcCoderManager().createEncoderBuffer(), FullTextVideo.class, true);
+        var parsed = (SqlNode) ((ParseResult) pg.parseSql(query, context)).getRequest();
+
+        assertThat(sql(parsed))
+                .contains("ts_headline('jiebacfg'::regconfig, COALESCE(\"video_title\", '')")
+                .contains("to_tsvector('jiebacfg'::regconfig, COALESCE(\"video_title\", '')) @@ websearch_to_tsquery('jiebaqry'::regconfig")
+                .contains("\"author\" as \"author\"", "\"author\" like")
+                .doesNotContain("ts_headline('jiebacfg'::regconfig, COALESCE(\"author\"");
+        assertThat(parsed.getList()).contains("Java 性能", "%Alice%")
+                .anyMatch(value -> value.toString().contains("StartSel=\"__HL_START__\""));
+    }
+
+    @Test void sharedJdbcMatchFallsBackToLikeAndHighlightIsANoOp() {
+        var shared = new JdbcSession(null);
+        var query = new SelectWrapper<FullTextVideo>().table("video");
+        query.fields().field("title", "title");
+        query.highlight("title");
+        query.where().match("title", "Java");
+        var context = new SimpParamsContext(RequestType.select, Map.of(),
+                new JdbcCoderManager().createEncoderBuffer(), FullTextVideo.class, true);
+        var parsed = (SqlNode) ((ParseResult) shared.parseSql(query, context)).getRequest();
+        assertThat(sql(parsed)).contains("video_title as `title`", "video_title like")
+                .doesNotContain("ts_headline", "to_tsvector");
+        assertThat(parsed.getList()).containsExactly("%Java%");
+    }
+
+    @Test void fullTextHighlightOptionsCanBeConfiguredWithoutEmbeddingTagsInSql() {
+        var properties = new PostgresqlProperties();
+        properties.getFullText().setIndexConfig("public.jiebacfg");
+        properties.getFullText().setQueryConfig("public.jiebaqry");
+        properties.getHighlight().setStartTag("<mark>");
+        properties.getHighlight().setEndTag("</mark>");
+        var session = new PostgresqlSession(null);
+        session.configure(properties);
+        var query = new SelectWrapper<FullTextVideo>().table("video");
+        query.fields().field("title", "title");
+        query.highlight("title");
+        query.where().match("title", "中文搜索");
+        var context = new SimpParamsContext(RequestType.select, Map.of(),
+                new JdbcCoderManager().createEncoderBuffer(), FullTextVideo.class, true);
+        var parsed = (SqlNode) ((ParseResult) session.parseSql(query, context)).getRequest();
+        assertThat(sql(parsed)).contains("'public.jiebacfg'::regconfig", "'public.jiebaqry'::regconfig")
+                .doesNotContain("<mark>", "</mark>");
+        assertThat(parsed.getList()).anyMatch(value -> value.toString().contains("StartSel=\"<mark>\""));
     }
 
     @Test void insertsUpdatesAndDeletesKeepBoundParameters() {
@@ -270,6 +350,15 @@ class PostgresqlSessionTest {
         @JoinField(name = "user_name") private String userName;
         public String getUserName() { return userName; }
         public void setUserName(String value) { userName = value; }
+    }
+
+    public static class FullTextVideo {
+        @JoinField(name = "video_title", fullText = true) private String title;
+        private String author;
+        public String getTitle() { return title; }
+        public void setTitle(String title) { this.title = title; }
+        public String getAuthor() { return author; }
+        public void setAuthor(String author) { this.author = author; }
     }
 
     @Test void nativeBooleanReadsFalseTrueAndNullWithoutStringCodecAmbiguity() throws Exception {

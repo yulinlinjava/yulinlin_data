@@ -51,6 +51,9 @@ public interface IParamsContext {
 
     Object getRoot();
 
+    /** Entity type that owns the current request, or Object.class for raw SQL/maps. */
+    default Class<?> getSourceClass() { return Object.class; }
+
   default  Object parse(String path){
       Map root = getDataBuffer().toMap();
       return Template.render(path,root);

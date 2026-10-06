@@ -32,7 +32,7 @@ import java.util.stream.Collectors;
 
 public abstract class AbstractSession extends LoadBalanceSession implements EntitySession {
 
-
+    private EntitySessionProperties sessionProperties = new EntitySessionProperties();
 
     private LogManager logManager;
 
@@ -135,7 +135,17 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     }
 
 
-    protected abstract boolean isMapUnderscoreToCamelCase();
+    protected boolean isMapUnderscoreToCamelCase() {
+        return sessionProperties.isMapUnderscoreToCamelCase();
+    }
+
+    public void setSessionProperties(EntitySessionProperties sessionProperties) {
+        this.sessionProperties = java.util.Objects.requireNonNull(sessionProperties, "sessionProperties");
+    }
+
+    public EntitySessionProperties getSessionProperties() {
+        return sessionProperties;
+    }
 
     public static int batchSize = 5*512*1024;
 
@@ -186,10 +196,10 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         try {
             E val =  transaction(callable);
 
-            logManager.success( System.currentTimeMillis() - x,result);
+            logManager.success(System.currentTimeMillis() - x, result, this);
             return  val;
         }catch (Exception e){
-            logManager.error( e,result);
+            logManager.error(e, result, this);
             throw e;
         }
 
@@ -485,8 +495,8 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         if (logManager == null) return;
         long time = (System.currentTimeMillis() - started) / results.size();
         for (ParseResult result : results) {
-            if (error == null) logManager.success(time, result);
-            else logManager.error(error, result);
+            if (error == null) logManager.success(time, result, this);
+            else logManager.error(error, result, this);
         }
     }
 

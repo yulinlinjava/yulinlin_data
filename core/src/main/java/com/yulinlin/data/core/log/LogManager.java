@@ -2,6 +2,7 @@ package com.yulinlin.data.core.log;
 
 
 import com.yulinlin.data.core.parse.ParseResult;
+import com.yulinlin.data.core.session.EntitySession;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,10 +30,14 @@ public class LogManager {
 
     //执行成功
     public void success(long time,ParseResult request){
+        success(time, request, null);
+    }
+
+    public void success(long time, ParseResult request, EntitySession session){
 
         for (LogPrint print : list) {
             if(print.isHandle(request)){
-                print.success(time,request);
+                print.success(time, request, session);
             }
         }
 
@@ -40,10 +45,14 @@ public class LogManager {
 
     //执行失败
     public void error(Throwable e,  ParseResult request){
+        error(e, request, null);
+    }
+
+    public void error(Throwable e, ParseResult request, EntitySession session){
 
         for (LogPrint print : list) {
             if(print.isHandle(request)){
-                print.error(e,request);
+                print.error(e, request, session);
             }
         }
     }

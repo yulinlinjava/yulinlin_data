@@ -111,8 +111,7 @@ class SqliteIntegrationTest {
     }
 
     @Test void sqliteSessionWorksWithoutRouterAndKeepsBatchesSingleConnection() {
-        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("generic.db"),
-                "yulinlin.datasource.jdbc.parallel-connections=4").run(context -> {
+        runner().withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("generic.db")).run(context -> {
             assertThat(context).hasNotFailed();
             JdbcSession session = context.getBean("sqliteSession", JdbcSession.class);
             assertThat(session).isExactlyInstanceOf(SqliteSession.class);

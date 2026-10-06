@@ -1,5 +1,6 @@
 package com.yulinlin.jdbc.h2;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.session.JdbcSession;
 
 import javax.sql.DataSource;
@@ -12,7 +13,7 @@ import java.util.List;
 public class H2Session extends JdbcSession {
     private final H2SchemaManager schemaManager = new H2SchemaManager();
     private volatile DataSource schemaDataSource;
-    private volatile H2Properties.SchemaMode schemaMode = H2Properties.SchemaMode.CREATE;
+    private volatile SchemaMode schemaMode = SchemaMode.CREATE;
 
     public H2Session(DataSource dataSource) {
         super(dataSource);
@@ -24,8 +25,8 @@ public class H2Session extends JdbcSession {
     void configure(H2Properties properties, DataSource schemaDataSource) {
         this.schemaDataSource = schemaDataSource;
         schemaMode = properties.getSchemaMode();
-        setParallelConnections(properties.getMaxConnections());
-        setExecuteBatchSize(properties.getBatchSize());
+        setParallelConnections(properties.getParallelConnections());
+        setExecuteBatchSize(properties.getExecuteBatchSize());
     }
 
     @Override
@@ -36,7 +37,8 @@ public class H2Session extends JdbcSession {
     /** Creates or validates every scanned schema owner before the Session bean is published. */
     @Override
     public void initializeSchema(Collection<Class<?>> entities) {
-        if (schemaMode == H2Properties.SchemaMode.NONE || entities == null || entities.isEmpty()) return;
+        if (schemaMode == SchemaMode.NONE
+                || entities == null || entities.isEmpty()) return;
         try (Connection connection = schemaDataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {

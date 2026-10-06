@@ -1,11 +1,11 @@
 package com.yulinlin.jdbc.mysql;
 
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinIndex;
 import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.TextTypeEnum;
-import com.yulinlin.jdbc.JdbcProperties;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
@@ -28,7 +28,7 @@ class MysqlSchemaManagerTest {
     @Test void sessionExposesTheSameInitialDdlWithoutOpeningAConnection() {
         DataSource dataSource = mock(DataSource.class);
         var session = new MysqlSession(dataSource);
-        session.setProperties(new JdbcProperties());
+        session.setProperties(new MysqlProperties());
 
         assertThat(session.createTableSql(PreviewUser.class))
                 .anyMatch(sql -> sql.startsWith("CREATE TABLE IF NOT EXISTS"))
@@ -42,11 +42,11 @@ class MysqlSchemaManagerTest {
         var manager = new MysqlSchemaManager();
 
         assertThatThrownBy(() -> manager.ensureTable(connection, TooLongPrimary.class, true,
-                MysqlProperties.SchemaMode.CREATE, sql -> { }))
+                SchemaMode.CREATE, sql -> { }))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cannot exceed 128");
         assertThatThrownBy(() -> manager.ensureTable(connection, LargeTextPrimary.class, true,
-                MysqlProperties.SchemaMode.CREATE, sql -> { }))
+                SchemaMode.CREATE, sql -> { }))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cannot be a primary key");
         verifyNoInteractions(connection);
@@ -71,7 +71,7 @@ class MysqlSchemaManagerTest {
 
         List<String> executed = new ArrayList<>();
         assertThat(new MysqlSchemaManager().ensureTable(connection, IncrementalUser.class, true,
-                MysqlProperties.SchemaMode.CREATE, sql -> {
+                SchemaMode.CREATE, sql -> {
                     executed.add(sql);
                     added.set(true);
                 })).isTrue();

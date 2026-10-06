@@ -1,6 +1,7 @@
 package com.yulinlin.jdbc.sqlite;
 
-import com.yulinlin.jdbc.JdbcProperties;
+import com.yulinlin.data.core.schema.SchemaMode;
+import com.yulinlin.jdbc.JdbcSessionProperties;
 import com.yulinlin.jdbc.session.JdbcSession;
 
 import javax.sql.DataSource;
@@ -12,6 +13,7 @@ import java.util.List;
 /** Shared JDBC execution with SQLite SQL and startup schema initialization. */
 public class SqliteSession extends JdbcSession {
     private final SqliteSchemaManager schemaManager = new SqliteSchemaManager();
+    private volatile SchemaMode schemaMode = SchemaMode.CREATE;
 
     public SqliteSession(DataSource dataSource) {
         super(dataSource);
@@ -19,8 +21,16 @@ public class SqliteSession extends JdbcSession {
         setParallelConnections(1);
     }
 
-    @Override public void setProperties(JdbcProperties properties) {
+    @Override public void setProperties(JdbcSessionProperties properties) {
         super.setProperties(properties);
+        setParallelConnections(1);
+    }
+
+    void configure(SqliteProperties properties) {
+        if (properties == null || properties.getSchemaMode() == null) {
+            throw new IllegalArgumentException("Invalid yulinlin.sqlite configuration");
+        }
+        schemaMode = properties.getSchemaMode();
         setParallelConnections(1);
     }
 
@@ -34,11 +44,11 @@ public class SqliteSession extends JdbcSession {
     /** Creates/validates every scanned schema owner before the Session bean is published. */
     @Override
     public void initializeSchema(Collection<Class<?>> entities) {
-        if (entities == null || entities.isEmpty()) return;
+        if (schemaMode == SchemaMode.NONE || entities == null || entities.isEmpty()) return;
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {
-                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(),
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode,
                         sql -> executeSchemaSql(statement, sql));
             }
         } catch (RuntimeException error) {

@@ -4,15 +4,30 @@ import co.elastic.clients.elasticsearch._types.SortOptions;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
+import co.elastic.clients.elasticsearch.core.search.HighlightField;
+import co.elastic.clients.util.NamedValue;
 import com.yulinlin.data.core.node.order.OrderNode;
 import com.yulinlin.data.core.node.select.AsField;
 import com.yulinlin.data.core.parse.*;
+import com.yulinlin.data.core.session.HighlightProperties;
 import com.yulinlin.data.core.wrapper.impl.AsFieldListWrapper;
 import com.yulinlin.data.core.wrapper.impl.SelectWrapper;
 import com.yulinlin.elasticsearch.enums.EsKeys;
 import com.yulinlin.elasticsearch.parse.AliasUtil;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class EsSelectWrapperParse implements IParse<SelectWrapper> {
+    private final HighlightProperties highlight;
+
+    public EsSelectWrapperParse() {
+        this(new HighlightProperties());
+    }
+
+    public EsSelectWrapperParse(HighlightProperties highlight) {
+        this.highlight = java.util.Objects.requireNonNull(highlight, "highlight");
+    }
 
 
     private Query buildQuery(SelectWrapper condition, IParamsContext params, IParseManager parseManager){
@@ -64,6 +79,7 @@ public class EsSelectWrapperParse implements IParse<SelectWrapper> {
         }
 
         AsFieldListWrapper<AsField> fields =(AsFieldListWrapper) condition.fields();
+        List<NamedValue<HighlightField>> highlightFields = new ArrayList<>();
         for (AsField field : fields.getList()) {
             String key = AliasUtil.parse(field, params);
 
@@ -71,19 +87,24 @@ public class EsSelectWrapperParse implements IParse<SelectWrapper> {
                 return f.field(key);
             });
 
-            String preTags = (String)field.getMeta().get(EsKeys.preTags);
-            String postTags = (String)field.getMeta().get(EsKeys.postTags);
-            if(preTags == null || postTags == null){
+            String preTags = (String) field.getMeta().get(EsKeys.preTags);
+            String postTags = (String) field.getMeta().get(EsKeys.postTags);
+            boolean legacyHighlight = preTags != null || postTags != null;
+            if (!field.isHighlight() && !legacyHighlight) {
                 continue;
             }
-            builder.highlight(f -> {
-                return f.fields(key,h -> {
-                    return h.preTags(preTags)
-                            .postTags(postTags);
-                });
-
-            });
+            if (preTags == null) preTags = highlight.getStartTag();
+            if (postTags == null) postTags = highlight.getEndTag();
+            String finalPreTags = preTags;
+            String finalPostTags = postTags;
+            HighlightField configured = new HighlightField.Builder()
+                    .preTags(finalPreTags)
+                    .postTags(finalPostTags)
+                    .numberOfFragments(highlight.getMaxFragments())
+                    .build();
+            highlightFields.add(NamedValue.of(key, configured));
         }
+        if (!highlightFields.isEmpty()) builder.highlight(value -> value.fields(highlightFields));
 
         builder.source(f -> f.fetch(false));
         SearchRequest build = builder.index(index)
@@ -92,7 +113,7 @@ public class EsSelectWrapperParse implements IParse<SelectWrapper> {
                 .query(query)
                 .build();
 
-        return new ParseResult(ParseType.delete,build,params);
+        return new ParseResult(ParseType.select,build,params);
 
 
     }

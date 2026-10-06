@@ -6,14 +6,17 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.*;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.yulinlin.data.core.coder.IDataBuffer;
+import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.session.AbstractSession;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.elasticsearch.util.AggregationUtil;
+import com.yulinlin.elasticsearch.ElasticsearchSchemaManager;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -22,9 +25,21 @@ import java.util.Map;
 public class ElasticsearchSession extends AbstractSession  {
 
     private ElasticsearchClient client;
+    private final ElasticsearchSchemaManager schemaManager = new ElasticsearchSchemaManager();
 
     public ElasticsearchSession(ElasticsearchClient client) {
         this.client = client;
+    }
+
+    @Override
+    public List<String> createTableSql(Class<?> entityClass) {
+        return schemaManager.createIndexDefinition(entityClass, isMapUnderscoreToCamelCase());
+    }
+
+    @Override
+    public void initializeSchema(Collection<Class<?>> entityClasses) {
+        SchemaMode mode = getSessionProperties().getSchemaMode();
+        schemaManager.initialize(client, entityClasses, isMapUnderscoreToCamelCase(), mode);
     }
 
     @Override
@@ -36,11 +51,6 @@ public class ElasticsearchSession extends AbstractSession  {
     protected List<IDataBuffer> executeGroup(ParseResult request) {
 
         return executeSelect(request);
-    }
-
-    @Override
-    protected boolean isMapUnderscoreToCamelCase() {
-        return true;
     }
 
     @SneakyThrows
@@ -94,7 +104,8 @@ public class ElasticsearchSession extends AbstractSession  {
         }else {
 
             List<Hit> hits = response.hits().hits();
-            iDataBuffers = AggregationUtil.toBufferList(hits, getCoderManager());
+            iDataBuffers = AggregationUtil.toBufferList(hits, getCoderManager(),
+                    getSessionProperties().getHighlight().getFragmentDelimiter());
         }
 
 

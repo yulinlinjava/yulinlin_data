@@ -14,6 +14,9 @@ public enum ConditionEnum {
     // 模糊
     like("like","模糊"),
 
+    // 全文匹配；不支持全文检索的数据源退化为 like
+    match("match","全文匹配"),
+
     //右模糊
     likeRight("like","右模糊"),
     //多次模糊查询

@@ -14,6 +14,7 @@ import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.JdbcProperties;
+import com.yulinlin.jdbc.JdbcSessionProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -34,7 +35,7 @@ import java.util.concurrent.Future;
 public abstract class AbstractJdbcSession extends AbstractSession implements EntitySession {
 
 
-    private JdbcProperties properties = new JdbcProperties();
+    private JdbcSessionProperties properties = new JdbcSessionProperties();
     private volatile int parallelConnections = ConnectionUtil.DEFAULT_PARALLEL_CONNECTIONS;
     private volatile int executeBatchSize = 256;
     private final ThreadLocal<ConnectionPool> transactionPools = new ThreadLocal<>();
@@ -316,9 +317,20 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
         this.executeBatchSize = executeBatchSize;
     }
 
-    public void setProperties(JdbcProperties properties) {
+    public void setProperties(JdbcSessionProperties properties) {
         setParallelConnections(properties.getParallelConnections());
         setExecuteBatchSize(properties.getExecuteBatchSize());
         this.properties = properties;
+        setSessionProperties(properties);
+    }
+
+    /** @deprecated Use {@link #setProperties(JdbcSessionProperties)}. */
+    @Deprecated
+    public void setProperties(JdbcProperties properties) {
+        setProperties((JdbcSessionProperties) properties);
+    }
+
+    public JdbcSessionProperties getProperties() {
+        return properties;
     }
 }

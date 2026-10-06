@@ -18,9 +18,8 @@ public class GtParse implements IParse<Gt> {
         Object value =  condition.getValue();
 
 
-        return   QueryBuilders.range()
-                .field(key)
-                .gt(JsonData.of(value))
+        return QueryBuilders.range()
+                .untyped(range -> range.field(key).gt(JsonData.of(value)))
                 .build()._toQuery();
 
 

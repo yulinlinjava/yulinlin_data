@@ -8,7 +8,7 @@ import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
-import com.yulinlin.jdbc.JdbcProperties;
+import com.yulinlin.jdbc.JdbcSessionProperties;
 import com.yulinlin.jdbc.coder.JdbcCoderManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +43,7 @@ class SqliteSessionTest {
 
     private SqliteSession session(SqliteDataSource source) {
         var session = new SqliteSession(source);
-        var properties = new JdbcProperties();
+        var properties = new JdbcSessionProperties();
         properties.setMapUnderscoreToCamelCase(true);
         session.setProperties(properties);
         session.setCoderManager(new JdbcCoderManager());

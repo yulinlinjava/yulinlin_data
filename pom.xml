@@ -23,6 +23,7 @@
         <module>oracle</module>
         <module>generate</module>
         <module>postgresql</module>
+        <module>security</module>
     </modules>
 
     <groupId>com.yulinlin</groupId>

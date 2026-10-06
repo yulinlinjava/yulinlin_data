@@ -1,11 +1,12 @@
 package com.yulinlin.starter.domain;
 
+import com.yulinlin.data.lang.security.CryptoDataResponse;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 @Schema(description = "响应体")
 @Data
-public class R<E> {
+public class R<E> implements CryptoDataResponse {
 
     @Schema(description = "数据")
     private E data;
@@ -37,9 +38,16 @@ public class R<E> {
         this.timestamp = System.currentTimeMillis();
     }
 
+    @Override
+    public E getData() {
+        return data;
+    }
+
     //加密后调用
-    public void onCryptAfter(E data){
-        this.data = data;
+    @Override
+    @SuppressWarnings("unchecked")
+    public void onCryptAfter(Object data){
+        this.data = (E) data;
         this.crypt = true;
     }
 

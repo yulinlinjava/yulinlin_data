@@ -11,6 +11,7 @@ import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinTableList;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
+import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
@@ -23,7 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class SqliteSchemaManager {
     private record EntityType(Class<?> type, boolean underscore) { }
     private record Column(String name, String type, boolean primary) { }
-    private record Table(String name, List<Column> columns) { }
+    private record Table(String name, List<Column> columns, List<EntityIndexResolver.Definition> indexes) { }
+    private record ActualIndex(List<String> columns, boolean unique, boolean plain) { }
     private final Map<EntityType, Optional<Table>> mappings = new ConcurrentHashMap<>();
 
     boolean isTableEntity(Class<?> entity, boolean underscore) {
@@ -60,6 +62,7 @@ public final class SqliteSchemaManager {
                 }
             }
             validate(connection, table);
+            ensureIndexes(connection, table);
             return true;
         } catch (SQLException e) {
             throw new IllegalStateException("SQLite schema creation/validation failed for "
@@ -80,6 +83,7 @@ public final class SqliteSchemaManager {
         identifier(table.value());
         var aliases = AliasContent.newInstance(entity, underscore);
         Map<String, Column> columns = new TreeMap<>();
+        Map<String, String> persistentFields = new HashMap<>();
         for (var field : ReflectionUtil.getAllDeclaredFields(entity)) {
             if (Modifier.isStatic(field.getModifiers()) || Modifier.isTransient(field.getModifiers()) || field.isSynthetic()) continue;
             JoinField mapping = AnnotationUtil.findAnnotation(field, JoinField.class);
@@ -95,12 +99,14 @@ public final class SqliteSchemaManager {
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
                 throw new IllegalArgumentException("Duplicate SQLite column " + table.value() + "." + name);
             }
+            persistentFields.putIfAbsent(field.getName(), name);
         }
         if (columns.isEmpty()) throw new IllegalArgumentException("No persistent columns: " + entity.getName());
         if (columns.values().stream().filter(Column::primary).count() > 1) {
             throw new IllegalArgumentException("Composite primary keys are not supported by ORM model operations: " + entity.getName());
         }
-        return new Table(table.value(), List.copyOf(columns.values()));
+        return new Table(table.value(), List.copyOf(columns.values()),
+                EntityIndexResolver.resolve(entity, table.value(), persistentFields));
     }
 
     private static String storageType(Class<?> type) {
@@ -148,6 +154,94 @@ public final class SqliteSchemaManager {
         if (actual.values().stream().filter(Column::primary).count() != table.columns().stream().filter(Column::primary).count()) {
             throw new IllegalStateException("Incompatible SQLite primary key: " + table.name());
         }
+    }
+
+    private static void ensureIndexes(Connection connection, Table table) throws SQLException {
+        if (table.indexes().isEmpty()) return;
+        Map<String, ActualIndex> actual = readIndexes(connection, table.name());
+        boolean created = false;
+        for (EntityIndexResolver.Definition expected : table.indexes()) {
+            ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
+            if (found == null) {
+                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                    throw new IllegalStateException("SQLite index " + expected.name()
+                            + " is missing; initialize it outside a read-only transaction");
+                }
+                createIndex(connection, table.name(), expected);
+                created = true;
+            } else {
+                validateIndex(table.name(), expected, found);
+            }
+        }
+        if (created) {
+            actual = readIndexes(connection, table.name());
+            for (EntityIndexResolver.Definition expected : table.indexes()) {
+                ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
+                if (found == null) {
+                    throw new IllegalStateException("SQLite index was not created: " + expected.name());
+                }
+                validateIndex(table.name(), expected, found);
+            }
+        }
+    }
+
+    private static Map<String, ActualIndex> readIndexes(Connection connection, String table) throws SQLException {
+        record IndexHeader(String name, boolean unique, boolean partial) { }
+        List<IndexHeader> headers = new ArrayList<>();
+        try (var statement = connection.createStatement();
+             var rows = statement.executeQuery("PRAGMA index_list(" + quote(table) + ")")) {
+            while (rows.next()) {
+                headers.add(new IndexHeader(rows.getString("name"), rows.getInt("unique") != 0,
+                        rows.getInt("partial") != 0));
+            }
+        }
+
+        Map<String, ActualIndex> indexes = new HashMap<>();
+        for (IndexHeader header : headers) {
+            TreeMap<Integer, String> columns = new TreeMap<>();
+            boolean plain = !header.partial();
+            try (var statement = connection.createStatement();
+                 var rows = statement.executeQuery("PRAGMA index_xinfo(" + quote(header.name()) + ")")) {
+                while (rows.next()) {
+                    if (rows.getInt("key") == 0) continue;
+                    String column = rows.getString("name");
+                    columns.put(rows.getInt("seqno"), column == null ? "<expression>" : column);
+                    if (rows.getInt("desc") != 0) plain = false;
+                }
+            }
+            indexes.put(header.name().toLowerCase(Locale.ROOT),
+                    new ActualIndex(List.copyOf(columns.values()), header.unique(), plain));
+        }
+        return indexes;
+    }
+
+    private static void createIndex(Connection connection, String table,
+                                    EntityIndexResolver.Definition index) throws SQLException {
+        String columns = index.columns().stream().map(SqliteSchemaManager::quote)
+                .collect(java.util.stream.Collectors.joining(", "));
+        String sql = "CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX IF NOT EXISTS "
+                + quote(index.name()) + " ON " + quote(table) + " (" + columns + ")";
+        try (var statement = connection.createStatement()) {
+            statement.executeUpdate(sql);
+        }
+    }
+
+    private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {
+        if (expected.unique() != actual.unique() || !actual.plain()
+                || !sameColumns(expected.columns(), actual.columns())) {
+            throw new IllegalStateException("Incompatible SQLite index " + table + "." + expected.name()
+                    + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
+                    + "; actual columns=" + actual.columns() + ", unique=" + actual.unique()
+                    + "; migrate manually");
+        }
+    }
+
+    private static boolean sameColumns(List<String> left, List<String> right) {
+        if (left.size() != right.size()) return false;
+        for (int index = 0; index < left.size(); index++) {
+            if (!left.get(index).equalsIgnoreCase(right.get(index))) return false;
+        }
+        return true;
     }
 
     private static String affinity(String declared) {

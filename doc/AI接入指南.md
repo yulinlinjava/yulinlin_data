@@ -17,11 +17,11 @@
 <!-- source: doc/01-接入与数据源.md -->
 ## 项目接入与数据源
 
-先选数据库模块，再配置数据源和会话组。本文完成 Spring Boot 接入、MySQL 与 PostgreSQL 配置、SQLite 本地存储，以及多数据源注册和默认组选取。
+先选数据库模块，再配置数据源和会话组。本文完成 Spring Boot 接入、MySQL 与 PostgreSQL 配置、SQLite/H2 本地存储，以及多数据源注册和默认组选取。
 
-阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
+阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
 
-适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-05 核对仓库源码；本轮未执行示例、测试、编译或打包。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
+适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-06 核对仓库源码；本轮未执行示例、测试、编译或打包。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
 
 ### 模块选择
 
@@ -29,6 +29,7 @@
 | --- | --- |
 | Spring Boot 和 MySQL ORM | `com.yulinlin:starter:3.0` + `com.yulinlin:mysql:3.0` |
 | Spring Boot 和 SQLite ORM | starter + sqlite |
+| Spring Boot 和 H2 本地 ORM | starter + h2 |
 | Spring Boot 和 PostgreSQL ORM | postgresql；需要便利模型门面时再加 common 或 starter |
 | HTTP 工具 | core，starter 已传递引入 |
 | 反射、深克隆、JSON | lang |
@@ -156,13 +157,99 @@ int affected = update.execute();
 
 建表复用当前请求的事务连接，不额外借连接，不独立 commit；框架事务由 Session 完成，Spring 绑定事务由 Spring 完成。检查结果只在对应事务成功提交后进入 Session 缓存，失败/回滚后下次请求可重新检查。同一 Session 的并发首次访问由连接池和建表锁协调，不同数据库文件不会共用成功状态。
 
-这不是迁移工具：已有表只做兼容性检查，不自动补列、改类型、建索引、添加外键或复合主键。结构不兼容明确报错，需要手动迁移。运行期间外部修改/删除已缓存的表后，应重新创建 Session 或重启应用；首次建表不能放在 Spring 只读事务中，需提前初始化。
+这不是迁移工具：已有表只做兼容性检查，不自动补列、改类型、删除旧索引、添加外键或复合主键；仅创建实体通过 JoinIndex 明确声明且当前缺失的索引。结构不兼容明确报错，需要手动迁移。运行期间外部修改/删除已缓存的表后，应重新创建 Session 或重启应用；首次创建表或索引不能放在 Spring 只读事务中，需提前初始化。
 
 日期、枚举、BigDecimal、JSON 对象等使用 TEXT；字符串与数字仍由 JDBC 编解码器恢复 Java 字段。日期范围依赖统一、可按字典序排序的固定格式与时区；TEXT BigDecimal 的字符串比较不等于数值比较，数值范围或统计需要适当列类型或显式 SQL CAST。
 
 SQLite 使用继承 JdbcSession 的 SqliteSession，复用公共 CRUD，并增加按需建表；不需要 DataSource Bean 或 sqliteTransactionManager。SqliteDatabase 持有并关闭内部连接池。`supportsParallelWrites()` 返回 false，多连接批处理不会拆组；WAL 也不能让同一文件同时拥有多个写事务。
 
 SQLite 不支持框架生成的 FOR UPDATE、日期分组和数值间隔分组，当前解析器明确拒绝；需用自定义 SQL 实现数据库专用功能。运行中不要单独删除 -wal/-shm 文件，也不要仅复制主文件作为可靠备份。NORMAL 偏向性能，FULL 更重视持久性；这不是业务吞吐量承诺。
+
+### H2 接入
+
+H2 适合纯 Java 的本地文件存储，不需要数据库服务器或本机原生库。加入 starter + h2：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>starter</artifactId>
+    <version>3.0</version>
+</dependency>
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>h2</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+引入即启用，默认数据库基路径为 `data/local`，H2 实际生成 `data/local.mv.db`；默认 group 是 `h2`。最小配置只需覆盖文件名：
+
+```yaml
+yulinlin:
+  h2:
+    file: data/app
+```
+
+完整配置及默认值：
+
+```yaml
+yulinlin:
+  h2:
+    file: data/local
+    group: h2
+    username: sa
+    password: ""
+    mode: MYSQL
+    max-connections: 4
+    connection-timeout: 10s
+    lock-timeout: 5s
+    batch-size: 256
+    schema-mode: CREATE
+    auto-server: false
+```
+
+file 是本地数据库基路径，不写 `.mv.db` 后缀，也不接受 JDBC URL 或内存 URL。mode 当前只接受 MYSQL，以复用框架普通 CRUD/分页语法；原始 SQL 仍应按 H2 实际能力编写。auto-server 仅用于确实需要多个 JVM 同时打开一个文件的场景，单进程保持 false。
+
+模块创建 `h2SessionFactory`、`h2Session` 和 group `h2`。`H2Database` 持有连接池，但 DataSource 不注册成 Spring Bean，也不创建独立 TransactionManager。RouteSession、框架事务注解和显式 group 的用法与其他 JdbcSession 相同：
+
+```java
+var users = ModelSelectWrapper.newInstance("h2", DemoUser.class).selectList();
+ModelInsertWrapper.newInstance("h2", user).execute();
+```
+
+H2Session 与 SQLite 一样读取 `BaseRequest.fromClass`，仅为带 JoinTable 的普通完整单表实体按需建表；null、Object.class、Map、JOIN 和统计模型均跳过。schema-mode 的含义是：CREATE 创建缺失表/声明的索引并校验，VALIDATE 只校验且缺失时报错，NONE 完全跳过。已有表只校验映射列、主键和声明的索引，不补列、不改类型、不删除旧索引，也不承担版本迁移。
+
+字段默认映射为 BOOLEAN、INTEGER、BIGINT、DOUBLE PRECISION 或 CHARACTER VARYING。日期、枚举、BigDecimal/BigInteger、byte[] 与 JSON 对象继续经过公共编码器存为文本。日期范围要求统一的可排序格式；文本数字范围和统计需要显式 CAST。JSON 路径条件当前不自动生成，使用可信的 H2 自定义 SQL。
+
+H2 的 DDL 会自动提交，因此首次创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。只读事务发现结构缺失时拒绝创建，应在写事务或启动初始化阶段先访问完整实体。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
+
+H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 max-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
+
+#### H2/SQLite 自动索引
+
+在具体表实体上重复使用 `@JoinIndex`，fields 填 Java 属性名，顺序就是联合索引的列顺序。字段先经过 JoinField 和下划线映射，再生成数据库索引：
+
+```java
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinIndex;
+import com.yulinlin.data.core.anno.JoinTable;
+import java.util.Date;
+
+@JoinTable("video_comment")
+@JoinIndex(fields = {"videoId", "crtTime"})
+@JoinIndex(fields = {"videoId", "userId"}, unique = true)
+public class VideoComment {
+    @JoinField(name = "video_id") private String videoId;
+    @JoinField(name = "user_id") private String userId;
+    @JoinField(name = "crt_time") private Date crtTime;
+}
+```
+
+上例自动生成普通索引 `idx_video_comment_video_id_crt_time` 和唯一索引 `uk_video_comment_video_id_user_id`。用户不填写索引名；名称由类型前缀、表名和映射后的列名组成，统一小写，超过 63 个字符时截断并追加稳定的 8 位哈希。
+
+同一有序字段组合不能重复声明；如果同时声明普通和唯一索引，只保留唯一索引。字段为空、重复、不存在、exist=false、关联字段或函数映射字段会在业务 SQL 前报错。索引注解只读取 fromClass 具体类上的声明，不继承父类索引；fields 仍可引用父类持久化字段。
+
+已有同名索引会校验字段顺序、唯一性以及是否为普通升序列索引；不兼容时要求手动迁移。删除或修改注解不会自动删除旧索引，修改字段组合会创建新名称。H2 使用独立 schema 连接且 DDL 立即生效；SQLite 使用当前请求连接，成功状态在事务提交后缓存。MySQL/PostgreSQL 当前不消费该注解，仍由迁移脚本创建索引。
 
 ### PostgreSQL 接入
 
@@ -333,18 +420,29 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | yulinlin.sqlite.group | sqlite | 本地会话组 |
 | yulinlin.sqlite.busy-timeout | 5000 ms | 等锁，不是查询超时 |
 | yulinlin.sqlite.synchronous | NORMAL | 可选 FULL |
-| yulinlin.datasource.jdbc.parallel-connections | 4 | 每 Session、每框架事务的连接上限；SQLite 固定 1 |
+| yulinlin.h2.file | data/local | 数据库基路径，实际文件追加 .mv.db |
+| yulinlin.h2.group | h2 | H2 会话组 |
+| yulinlin.h2.username/password | sa / 空 | 内部文件库凭据 |
+| yulinlin.h2.mode | MYSQL | 当前唯一支持的兼容模式 |
+| yulinlin.h2.max-connections | 4 | H2 每框架事务的连接上限 |
+| yulinlin.h2.connection-timeout | 10s | 连接池取连接等待时间 |
+| yulinlin.h2.lock-timeout | 5s | H2 锁等待时间 |
+| yulinlin.h2.batch-size | 256 | H2 每次 executeBatch 行数 |
+| yulinlin.h2.schema-mode | CREATE | CREATE、VALIDATE 或 NONE |
+| yulinlin.h2.auto-server | false | 是否允许多 JVM 打开同一文件 |
+| yulinlin.datasource.jdbc.parallel-connections | 4 | 公共 JdbcSession 每框架事务连接上限；SQLite 固定 1，H2 使用自己的配置 |
 | yulinlin.datasource.jdbc.execute-batch-size | 256 | 一次 executeBatch 的行数，不是 commit |
 
 ### 接入边界与排障
 
-- 单数据源也必须等待容器初始化，不在静态初始化块里查询。MySQL/PostgreSQL 表需要业务提前准备；SQLite 普通完整实体可按需建表。
+- 单数据源也必须等待容器初始化，不在静态初始化块里查询。MySQL/PostgreSQL 表需要业务提前准备；SQLite/H2 普通完整实体可按需建表。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
 - 多库事务与多连接事务不是 XA，详细规则见 [第二专题](02-CRUD与统计分析.md#事务使用)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
 - 表或字段不存在：核对实际建表、JoinField 映射和实体基类继承字段。
 - PostgreSQL 报 MySQL 函数错误：检查是否使用了 mysqlSessionFactory 或原始 MySQL SQL。
 - SQLite 原生库在 JDK 25 下可能提示 native-access 警告；部署时按实际环境配置 JVM 原生访问权限，不把警告当成数据库初始化成功的证明。
+- H2 表已存在但字段报不兼容：框架不会迁移旧结构，手动迁移后重启或重建 Session；不要直接删除正在使用的 .mv.db 文件。
 
 内部 Session 创建与扩展规则见 [第五专题](05-扩展开发与维护.md)。
 
@@ -387,7 +485,7 @@ public class DemoUser extends IdEntity<DemoUser> {
 }
 ```
 
-MySQL/PostgreSQL 需要提前准备表；SQLite 使用 SqliteSession 时，完整 DemoUser 实体的第一次请求会自动创建缺失表，不需要执行下列 DDL。手动建表仅在自己的示例数据库执行，不把它当作生产迁移脚本：
+MySQL/PostgreSQL 需要提前准备表；SQLite/H2 使用对应本地 Session 时，完整 DemoUser 实体的第一次请求会自动创建缺失表，不需要执行下列 DDL。手动建表仅在自己的示例数据库执行，不把它当作生产迁移脚本：
 
 ```sql
 CREATE TABLE ai_demo_user (
@@ -406,6 +504,7 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 | JoinField(exist = false) | 排除非数据库列 |
 | JoinField(update = false) | 排除更新字段 |
 | JoinMeta(primaryKey = true) | 主键元信息；不是 JoinPrimary |
+| JoinIndex(fields = {...}) | H2/SQLite 自动维护普通或唯一联合索引；字段写 Java 属性名 |
 | JoinWhere | 对象属性有值时参与条件 |
 | JoinField(version = true) | 版本字段；具体支持路径按代理与实际更新实现核对 |
 
@@ -549,7 +648,7 @@ import com.yulinlin.data.core.request.QueryRequest;
 import demo.domain.DemoUser;
 import java.util.Map;
 
-// MySQL 专用命令，不是 SQLite/PostgreSQL 通用 SQL。
+// MySQL 专用命令，不是 SQLite/H2/PostgreSQL 通用 SQL。
 var tablesRequest = QueryRequest.newInstance("show tables", Map.of(), Map.class);
 tablesRequest.setSession("mysql");
 var tables = tablesRequest.selectList();
@@ -564,7 +663,7 @@ DemoUser user = userRequest.selectOne();
 
 QueryRequest.newInstance(sql, params, clazz) 的 Map.class 返回按列标签组织的行 Map；对象结果按字段映射解码。selectOne 不检查“恰好一条”。多组时用 setSession 指定组；这是 void setter，不是可继续 selectList 的链式返回。
 
-SQLite 按 `BaseRequest.getFromClass()` 自动建表，不按返回类型猜测实体。原始查询初始 fromClass 等于 clazz，原始写入初始为 Object；需要建表时调用 `request.setFromClass(DemoUser.class)` 指定完整表实体。不需要来源时可以设为 null 或 Object.class，框架跳过实体映射和自动建表，SQL 与参数绑定照常执行，结果仍按 entityClass 解码。设置实体不会改写 SQL，也不自动创建 SQL 中的其他表；完整示例见 [第一专题](01-接入与数据源.md#自定义-sql-指定建表实体)。
+SQLite/H2 按 `BaseRequest.getFromClass()` 自动建表，不按返回类型猜测实体。原始查询初始 fromClass 等于 clazz，原始写入初始为 Object；需要建表时调用 `request.setFromClass(DemoUser.class)` 指定完整表实体。不需要来源时可以设为 null 或 Object.class，框架跳过实体映射和自动建表，SQL 与参数绑定照常执行，结果仍按 entityClass 解码。设置实体不会改写 SQL，也不自动创建 SQL 中的其他表；完整示例见 [第一专题](01-接入与数据源.md#自定义-sql-指定建表实体)及 [H2 接入](01-接入与数据源.md#h2-接入)。
 
 原始 CommandNode 不自动补分页或计数 SQL。需要时在可信 SQL 中明确写 LIMIT/OFFSET 或 COUNT，并用 selectList/selectOne 读取；不要把包装器分页能力直接套到任意原始命令。
 
@@ -683,7 +782,7 @@ var daily = ModelGroupWrapper.newInstance("mysql", MetricsTable.class)
 
 也可在 dateStr 字段增加 `@JoinAggregations(AggregationsEnum.day)`，并保留 JoinField 映射。日期维度生成分组格式字符串；没有该表达式时 dateStr 不自动出现在统计结果里。
 
-MySQL/PostgreSQL 使用各自日期与区间解析器；SQLite 当前不支持这两个自动分组入口，需写 strftime 等专用 SQL。TEXT 日期须统一格式与时区；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
+MySQL/PostgreSQL/H2 使用各自日期与区间解析器；SQLite 当前不支持这两个自动分组入口，需写 strftime 等专用 SQL。TEXT 日期须统一格式与时区；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
 
 ### 批量与多连接写入
 
@@ -700,11 +799,14 @@ yulinlin:
     jdbc:
       parallel-connections: 4
       execute-batch-size: 256
+  h2:
+    max-connections: 4
+    batch-size: 256
 ```
 
-两个数都必须是正整数。默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满 256 行执行一次 executeBatch，尾批也执行。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
+这些数都必须是正整数。公共 JdbcSession 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满 256 行执行一次 executeBatch，尾批也执行。H2 使用 yulinlin.h2 下的两个覆盖值。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
 
-只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
 
 executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
 

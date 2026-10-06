@@ -1,0 +1,1 @@
+org.springframework.boot.autoconfigure.AutoConfigurationImportFilter=com.yulinlin.jdbc.h2.H2OnlyAutoConfigurationFilter

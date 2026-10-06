@@ -34,7 +34,7 @@ public class DemoUser extends IdEntity<DemoUser> {
 }
 ```
 
-MySQL/PostgreSQL 需要提前准备表；SQLite 使用 SqliteSession 时，完整 DemoUser 实体的第一次请求会自动创建缺失表，不需要执行下列 DDL。手动建表仅在自己的示例数据库执行，不把它当作生产迁移脚本：
+MySQL/PostgreSQL 需要提前准备表；SQLite/H2 使用对应本地 Session 时，完整 DemoUser 实体的第一次请求会自动创建缺失表，不需要执行下列 DDL。手动建表仅在自己的示例数据库执行，不把它当作生产迁移脚本：
 
 ```sql
 CREATE TABLE ai_demo_user (
@@ -53,6 +53,7 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 | JoinField(exist = false) | 排除非数据库列 |
 | JoinField(update = false) | 排除更新字段 |
 | JoinMeta(primaryKey = true) | 主键元信息；不是 JoinPrimary |
+| JoinIndex(fields = {...}) | H2/SQLite 自动维护普通或唯一联合索引；字段写 Java 属性名 |
 | JoinWhere | 对象属性有值时参与条件 |
 | JoinField(version = true) | 版本字段；具体支持路径按代理与实际更新实现核对 |
 
@@ -196,7 +197,7 @@ import com.yulinlin.data.core.request.QueryRequest;
 import demo.domain.DemoUser;
 import java.util.Map;
 
-// MySQL 专用命令，不是 SQLite/PostgreSQL 通用 SQL。
+// MySQL 专用命令，不是 SQLite/H2/PostgreSQL 通用 SQL。
 var tablesRequest = QueryRequest.newInstance("show tables", Map.of(), Map.class);
 tablesRequest.setSession("mysql");
 var tables = tablesRequest.selectList();
@@ -211,7 +212,7 @@ DemoUser user = userRequest.selectOne();
 
 QueryRequest.newInstance(sql, params, clazz) 的 Map.class 返回按列标签组织的行 Map；对象结果按字段映射解码。selectOne 不检查“恰好一条”。多组时用 setSession 指定组；这是 void setter，不是可继续 selectList 的链式返回。
 
-SQLite 按 `BaseRequest.getFromClass()` 自动建表，不按返回类型猜测实体。原始查询初始 fromClass 等于 clazz，原始写入初始为 Object；需要建表时调用 `request.setFromClass(DemoUser.class)` 指定完整表实体。不需要来源时可以设为 null 或 Object.class，框架跳过实体映射和自动建表，SQL 与参数绑定照常执行，结果仍按 entityClass 解码。设置实体不会改写 SQL，也不自动创建 SQL 中的其他表；完整示例见 [第一专题](01-接入与数据源.md#自定义-sql-指定建表实体)。
+SQLite/H2 按 `BaseRequest.getFromClass()` 自动建表，不按返回类型猜测实体。原始查询初始 fromClass 等于 clazz，原始写入初始为 Object；需要建表时调用 `request.setFromClass(DemoUser.class)` 指定完整表实体。不需要来源时可以设为 null 或 Object.class，框架跳过实体映射和自动建表，SQL 与参数绑定照常执行，结果仍按 entityClass 解码。设置实体不会改写 SQL，也不自动创建 SQL 中的其他表；完整示例见 [第一专题](01-接入与数据源.md#自定义-sql-指定建表实体)及 [H2 接入](01-接入与数据源.md#h2-接入)。
 
 原始 CommandNode 不自动补分页或计数 SQL。需要时在可信 SQL 中明确写 LIMIT/OFFSET 或 COUNT，并用 selectList/selectOne 读取；不要把包装器分页能力直接套到任意原始命令。
 
@@ -330,7 +331,7 @@ var daily = ModelGroupWrapper.newInstance("mysql", MetricsTable.class)
 
 也可在 dateStr 字段增加 `@JoinAggregations(AggregationsEnum.day)`，并保留 JoinField 映射。日期维度生成分组格式字符串；没有该表达式时 dateStr 不自动出现在统计结果里。
 
-MySQL/PostgreSQL 使用各自日期与区间解析器；SQLite 当前不支持这两个自动分组入口，需写 strftime 等专用 SQL。TEXT 日期须统一格式与时区；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
+MySQL/PostgreSQL/H2 使用各自日期与区间解析器；SQLite 当前不支持这两个自动分组入口，需写 strftime 等专用 SQL。TEXT 日期须统一格式与时区；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
 
 ## 批量与多连接写入
 
@@ -347,11 +348,14 @@ yulinlin:
     jdbc:
       parallel-connections: 4
       execute-batch-size: 256
+  h2:
+    max-connections: 4
+    batch-size: 256
 ```
 
-两个数都必须是正整数。默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满 256 行执行一次 executeBatch，尾批也执行。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
+这些数都必须是正整数。公共 JdbcSession 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满 256 行执行一次 executeBatch，尾批也执行。H2 使用 yulinlin.h2 下的两个覆盖值。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
 
-只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
 
 executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
 

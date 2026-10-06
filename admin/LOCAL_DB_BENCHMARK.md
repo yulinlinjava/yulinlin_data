@@ -2,7 +2,7 @@
 
 这是 JMH 宏基准：一次 `op` 默认由 4 个业务线程共同写入 100,000 行；每个线程循环提交独立 ORM 请求，每个请求最多 128 个对象。它不属于普通单元测试，默认 Maven 构建也不会编译或运行；只有启用 `local-db-benchmark` Profile 才加入 `src/jmh/java`、生成 JMH 代码和 benchmark JAR。
 
-本机完整实测结果见 [LOCAL_DB_BENCHMARK_REPORT.md](LOCAL_DB_BENCHMARK_REPORT.md)。
+本机完整实测结果、选型建议和限制见 [SQLite/H2 性能报告](../doc/07-SQLite与H2性能报告.md)。
 
 ## 运行
 

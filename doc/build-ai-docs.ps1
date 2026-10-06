@@ -9,13 +9,14 @@ $manualFiles = @(
     '03-关联查询与代理.md',
     '04-工具类.md',
     '05-扩展开发与维护.md',
-    '06-接口安全.md'
+    '06-接口安全.md',
+    '07-SQLite与H2性能报告.md'
 )
 $aiFiles = @($manualFiles[0..3]) + $manualFiles[5]
 $parts = @(
     '# yulinlin-data AI 使用指南',
     '> 派生文件，维护源为 doc 下五个使用专题。重新导出：./doc/build-ai-docs.ps1。',
-    '用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具和接口安全；内部扩展与历史性能不在此导出中，按需另提供第五专题。',
+    '用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具和接口安全；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。',
     '适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-06 已运行本地库 JMH 和跳过普通测试的构建；普通单元测试未运行。代码片段不等于已经验证，真实账号、表、路径和接口由业务提供。'
 )
 foreach ($name in $aiFiles) {
@@ -56,4 +57,4 @@ foreach ($file in $files) {
         }
     }
 }
-Write-Host "OK: 6 manuals; 5 exported for AI; current links and fences checked."
+Write-Host "OK: $($manualFiles.Count) manuals; $($aiFiles.Count) exported for AI; current links and fences checked."

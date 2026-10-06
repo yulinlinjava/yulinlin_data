@@ -18,8 +18,8 @@
 ## 快速选择
 
 - MySQL ORM：starter + mysql。
-- 本地 SQLite：starter + sqlite，默认文件 data/local.db、group 为 sqlite，单写连接。
-- 本地 H2：starter + h2，默认数据库基路径 data/local、group 为 h2，默认最多 4 个连接；两者都按请求 fromClass 自动创建缺失表，并通过 JoinIndex 创建声明的索引，无需扫描包。
+- 本地 SQLite：starter + sqlite，默认文件 data/local.db、group 为 sqlite，单写连接；适合单文件和可串行写入。
+- 本地 H2：starter + h2，默认数据库基路径 data/local、group 为 h2，默认最多 4 个连接；适合多线程小批量写入。两者都按请求 fromClass 自动创建缺失表，并通过 JoinIndex 创建声明的索引，无需扫描包；简要实测见[第一专题](doc/01-接入与数据源.md#sqliteh2-选型)。
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆和 JSON：lang。
 - 接口报文加密：security；当前提供显式注解启用的 AES-256-GCM JSON 加解密。
@@ -32,4 +32,4 @@
 
 每个专题按“入口与示例 → 常见场景 → API/配置 → 使用限制”组织。六份正文是唯一维护源，AI 单文件由五份使用专题派生，不再维护旧专题、存档或独立重复指南。
 
-本轮文档核对日期为 2026-10-06，未运行测试、编译、打包或 JMH。维护与验证方式见第五专题。许可证见 [LICENSE](LICENSE)。
+本轮文档核对日期为 2026-10-06；已运行本地库 JMH 和跳过普通测试的构建，普通单元测试未运行。维护与验证方式见第五专题。许可证见 [LICENSE](LICENSE)。

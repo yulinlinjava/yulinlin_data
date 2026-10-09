@@ -12,9 +12,8 @@ import com.yulinlin.data.core.session.SessionFactory;
 import com.yulinlin.elasticsearch.coder.ElasticCoderManager;
 import com.yulinlin.elasticsearch.parse.ElasticSearchParseManager;
 import com.yulinlin.elasticsearch.session.ElasticsearchSession;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-
-import java.util.List;
 
 
 public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient> {
@@ -44,8 +43,8 @@ public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient>
     }
 
     @Autowired
-    void setQueryCaches(List<QueryCache> providers) {
-        this.queryCache = QueryCaches.single(providers);
+    void setQueryCaches(ObjectProvider<QueryCache> providers) {
+        this.queryCache = QueryCaches.single(providers.orderedStream().toList());
     }
 
     public ElasticsearchSession create(ElasticsearchClient restClient, String group){

@@ -131,8 +131,8 @@ public class YulinlinCoreAutoConfig {
                                      EntityProxyService proxyService,
                                      LoadBalance loadbalance,IFilterManager filterManager,
                                      TransactionListenerManager listenerManager,
-                                     List<QueryCache> queryCaches){
-        QueryCache queryCache = QueryCaches.single(queryCaches);
+                                     ObjectProvider<QueryCache> queryCaches){
+        QueryCache queryCache = QueryCaches.single(queryCaches.orderedStream().toList());
         RouteSession build = RouteSession.builder()
 
 

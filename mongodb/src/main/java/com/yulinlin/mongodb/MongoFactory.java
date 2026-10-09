@@ -11,9 +11,8 @@ import com.yulinlin.data.core.session.SessionFactory;
 import com.yulinlin.mongodb.coder.MongoCoderManager;
 import com.yulinlin.mongodb.parse.MongoParseManager;
 import com.yulinlin.mongodb.session.MongoSession;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-
-import java.util.List;
 
 
 
@@ -43,8 +42,8 @@ public class MongoFactory implements SessionFactory<MongoDatabase> {
     }
 
     @Autowired
-    void setQueryCaches(List<QueryCache> providers) {
-        this.queryCache = QueryCaches.single(providers);
+    void setQueryCaches(ObjectProvider<QueryCache> providers) {
+        this.queryCache = QueryCaches.single(providers.orderedStream().toList());
     }
 
     public MongoSession create(MongoDatabase restClient, String group){

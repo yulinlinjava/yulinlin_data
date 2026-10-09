@@ -1,4 +1,4 @@
-
+spring.aop.auto: true
 server:
   port: 8083
   servlet:

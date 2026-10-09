@@ -11,11 +11,11 @@ import com.yulinlin.data.core.session.SessionFactory;
 import com.yulinlin.jdbc.JdbcProperties;
 import com.yulinlin.jdbc.JdbcSessionProperties;
 import com.yulinlin.jdbc.coder.JdbcCoderManager;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 
 import javax.sql.DataSource;
-import java.util.List;
 
 public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
@@ -39,8 +39,8 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
     private JdbcCoderManager jdbcCoderManager;
 
     @Autowired
-    void setQueryCaches(List<QueryCache> providers) {
-        this.queryCache = QueryCaches.single(providers);
+    void setQueryCaches(ObjectProvider<QueryCache> providers) {
+        this.queryCache = QueryCaches.single(providers.orderedStream().toList());
     }
 
     public JdbcSessionFactory(IParseManager parseManager) {

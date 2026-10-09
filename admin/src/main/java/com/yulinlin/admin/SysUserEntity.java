@@ -30,5 +30,8 @@ public class SysUserEntity extends SuperEntity<SysUserEntity>  {
         private String username;
 
 
+        public Object getO(){
+                return 1;
+        }
 
 }

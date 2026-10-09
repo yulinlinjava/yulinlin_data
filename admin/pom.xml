@@ -51,11 +51,9 @@
             <artifactId>sqlite</artifactId>
             <version>${yulinlin.version}</version>
         </dependency>
-        <dependency>
-            <groupId>com.yulinlin</groupId>
-            <artifactId>h2</artifactId>
-            <version>${yulinlin.version}</version>
-        </dependency>
+
+
+
 
    <!--     <dependency>
             <groupId>com.yulinlin</groupId>

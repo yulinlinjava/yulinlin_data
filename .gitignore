@@ -22,7 +22,7 @@
 *.db
 **/target
 
-
+/admin/
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/

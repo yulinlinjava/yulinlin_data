@@ -149,7 +149,7 @@ class SyncProxyFactory implements IProxyFactory, TransactionListener {
             for (var group : groups.entrySet()) {
                 ExecuteRequest request = ExecuteRequest.ofUpdate(group.getKey().type());
                 request.setSession(group.getKey().source());
-                request.setCache(true); // Invalidate cached rows after automatic updates, too.
+                request.invalidate(); // Automatic dirty writes explicitly invalidate their table namespace.
                 List<SyncProxy> updated = new ArrayList<>();
                 for (SyncProxy proxy : group.getValue()) {
                     IUpdateWrapper wrapper = changes.route.getWrapperFactory().createUpdateWrapper(

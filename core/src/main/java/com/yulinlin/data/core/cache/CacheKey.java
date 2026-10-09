@@ -3,7 +3,10 @@ package com.yulinlin.data.core.cache;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseType;
 
+import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.Map;
+import java.time.Duration;
 
 /** Stable, database-independent key for one logical query. */
 public final class CacheKey {
@@ -36,6 +39,35 @@ public final class CacheKey {
         CacheKeyMetadata.write(hasher, fromClass);
         CacheKeyMetadata.write(hasher, parseType);
         CacheKeyMetadata.write(hasher, node);
+        Murmur3Hash128.Result hash = hasher.finish();
+        return new CacheKey(hash.first(), hash.second());
+    }
+
+    /** Derives a physical cache key from a logical query and a stable namespace-version snapshot. */
+    public CacheKey scoped(long globalVersion, Map<CacheNamespace, Long> namespaceVersions) {
+        return scoped(globalVersion, namespaceVersions, null);
+    }
+
+    /** Derives a physical key; resolved TTL is part of the identity to keep per-query policies independent. */
+    public CacheKey scoped(long globalVersion,
+                           Map<CacheNamespace, Long> namespaceVersions,
+                           Duration ttl) {
+        Murmur3Hash128 hasher = new Murmur3Hash128();
+        hasher.putLong(high);
+        hasher.putLong(low);
+        hasher.putLong(globalVersion);
+        if (ttl == null) {
+            hasher.putLong(Long.MIN_VALUE);
+        } else {
+            hasher.putLong(ttl.getSeconds());
+            hasher.putLong(ttl.getNano());
+        }
+        namespaceVersions.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey(Comparator.naturalOrder()))
+                .forEach(entry -> {
+                    CacheKeyMetadata.write(hasher, entry.getKey().value());
+                    hasher.putLong(entry.getValue());
+                });
         Murmur3Hash128.Result hash = hasher.finish();
         return new CacheKey(hash.first(), hash.second());
     }

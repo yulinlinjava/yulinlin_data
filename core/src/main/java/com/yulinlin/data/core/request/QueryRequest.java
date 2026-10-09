@@ -8,6 +8,7 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.Page;
 
 import java.util.ArrayList;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +33,35 @@ public class QueryRequest<E> extends BaseRequest<E> {
         QueryRequest request =  new QueryRequest(this.getEntityClass(),this.getFromClass(),wrapper);
         request.setRoot(getRoot());
         request.setSession(getSession());
+        request.setCluster(getCluster());
+        request.setCache(isCache());
+        request.setCacheTtl(getCacheTtl());
+        request.addCacheNamespaces(getCacheNamespaces().toArray(String[]::new));
         return request;
+    }
+
+    public QueryRequest<E> cache() {
+        setCache(true);
+        setCacheTtl(null);
+        return this;
+    }
+
+    public QueryRequest<E> cache(Duration ttl) {
+        setCache(true);
+        setCacheTtl(ttl);
+        return this;
+    }
+
+    public QueryRequest<E> cache(boolean enabled) {
+        if (enabled) return cache();
+        setCache(false);
+        setCacheTtl(null);
+        return this;
+    }
+
+    public QueryRequest<E> cacheNamespaces(String... resources) {
+        addCacheNamespaces(resources);
+        return this;
     }
 
 

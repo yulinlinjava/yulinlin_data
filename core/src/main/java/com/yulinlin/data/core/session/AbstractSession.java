@@ -1,6 +1,7 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.cache.CacheKey;
+import com.yulinlin.data.core.cache.CacheNamespaceResolver;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.NoOpQueryCache;
@@ -360,6 +361,9 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                 CacheKey cacheKey = CacheKey.query(
                         group(), cluster(), getClass(), request.getEntityClass(),
                         request.getFromClass(), result.getType(), request.getWrapper());
+                cacheKey = cacheManager.scope(cacheKey, CacheNamespaceResolver.resolve(
+                        getClass(), group(), request.getFromClass(), request.getWrapper(),
+                        request.getCacheNamespaces()), request.getCacheTtl());
                 CacheValueType valueType = result.getType() == ParseType.count
                         ? CacheValueType.scalar(Integer.class)
                         : CacheValueType.listOf(request.getEntityClass());
@@ -381,7 +385,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
                     value = callable.get();
-                    cacheManager.put(cacheKey, valueType, value);
+                    cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
                 } finally {
                     cacheLock.unlock();
                 }

@@ -17,12 +17,20 @@ import org.springframework.cglib.proxy.MethodProxy;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.*;
 
 /** One query result shares one thread-confined lazy association batch. */
 public class LazyProxyFactory implements IProxyFactory {
     private final SyncProxyFactory syncProxyFactory;
-    private static final ThreadLocal<Boolean> CACHE = ThreadLocal.withInitial(() -> false);
+    public record CacheContext(boolean enabled, Duration ttl) {
+        private static final CacheContext DISABLED = new CacheContext(false, null);
+        public CacheContext {
+            if (!enabled) ttl = null;
+        }
+    }
+    private static final ThreadLocal<CacheContext> CACHE =
+            ThreadLocal.withInitial(() -> CacheContext.DISABLED);
     private static final ClassValue<Relations> RELATIONS = new ClassValue<>() {
         @Override protected Relations computeValue(Class<?> type) { return new Relations(type); }
     };
@@ -45,8 +53,10 @@ public class LazyProxyFactory implements IProxyFactory {
         }
     }
     public LazyProxyFactory(SyncProxyFactory syncProxyFactory) { this.syncProxyFactory = syncProxyFactory; }
-    public static void cache(boolean cache) { CACHE.set(cache); }
-    public static boolean isCache() { return CACHE.get(); }
+    public static void cache(boolean cache) { CACHE.set(new CacheContext(cache, null)); }
+    public static void cache(CacheContext cache) { CACHE.set(cache == null ? CacheContext.DISABLED : cache); }
+    public static CacheContext cacheContext() { return CACHE.get(); }
+    public static boolean isCache() { return CACHE.get().enabled(); }
     public boolean isQuery(Class clazz) { return !RELATIONS.get(ProxyUtil.getProxyClass(clazz)).fields.isEmpty(); }
     @Override public Object getProxy(Object data) { return getLazyProxy(data); }
     public Object getLazyProxy(Object target) {
@@ -66,7 +76,7 @@ public class LazyProxyFactory implements IProxyFactory {
         }
         RouteSession route = Objects.requireNonNull(SessionUtil.route(), "Association loading requires a RouteSession");
         String source = SessionUtil.nowSession();
-        boolean cache = isCache();
+        CacheContext cache = cacheContext();
         List<?> beans = list;
         // Create proxies first so eager associations can navigate lazy dependencies.
         if (!plan.getters.isEmpty() && route.isOpenTransaction())
@@ -110,7 +120,7 @@ public class LazyProxyFactory implements IProxyFactory {
         }
     }
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private void handleField(Field field, List<?> beans, boolean cache, String source) {
+    private void handleField(Field field, List<?> beans, CacheContext cache, String source) {
         if (beans.isEmpty()) return;
         JoinQuery query = AnnotationUtil.findAnnotation(field, JoinQuery.class);
         JoinSession explicit = AnnotationUtil.findAnnotation(field, JoinSession.class);
@@ -167,8 +177,12 @@ public class LazyProxyFactory implements IProxyFactory {
         }
     }
     @SuppressWarnings("rawtypes")
-    private BaseModelSelectWrapper select(String session, Class<?> model, JoinQuery query, boolean cache, JoinSession explicit) {
-        BaseModelSelectWrapper select = new BaseModelSelectWrapper(session, model).cache(cache);
+    private BaseModelSelectWrapper select(String session, Class<?> model, JoinQuery query, CacheContext cache, JoinSession explicit) {
+        BaseModelSelectWrapper select = new BaseModelSelectWrapper(session, model);
+        if (cache.enabled()) {
+            if (cache.ttl() == null) select.cache();
+            else select.cache(cache.ttl());
+        }
         if (explicit != null) select.getRequest().setCluster(explicit.cluster());
         for (JoinOrder order : query.order()) select.orderBy(order.name(), order.asc());
         return select;
@@ -203,13 +217,13 @@ public class LazyProxyFactory implements IProxyFactory {
         final Object transaction;
         final Thread owner = Thread.currentThread();
         final String source;
-        final boolean cache;
+        final CacheContext cache;
         final Relations plan;
         final List<?> targets;
         final List<Object> proxies = new ArrayList<>();
         final Map<Field, LoadState> states = new HashMap<>();
         final Map<Field, Set<Object>> assigned = new HashMap<>();
-        LazyBatch(RouteSession route, String source, boolean cache, Relations plan, List<?> targets) {
+        LazyBatch(RouteSession route, String source, CacheContext cache, Relations plan, List<?> targets) {
             this.route = route;
             this.transaction = route.transactionIdentity();
             this.source = source;

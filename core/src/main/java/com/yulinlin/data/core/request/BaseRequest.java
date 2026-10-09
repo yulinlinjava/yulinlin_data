@@ -1,7 +1,13 @@
 package com.yulinlin.data.core.request;
 
 import com.yulinlin.data.core.anno.JoinCluster;
+import com.yulinlin.data.core.cache.QueryCacheProperties;
 import com.yulinlin.data.core.session.RequestType;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 public abstract class BaseRequest<E> {
 
@@ -13,6 +19,11 @@ public abstract class BaseRequest<E> {
     private Class<?> fromClass;
 
     private boolean cache;
+
+    /** Null means use yulinlin.cache.ttl. */
+    private Duration cacheTtl;
+
+    private final Set<String> cacheNamespaces = new LinkedHashSet<>();
 
     private String session;
 
@@ -60,6 +71,29 @@ public abstract class BaseRequest<E> {
 
     public void setCache(boolean cache) {
         this.cache = cache;
+    }
+
+    public Duration getCacheTtl() {
+        return cacheTtl;
+    }
+
+    public void setCacheTtl(Duration cacheTtl) {
+        this.cacheTtl = cacheTtl == null ? null
+                : QueryCacheProperties.requirePositive(cacheTtl, "cache ttl");
+    }
+
+    public void addCacheNamespaces(String... resources) {
+        if (resources == null) return;
+        for (String resource : resources) {
+            if (resource == null || resource.isBlank()) {
+                throw new IllegalArgumentException("cache namespace must not be blank");
+            }
+            cacheNamespaces.add(resource.trim());
+        }
+    }
+
+    public Set<String> getCacheNamespaces() {
+        return Collections.unmodifiableSet(cacheNamespaces);
     }
 
     public String getSession() {

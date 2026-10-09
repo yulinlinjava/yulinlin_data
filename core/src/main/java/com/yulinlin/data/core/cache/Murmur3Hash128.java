@@ -53,6 +53,17 @@ final class Murmur3Hash128 {
         putByte(value);
     }
 
+    void putLong(long value) {
+        putByte((int) value);
+        putByte((int) (value >>> 8));
+        putByte((int) (value >>> 16));
+        putByte((int) (value >>> 24));
+        putByte((int) (value >>> 32));
+        putByte((int) (value >>> 40));
+        putByte((int) (value >>> 48));
+        putByte((int) (value >>> 56));
+    }
+
     Result finish() {
         long finalH1 = h1;
         long finalH2 = h2;

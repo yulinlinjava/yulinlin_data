@@ -2024,12 +2024,18 @@ yulinlin:
 
 ### 启用查询缓存
 
-模型查询直接调用 `cache()`：
+`cache()` 不传参数时使用系统默认值 `yulinlin.cache.ttl`，默认 10 分钟；`cache(Duration)` 只覆盖当前查询：
 
 ```java
 List<SysUser> users = ModelSelectWrapper
         .newInstance("mysql", SysUser.class)
-        .cache()
+        .cache() // 使用 yulinlin.cache.ttl
+        .where(where -> where.eq("status", 1))
+        .selectList();
+
+List<SysUser> shortLived = ModelSelectWrapper
+        .newInstance("mysql", SysUser.class)
+        .cache(Duration.ofSeconds(30))
         .where(where -> where.eq("status", 1))
         .selectList();
 ```
@@ -2043,11 +2049,13 @@ QueryRequest<SysUser> request = QueryRequest.newInstance(
         SysUser.class
 );
 request.setSession("mysql");
-request.setCache(true);
+request.cache(); // 默认 TTL；也可 cache(Duration.ofSeconds(30))
 List<SysUser> users = request.selectList();
 ```
 
-列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。
+列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。级联查询、批量预加载和懒加载会继承入口查询的缓存开关与请求级 TTL。
+
+同一条查询使用不同 TTL 时会生成不同物理 Key，互不覆盖；读取缓存不会续期。
 
 ### Key 规则
 
@@ -2061,6 +2069,8 @@ MurmurHash3-x64-128(
   + entityClass/fromClass
   + 查询类型
   + 完整 INode 元数据
+  + 实际 TTL
+  + 全局版本与依赖表版本
 )
 ```
 
@@ -2072,15 +2082,52 @@ MurmurHash3-x64-128(
 
 ### 失效和一致性
 
-唯一失效机制是写入后 TTL：
+缓存始终受 TTL 约束；需要写后立即不可见旧数据时，在写包装器上显式调用失效方法：
 
-- 默认 TTL 为 10 分钟，且必须大于 0。
-- 读取不会延长 TTL。
-- insert、update、delete 不主动清理缓存。
-- 自定义写 SQL 不主动清理缓存。
-- 数据变化后，在 TTL 到期前允许读到旧值。
+```java
+int affected = ModelUpdateWrapper
+        .newInstance("mysql", patch)
+        .invalidate() // 自动解析实体和语法树涉及的表
+        .execute();
 
-这使复杂 SQL、JOIN、聚合和非 SQL 数据源不需要分析表依赖。业务必须把 TTL 设置为可接受的最大陈旧时间；强一致查询不要调用 `cache()`。
+int deleted = ModelDeleteWrapper
+        .newInstance("mysql", SysUser.class)
+        .eq("status", 0)
+        .invalidate("sys_user", "sys_user_role") // 显式补充依赖表
+        .execute();
+```
+
+三个写入 API 的语义如下：
+
+| API | 行为 |
+| --- | --- |
+| `invalidate()` | 从 `INode`、`From/Join/Store`、`@JoinTable`、`@JoinTableList` 自动提取本次写入涉及的表并失效 |
+| `invalidate("table", ...)` | 自动提取之外，再显式加入表名；自定义写 SQL 应使用它 |
+| `invalidateAll()` | 失效当前缓存 Provider 中的全部查询 |
+
+自定义 SQL 没有实体或节点表信息，框架无法可靠猜测 SQL 涉及的表，必须明确指定：
+
+```java
+ExecuteRequest<Object> write = ExecuteRequest.newInstance(
+        "update sys_user set status=#{status} where id=#{id}",
+        Map.of("status", 1, "id", 7)
+);
+write.setSession("mysql");
+int affected = write.invalidate("sys_user").execute();
+```
+
+自定义查询若没有带 `@JoinTable` 的 `fromClass`，可用 `cacheNamespaces("sys_user", "sys_role")` 声明依赖表。这样任一表失效时，该复杂 SQL、JOIN 或聚合结果都会同时失效。
+
+失效采用“命名空间版本号”，不会遍历百万级 Key：查询 Key 会携带 `Session 类型 + group + 表名` 的版本快照，写入成功后只递增相关版本。旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 会持久化版本号，应用重启后仍不会重新命中已经失效的旧数据。
+
+事务规则：
+
+- 普通单次写入在底层 Session 提交成功后失效。
+- `RouteSession` 多数据源事务会合并重复表名，只在最外层提交成功后统一失效。
+- Spring 事务在 `afterCommit` 阶段失效；回滚或提交失败不失效。
+- 查询回源期间若并发发生更新，旧查询只能写入旧版本 Key，不能重新污染新版本缓存。
+
+写操作默认不会主动失效缓存；只有调用 `invalidate*` 才开启。即便开启主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。要求事务内读己之写或绝对强一致的查询不要调用 `cache()`。
 
 ### 并发与对象边界
 

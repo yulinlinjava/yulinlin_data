@@ -24,6 +24,10 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
 
     private int batchSize = 128;
 
+    private boolean invalidate;
+
+    private boolean invalidateAll;
+
     public void setBatch(boolean batch) {
         this.batch = batch;
     }
@@ -48,9 +52,51 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
         return batch;
     }
 
+    public boolean isInvalidate() {
+        return invalidate;
+    }
+
+    public boolean isInvalidateAll() {
+        return invalidateAll;
+    }
+
+    public ExecuteRequest<E> invalidate() {
+        this.invalidate = true;
+        return this;
+    }
+
+    public ExecuteRequest<E> invalidate(String... resources) {
+        this.invalidate = true;
+        addCacheNamespaces(resources);
+        return this;
+    }
+
+    public ExecuteRequest<E> invalidateAll() {
+        this.invalidate = true;
+        this.invalidateAll = true;
+        return this;
+    }
+
+    public void setInvalidate(boolean invalidate) {
+        this.invalidate = invalidate;
+    }
+
+    public void setInvalidateAll(boolean invalidateAll) {
+        this.invalidateAll = invalidateAll;
+        if (invalidateAll) this.invalidate = true;
+    }
+
     public ExecuteRequest copy(INode wrapper){
-        return new ExecuteRequest(this.getEntityClass(),this.getFromClass())
+        ExecuteRequest copy = new ExecuteRequest(this.getEntityClass(),this.getFromClass())
                 .addRequest(wrapper);
+        copy.requestType = requestType;
+        copy.setRoot(getRoot());
+        copy.setSession(getSession());
+        copy.setCluster(getCluster());
+        copy.invalidate = invalidate;
+        copy.invalidateAll = invalidateAll;
+        copy.addCacheNamespaces(getCacheNamespaces().toArray(String[]::new));
+        return copy;
     }
 
     public ExecuteRequest<E> addRequest(INode node){

@@ -13,6 +13,7 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.Page;
 import lombok.SneakyThrows;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -145,12 +146,22 @@ public class BaseModelSelectWrapper<E,
     }
 
     public R cache(){
-        request.setCache(true);
+        request.cache();
+        return (R)this;
+    }
+
+    public R cache(Duration ttl){
+        request.cache(ttl);
         return (R)this;
     }
 
     public R cache(boolean cache){
-        request.setCache(cache);
+        request.cache(cache);
+        return (R)this;
+    }
+
+    public R cacheNamespaces(String... resources) {
+        request.cacheNamespaces(resources);
         return (R)this;
     }
 

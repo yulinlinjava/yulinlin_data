@@ -31,6 +31,7 @@ public class AdminApplicationTests {
 
 
         List<SysUserEntity> sqllite = ModelSelectWrapper.newInstance("mysql", SysUserEntity.class)
+                .cache()
                 .selectList();
 
 

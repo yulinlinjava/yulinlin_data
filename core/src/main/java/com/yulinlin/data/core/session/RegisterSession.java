@@ -53,6 +53,10 @@ public class RegisterSession extends BaseTransactionSession{
         this.queryCache = queryCache == null ? NoOpQueryCache.INSTANCE : queryCache;
     }
 
+    protected QueryCache queryCache() {
+        return queryCache;
+    }
+
     @Override
     public void commitTransaction() {
         boolean ok = isOpenTransaction();

@@ -1,6 +1,8 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.anno.JoinSession;
+import com.yulinlin.data.core.cache.CacheNamespace;
+import com.yulinlin.data.core.cache.CacheNamespaceResolver;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -15,10 +17,14 @@ import com.yulinlin.data.lang.util.Page;
 import com.yulinlin.data.lang.util.StringUtil;
 import lombok.Builder;
 import lombok.SneakyThrows;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.LongAdder;
@@ -34,6 +40,21 @@ public class RouteSession  extends  RegisterSession{
     private IFilterManager filterManager;
 
     private  TransactionListenerManager transactionListenerManager;
+
+    private final ThreadLocal<PendingInvalidation> pendingInvalidation =
+            ThreadLocal.withInitial(PendingInvalidation::new);
+    private final Object springInvalidationResource = new Object();
+
+    private static final class PendingInvalidation {
+        boolean all;
+        final Set<CacheNamespace> namespaces = new LinkedHashSet<>();
+        void merge(PendingInvalidation other) {
+            all |= other.all;
+            if (!all) namespaces.addAll(other.namespaces);
+            else namespaces.clear();
+        }
+        boolean empty() { return !all && namespaces.isEmpty(); }
+    }
 
 
     private EntitySession before(BaseRequest request){
@@ -81,6 +102,7 @@ public class RouteSession  extends  RegisterSession{
 
         try {
                 ExecuteRequest req = (ExecuteRequest)request;
+                PendingInvalidation invalidation = resolveInvalidation(session, req);
                 Object call = null;
                 if(requestType == RequestType.insert){
                     call =  session.insert(req);
@@ -91,6 +113,7 @@ public class RouteSession  extends  RegisterSession{
                 }
 
                 if(call != null){
+                    scheduleInvalidation(invalidation);
                     filterManager.after(session.group(),request,call);
                 }
                 return (E)call;
@@ -99,6 +122,62 @@ public class RouteSession  extends  RegisterSession{
             after(request);
         }
 
+    }
+
+    private PendingInvalidation resolveInvalidation(EntitySession session, ExecuteRequest<?> request) {
+        if (!request.isInvalidate()) return null;
+        PendingInvalidation pending = new PendingInvalidation();
+        pending.all = request.isInvalidateAll();
+        if (!pending.all) {
+            pending.namespaces.addAll(CacheNamespaceResolver.resolve(
+                    session.getClass(), session.group(), request.getFromClass(),
+                    request.getWrappers(), request.getCacheNamespaces()));
+            if (pending.namespaces.isEmpty()) {
+                throw new NoticeException("无法识别写操作的缓存命名空间，自定义SQL请调用 invalidate(\"表名\") 或 invalidateAll()");
+            }
+        }
+        return pending;
+    }
+
+    private void scheduleInvalidation(PendingInvalidation invalidation) {
+        if (invalidation == null || invalidation.empty()) return;
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            PendingInvalidation springPending = (PendingInvalidation)
+                    TransactionSynchronizationManager.getResource(springInvalidationResource);
+            if (springPending == null) {
+                springPending = new PendingInvalidation();
+                TransactionSynchronizationManager.bindResource(springInvalidationResource, springPending);
+                PendingInvalidation registered = springPending;
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override public void afterCommit() { applyInvalidation(registered); }
+                    @Override public void afterCompletion(int status) {
+                        TransactionSynchronizationManager.unbindResourceIfPossible(springInvalidationResource);
+                    }
+                });
+            }
+            springPending.merge(invalidation);
+        } else if (isOpenTransaction()) {
+            pendingInvalidation.get().merge(invalidation);
+        } else {
+            applyInvalidation(invalidation);
+        }
+    }
+
+    private void applyPendingInvalidation() {
+        PendingInvalidation pending = pendingInvalidation.get();
+        pendingInvalidation.remove();
+        applyInvalidation(pending);
+    }
+
+    private void discardPendingInvalidation() {
+        pendingInvalidation.remove();
+    }
+
+    private void applyInvalidation(PendingInvalidation invalidation) {
+        if (invalidation == null || invalidation.empty()) return;
+        if (invalidation.all) queryCache().invalidateAll();
+        else queryCache().invalidate(Set.copyOf(invalidation.namespaces));
     }
 
 
@@ -115,10 +194,13 @@ public class RouteSession  extends  RegisterSession{
             throw new NoticeException("递归查询深度超过" + deep + ",请使用懒加载:"
                     + (depthKey == Object.class ? "自定义SQL" : depthKey.getName()));
         depth.increment();
-        boolean previousCache = LazyProxyFactory.isCache();
+        LazyProxyFactory.CacheContext previousCache = LazyProxyFactory.cacheContext();
         boolean entered = false;
         try {
-            LazyProxyFactory.cache(previousCache || req.isCache());
+            boolean cacheEnabled = previousCache.enabled() || req.isCache();
+            java.time.Duration cacheTtl = req.isCache() && req.getCacheTtl() != null
+                    ? req.getCacheTtl() : previousCache.ttl();
+            LazyProxyFactory.cache(new LazyProxyFactory.CacheContext(cacheEnabled, cacheTtl));
             EntitySession session = before(req);
             entered = true;
             return (E) switch (requestType) {
@@ -243,6 +325,7 @@ public class RouteSession  extends  RegisterSession{
     }
     @SneakyThrows
     public void startTransaction(){
+        if (!isOpenTransaction()) discardPendingInvalidation();
         super.startTransaction();
         try {
             if (transactionListenerManager != null) transactionListenerManager.startTransaction();
@@ -271,6 +354,8 @@ public class RouteSession  extends  RegisterSession{
             super.commitTransaction();
             return;
         }
+        boolean commitRequested = !isRollbackOnly();
+        boolean dataFinished = false;
         Throwable failure = null;
         try {
             if (transactionListenerManager != null) {
@@ -278,6 +363,9 @@ public class RouteSession  extends  RegisterSession{
                 else transactionListenerManager.commitTransaction();
             }
             super.commitTransaction();
+            dataFinished = true;
+            if (commitRequested) applyPendingInvalidation();
+            else discardPendingInvalidation();
         } catch (Throwable error) {
             failure = error;
             if (isOpenTransaction()) {
@@ -287,6 +375,7 @@ public class RouteSession  extends  RegisterSession{
                 try { super.rollbackTransaction(); }
                 catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
             }
+            if (!dataFinished) discardPendingInvalidation();
         } finally {
             try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
             catch (Throwable cleanup) {
@@ -313,6 +402,7 @@ public class RouteSession  extends  RegisterSession{
             if (failure == null) failure = cleanup;
             else if (failure != cleanup) failure.addSuppressed(cleanup);
         } finally {
+            discardPendingInvalidation();
             try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
             catch (Throwable cleanup) {
                 if (failure == null) failure = cleanup;

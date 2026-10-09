@@ -2,6 +2,7 @@ package com.yulinlin.data.core.cache;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,7 +38,7 @@ class QueryCachesTest {
         }
 
         @Override
-        public void put(CacheKey key, CacheValueType valueType, Object value) {
+        public void put(CacheKey key, CacheValueType valueType, Object value, Duration ttl) {
         }
     }
 }

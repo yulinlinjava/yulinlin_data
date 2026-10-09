@@ -2,7 +2,8 @@ package com.yulinlin.data.core;
 
 import com.yulinlin.data.core.aop.JoinSessionAop;
 import com.yulinlin.data.core.aop.JoinTransactionAop;
-import com.yulinlin.data.core.cache.DbCache;
+import com.yulinlin.data.core.cache.QueryCache;
+import com.yulinlin.data.core.cache.QueryCaches;
 import com.yulinlin.data.core.filter.IFilter;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.filter.InitFilter;
@@ -77,13 +78,6 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public DbCache dbCacheManager() {
-        return new DbCache();
-    }
-
-
-    @ConditionalOnMissingBean
-    @Bean
     public JoinSessionAop dataSourceAop(){
         JoinSessionAop loadBalance =   new JoinSessionAop();
         return loadBalance;
@@ -135,7 +129,10 @@ public class YulinlinCoreAutoConfig {
     @Bean
     public RouteSession routeSession(List<EntitySession> list,
                                      EntityProxyService proxyService,
-                                     LoadBalance loadbalance,IFilterManager filterManager,TransactionListenerManager listenerManager){
+                                     LoadBalance loadbalance,IFilterManager filterManager,
+                                     TransactionListenerManager listenerManager,
+                                     List<QueryCache> queryCaches){
+        QueryCache queryCache = QueryCaches.single(queryCaches);
         RouteSession build = RouteSession.builder()
 
 
@@ -148,6 +145,7 @@ public class YulinlinCoreAutoConfig {
 
         build.setLoadBalance(loadbalance);
         build.setWrapperFactory(wrapperFactory());
+        build.setQueryCache(queryCache);
         build.registerSession(list);
         return build;
     }

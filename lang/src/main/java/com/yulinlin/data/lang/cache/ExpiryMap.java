@@ -1,155 +1,132 @@
 package com.yulinlin.data.lang.cache;
 
-
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.Expiry;
-import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.yulinlin.data.lang.util.ThreadUtil;
 
-import java.util.Collection;
+import java.util.Map;
 import java.util.Queue;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+/** Small dependency-free expiring map. Query caching lives in separate cache modules. */
 public class ExpiryMap<K, V> {
 
+    private static final int DEFAULT_MAX_SIZE = 20_000;
 
-    private volatile Queue<V> expiredQueue = new ConcurrentLinkedQueue<>();
+    private final Map<K, Entry<V>> values = new ConcurrentHashMap<>();
+    private final Queue<V> expiredQueue = new ConcurrentLinkedQueue<>();
+    private final Consumer<Queue<V>> consumer;
+    private final long durationNanos;
+    private final long maximumSize;
+    private final int randomTtlSeconds;
+    private final ScheduledExecutorService scheduler;
 
-
-    // 用于统计或执行更复杂的清理任务
-    private final Consumer< Queue<V>> consumer;
-
-
-    private final Cache<K, V> cache;
-
-    private static int MaxSize = 2*10000;
-
-    private static final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "caffeine-cleaner");
-        t.setDaemon(true);
-        return t;
-    });
-    public ExpiryMap(
-            ) {
-        this(1,TimeUnit.MINUTES,MaxSize,null);
+    public ExpiryMap() {
+        this(1, TimeUnit.MINUTES, DEFAULT_MAX_SIZE, null);
     }
 
-    public ExpiryMap(
-            Consumer<Queue<V>> onRemoval) {
-
-        this(1,TimeUnit.MINUTES,MaxSize,onRemoval);
+    public ExpiryMap(Consumer<Queue<V>> onRemoval) {
+        this(1, TimeUnit.MINUTES, DEFAULT_MAX_SIZE, onRemoval);
     }
 
-    public ExpiryMap(long duration, TimeUnit unit,
-                     long maximumSize,
+    public ExpiryMap(long duration, TimeUnit unit, long maximumSize, Consumer<Queue<V>> consumer) {
+        this(duration, unit, maximumSize, 0, consumer);
+    }
+
+    public ExpiryMap(long duration, TimeUnit unit, long maximumSize, int randomTtl,
                      Consumer<Queue<V>> consumer) {
-        this(duration,unit,maximumSize,0,consumer);
+        if (duration <= 0) throw new IllegalArgumentException("duration must be positive");
+        if (maximumSize <= 0) throw new IllegalArgumentException("maximumSize must be positive");
+        this.durationNanos = unit.toNanos(duration);
+        this.maximumSize = maximumSize;
+        this.randomTtlSeconds = Math.max(0, randomTtl);
+        this.consumer = consumer;
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "expiry-map-cleaner");
+            thread.setDaemon(true);
+            return thread;
+        });
+        scheduler.scheduleAtFixedRate(this::cleanUp, 1, 1, TimeUnit.MINUTES);
     }
-
-    public ExpiryMap(long duration, TimeUnit unit,
-                              long maximumSize,int randomTtl,
-                              Consumer<Queue<V>> consumer) {
-
-        this.consumer=consumer;
-
-        this.cache = Caffeine.newBuilder()
-
-
-                .expireAfter(new Expiry<K, V>() {
-                    @Override
-                    public long expireAfterCreate(K key, V value, long currentTime) {
-                        long baseTtl = unit.toNanos(duration);            // 5 分钟
-                        long jitter =0;
-                        if(randomTtl > 0){
-                            jitter =  ThreadLocalRandom.current().nextLong(0, TimeUnit.SECONDS.toNanos(randomTtl)); // 0~30s 抖动
-                        }
-
-                        return baseTtl + jitter;
-                    }
-                    @Override public long expireAfterUpdate(K key, V value, long currentTime, long currentDuration) {
-                        return currentDuration;
-                    }
-                    @Override public long expireAfterRead(K key, V value, long currentTime, long currentDuration) {
-                        return currentDuration;
-                    }
-                })
-                .maximumSize(maximumSize)
-                .removalListener((K key, V value, RemovalCause cause) -> {
-                    if(this.consumer != null){
-                        this.expiredQueue.add(value);
-                    }
-                })
-                .build();
-
-        scheduler.scheduleAtFixedRate(() -> {
-            // 1) 强制触发过期淘汰
-            cache.cleanUp();
-
-            // 2) 批量处理过期条目
-            if (consumer != null && expiredQueue.size() > 0) {
-                Queue<V> toProcess = expiredQueue;
-                this.expiredQueue = new ConcurrentLinkedQueue<>();
-                ThreadUtil.submit(() -> {
-                    consumer.accept(toProcess);
-                });
-            }
-        }, 1, 1, TimeUnit.MINUTES);
-
-
-    }
-
-
-
 
     public void put(K key, V value) {
-        cache.put(key, value);
+        if (values.size() >= maximumSize && !values.containsKey(key)) evictOne();
+        Entry<V> replaced = values.put(key, new Entry<>(value, expireAt()));
+        if (replaced != null) removed(replaced.value());
     }
 
     public V get(K key) {
-        return cache.getIfPresent(key);
+        Entry<V> entry = values.get(key);
+        if (entry == null) return null;
+        if (entry.expireAtNanos() <= System.nanoTime()) {
+            if (values.remove(key, entry)) removed(entry.value());
+            return null;
+        }
+        return entry.value();
     }
 
-    public V get(K key, Function<K,V> func) {
-        return cache.get(key,func);
+    public V get(K key, Function<K, V> loader) {
+        V current = get(key);
+        if (current != null) return current;
+        Entry<V> entry = values.compute(key, (ignored, existing) -> {
+            if (existing != null && existing.expireAtNanos() > System.nanoTime()) return existing;
+            if (existing != null) removed(existing.value());
+            V loaded = loader.apply(key);
+            return loaded == null ? null : new Entry<>(loaded, expireAt());
+        });
+        return entry == null ? null : entry.value();
     }
-
 
     public void invalidate(K key) {
-        cache.invalidate(key);
+        Entry<V> removed = values.remove(key);
+        if (removed != null) removed(removed.value());
     }
 
     public void shutdown() {
-        cache.cleanUp();
-
+        cleanUp();
         scheduler.shutdownNow();
-
+        values.clear();
         expiredQueue.clear();
     }
 
     public long estimatedSize() {
-        return cache.estimatedSize();
+        return values.size();
     }
 
-
-    public void cleanUp(){
-        cache.cleanUp();
+    public void cleanUp() {
+        long now = System.nanoTime();
+        values.forEach((key, entry) -> {
+            if (entry.expireAtNanos() <= now && values.remove(key, entry)) removed(entry.value());
+        });
+        if (consumer != null && !expiredQueue.isEmpty()) {
+            Queue<V> batch = new ConcurrentLinkedQueue<>();
+            V value;
+            while ((value = expiredQueue.poll()) != null) batch.add(value);
+            if (!batch.isEmpty()) ThreadUtil.submit(() -> consumer.accept(batch));
+        }
     }
 
+    private long expireAt() {
+        long jitter = randomTtlSeconds == 0 ? 0
+                : ThreadLocalRandom.current().nextLong(TimeUnit.SECONDS.toNanos(randomTtlSeconds) + 1);
+        return System.nanoTime() + durationNanos + jitter;
+    }
 
-    public static void main(String[] args)throws Exception {
-        ExpiryMap expiryMap = new ExpiryMap<>(2,TimeUnit.SECONDS,10,0,(v) -> {
-            Collection c = v;
-        });
-        Object o = expiryMap.get("1", (k) -> {
-            return "1";
-        });
+    private void evictOne() {
+        cleanUp();
+        if (values.size() < maximumSize) return;
+        values.keySet().stream().findAny().ifPresent(this::invalidate);
+    }
 
-        Thread.sleep(3*1000);
+    private void removed(V value) {
+        if (consumer != null && value != null) expiredQueue.add(value);
+    }
 
-        expiryMap.put("1",2);
-         int s = 0;
+    private record Entry<V>(V value, long expireAtNanos) {
     }
 }

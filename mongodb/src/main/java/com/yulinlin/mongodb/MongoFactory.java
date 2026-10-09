@@ -2,6 +2,9 @@
 package com.yulinlin.mongodb;
 
 import com.mongodb.client.MongoDatabase;
+import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.QueryCache;
+import com.yulinlin.data.core.cache.QueryCaches;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.session.SessionFactory;
@@ -9,6 +12,8 @@ import com.yulinlin.mongodb.coder.MongoCoderManager;
 import com.yulinlin.mongodb.parse.MongoParseManager;
 import com.yulinlin.mongodb.session.MongoSession;
 import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.List;
 
 
 
@@ -28,6 +33,8 @@ public class MongoFactory implements SessionFactory<MongoDatabase> {
 
     private MongoParseManager parseManager;
 
+    private QueryCache queryCache = NoOpQueryCache.INSTANCE;
+
 
 
     public MongoFactory(MongoParseManager parseManager) {
@@ -35,9 +42,15 @@ public class MongoFactory implements SessionFactory<MongoDatabase> {
 
     }
 
+    @Autowired
+    void setQueryCaches(List<QueryCache> providers) {
+        this.queryCache = QueryCaches.single(providers);
+    }
+
     public MongoSession create(MongoDatabase restClient, String group){
 
         MongoSession searchSession =  new MongoSession(restClient);
+        searchSession.setQueryCache(queryCache);
         searchSession.setSessionProperties(properties);
 
         searchSession.setCoderManager(coderManager);

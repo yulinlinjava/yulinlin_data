@@ -1,6 +1,8 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.anno.JoinCluster;
+import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.loadbalan.LoadBalance;
 import com.yulinlin.data.core.wrapper.IWrapperFactory;
 import lombok.SneakyThrows;
@@ -17,6 +19,8 @@ public class RegisterSession extends BaseTransactionSession{
     private LoadBalance loadBalance;
 
     private IWrapperFactory wrapperFactory;
+
+    private QueryCache queryCache = NoOpQueryCache.INSTANCE;
 
 
     public IWrapperFactory getWrapperFactory() {
@@ -41,7 +45,12 @@ public class RegisterSession extends BaseTransactionSession{
     }
 
     public  void registerSession(EntitySession session){
+        session.setQueryCache(queryCache);
         loadBalance.register(session);
+    }
+
+    public void setQueryCache(QueryCache queryCache) {
+        this.queryCache = queryCache == null ? NoOpQueryCache.INSTANCE : queryCache;
     }
 
     @Override

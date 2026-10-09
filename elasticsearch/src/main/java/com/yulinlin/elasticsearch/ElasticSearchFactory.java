@@ -2,6 +2,9 @@
 package com.yulinlin.elasticsearch;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.QueryCache;
+import com.yulinlin.data.core.cache.QueryCaches;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -10,6 +13,8 @@ import com.yulinlin.elasticsearch.coder.ElasticCoderManager;
 import com.yulinlin.elasticsearch.parse.ElasticSearchParseManager;
 import com.yulinlin.elasticsearch.session.ElasticsearchSession;
 import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.List;
 
 
 public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient> {
@@ -30,15 +35,23 @@ public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient>
 
     private ElasticSearchParseManager parseManager ;
 
+    private QueryCache queryCache = NoOpQueryCache.INSTANCE;
+
 
     public ElasticSearchFactory(ElasticSearchParseManager parseManager) {
         this.parseManager = parseManager;
 
     }
 
+    @Autowired
+    void setQueryCaches(List<QueryCache> providers) {
+        this.queryCache = QueryCaches.single(providers);
+    }
+
     public ElasticsearchSession create(ElasticsearchClient restClient, String group){
 
         ElasticsearchSession searchSession =  new ElasticsearchSession(restClient);
+        searchSession.setQueryCache(queryCache);
         searchSession.setSessionProperties(properties);
         searchSession.setParseManager(parseManager);
 

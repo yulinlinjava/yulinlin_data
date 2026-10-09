@@ -5,6 +5,8 @@
     <packaging>pom</packaging>
     <modules>
         <module>core</module>
+        <module>cache-caffeine</module>
+        <module>cache-ehcache</module>
         <module>jdbc</module>
         <module>admin</module>
         <module>common</module>
@@ -59,6 +61,7 @@
         <swagger-annotations.version>2.2.30</swagger-annotations.version>
         <aopalliance.version>1.0</aopalliance.version>
         <lombok.version>1.18.46</lombok.version>
+        <ehcache.version>3.12.0</ehcache.version>
         <yulinlin.version>
            3.0
         </yulinlin.version>

@@ -1,6 +1,8 @@
 package com.yulinlin.jdbc.session;
 
-import com.yulinlin.data.core.cache.DbCache;
+import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.QueryCache;
+import com.yulinlin.data.core.cache.QueryCaches;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.parse.IParseManager;
@@ -13,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 
 import javax.sql.DataSource;
+import java.util.List;
 
 public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
@@ -20,6 +23,8 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
     private final String jdbcUrlPrefix;
     private final java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator;
     private final JdbcSessionProperties properties;
+
+    private QueryCache queryCache = NoOpQueryCache.INSTANCE;
 
     @Autowired
     IFilterManager filterManager;
@@ -34,8 +39,9 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
     private JdbcCoderManager jdbcCoderManager;
 
     @Autowired
-    private DbCache dbCacheManager;
-
+    void setQueryCaches(List<QueryCache> providers) {
+        this.queryCache = QueryCaches.single(providers);
+    }
 
     public JdbcSessionFactory(IParseManager parseManager) {
         this(parseManager, "jdbc:mysql:", JdbcSession::new, new JdbcSessionProperties());
@@ -84,7 +90,7 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
 
         JdbcSession sqlSession = newSession(dataSource);
-        sqlSession.setCacheManager(dbCacheManager);
+        sqlSession.setQueryCache(queryCache);
         sqlSession.setProperties(java.util.Objects.requireNonNull(properties, "properties"));
         sqlSession.setCoderManager(jdbcCoderManager);
         sqlSession.setGroup(group);

@@ -1,7 +1,6 @@
 package com.yulinlin.jdbc.mysql;
 
 import com.yulinlin.data.core.schema.SchemaMode;
-import com.yulinlin.data.core.cache.DbCache;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -109,7 +108,6 @@ class MysqlParseAutoConfigTest {
     static class Infrastructure {
         @Bean IFilterManager filterManager() { return mock(IFilterManager.class); }
         @Bean EntityProxyService entityProxyService() { return mock(EntityProxyService.class); }
-        @Bean DbCache dbCacheManager() { return mock(DbCache.class); }
         @Bean LogManager logManager() { return new LogManager(); }
     }
 

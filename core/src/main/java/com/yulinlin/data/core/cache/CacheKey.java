@@ -1,114 +1,88 @@
 package com.yulinlin.data.core.cache;
 
-import com.yulinlin.data.core.node.ICondition;
 import com.yulinlin.data.core.node.INode;
-import com.yulinlin.data.core.node.base.Eq;
-import com.yulinlin.data.core.node.order.Order;
-import com.yulinlin.data.core.node.order.OrderNode;
-import com.yulinlin.data.core.node.predicate.And;
 import com.yulinlin.data.core.parse.ParseType;
-import com.yulinlin.data.core.wrapper.*;
-import com.yulinlin.data.core.wrapper.impl.*;
-import com.yulinlin.data.lang.json.JsonUtil;
-import com.yulinlin.data.lang.reflection.ReflectionUtil;
 
-import java.util.List;
+import java.util.HexFormat;
 
-public class CacheKey {
+/** Stable, database-independent key for one logical query. */
+public final class CacheKey {
 
-    ParseType type;
+    private static final String VERSION = "v2";
+    private static final HexFormat HEX = HexFormat.of();
 
-    private int key;
-    private boolean singleEquals;
+    private final long high;
+    private final long low;
+    private volatile String value;
 
-
-    public static CacheKey of( ParseType type,INode node){
-        return new CacheKey( type,node);
+    private CacheKey(long high, long low) {
+        this.high = high;
+        this.low = low;
     }
 
-    /** Identical queries in different data-source groups/clusters must not share rows. */
+    public static CacheKey query(String group,
+                                 Object cluster,
+                                 Class<?> sessionType,
+                                 Class<?> entityClass,
+                                 Class<?> fromClass,
+                                 ParseType parseType,
+                                 INode node) {
+        Murmur3Hash128 hasher = new Murmur3Hash128();
+        CacheKeyMetadata.write(hasher, VERSION);
+        CacheKeyMetadata.write(hasher, group);
+        CacheKeyMetadata.write(hasher, cluster);
+        CacheKeyMetadata.write(hasher, sessionType);
+        CacheKeyMetadata.write(hasher, entityClass);
+        CacheKeyMetadata.write(hasher, fromClass);
+        CacheKeyMetadata.write(hasher, parseType);
+        CacheKeyMetadata.write(hasher, node);
+        Murmur3Hash128.Result hash = hasher.finish();
+        return new CacheKey(hash.first(), hash.second());
+    }
+
+    @Deprecated
+    public static CacheKey of(ParseType type, INode node) {
+        return query(null, null, null, null, null, type, node);
+    }
+
+    @Deprecated
     public static CacheKey of(ParseType type, INode node, String namespace) {
-        CacheKey key = new CacheKey(type, node);
-        key.key = java.util.Objects.hash(namespace, key.key);
-        return key;
+        return query(namespace, null, null, null, null, type, node);
     }
 
-    private CacheKey(ParseType type,INode node) {
-
-
-        IPageWrapper page = null;
-        ICondition where= null;
-        ICondition having = null;
-        Order sort = null;
-        if(node instanceof IPageWrapper){
-            page = (IPageWrapper)node;
+    public String value() {
+        String current = value;
+        if (current == null) {
+            current = VERSION + ":" + HEX.toHexDigits(high) + HEX.toHexDigits(low);
+            value = current;
         }
-        if(node instanceof IWhereWrapper){
-            IWhereWrapper ww = (IWhereWrapper)node;
-            IConditionWrapper  wrapper =(IConditionWrapper) ww.where();
-            where = wrapper.getCondition();
-        }
-        if(node instanceof IHavingWrapper){
-            IHavingWrapper ww = (IHavingWrapper)node;
-            IConditionWrapper  wrapper =(IConditionWrapper) ww.having();
-            having = wrapper.getCondition();
-        }
-        if(node instanceof ISortWrapper){
-            sort = (Order)ReflectionUtil.invokeGetter(node,"order");
-        }
-
-
-        if(where != null){
-            init(type,where,having,page,sort);
-        }
-
-
+        return current;
     }
 
-
-    public void init(ParseType type, ICondition where, ICondition having, IPageWrapper page, Order order){
-
-        String str="";
-        if(where != null){
-            str = JsonUtil.toJson(where);
-        }
-        if(having != null){
-            str += JsonUtil.toJson(having);
-        }
-
-        if(order != null){
-            List<OrderNode> list = order.getList();
-            if(list.size() > 0){
-                str += JsonUtil.toJson(list);
-            }
-        }
-        if(page != null){
-            str +=    ReflectionUtil.invokeGetter(page,"pageNumber");
-            str +=    ReflectionUtil.invokeGetter(page,"pageSize");
-        }
-
-
-        if(type == ParseType.count){
-            str =str+"count";
-        }
-        key =str.hashCode();
-
-        if(where instanceof And){
-            And and = (And)where;
-            if(and.getList().size() == 1){
-                singleEquals =  and.getList().get(0) instanceof Eq;
-            }
-        }else {
-            singleEquals = false;
-
-        }
-    }
-
-    public boolean isSingleEqualsCondition(){
-        return singleEquals;
-    }
-
+    /** @deprecated A 32-bit key is not collision-safe. Use {@link #value()}. */
+    @Deprecated
     public int getKey() {
-        return key;
+        return hashCode();
+    }
+
+    /** @deprecated Cache invalidation is now TTL-only. */
+    @Deprecated
+    public boolean isSingleEqualsCondition() {
+        return false;
+    }
+
+    @Override
+    public boolean equals(Object object) {
+        return object instanceof CacheKey other && high == other.high && low == other.low;
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * Long.hashCode(high) + Long.hashCode(low);
+    }
+
+    @Override
+    public String toString() {
+        return value();
     }
 }

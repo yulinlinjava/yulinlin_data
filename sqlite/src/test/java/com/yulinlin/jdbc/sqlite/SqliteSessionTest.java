@@ -2,7 +2,6 @@ package com.yulinlin.jdbc.sqlite;
 
 import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinTable;
-import com.yulinlin.data.core.cache.DbCache;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -47,7 +46,6 @@ class SqliteSessionTest {
         properties.setMapUnderscoreToCamelCase(true);
         session.setProperties(properties);
         session.setCoderManager(new JdbcCoderManager());
-        session.setCacheManager(new DbCache());
         session.setLogManager(new LogManager());
         session.setFilterManager(new IFilterManager() { });
         var proxy = mock(EntityProxyService.class);

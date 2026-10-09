@@ -1,6 +1,7 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.loadbalan.LoadBalanceNode;
+import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.lang.util.Page;
@@ -9,6 +10,10 @@ import java.util.Collection;
 import java.util.List;
 
 public interface EntitySession extends LoadBalanceNode,TransactionSession {
+
+    /** Installs the optional query cache selected by the application. */
+    default void setQueryCache(QueryCache queryCache) {
+    }
 
     /** Whether this session can use independent connections for concurrent writes in the current context. */
     default boolean supportsParallelWrites() {

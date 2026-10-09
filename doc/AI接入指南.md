@@ -2,15 +2,15 @@
 
 ---
 
-> 派生文件，维护源为 doc 下五个使用专题。重新导出：./doc/build-ai-docs.ps1。
+> 派生文件，维护源为 doc 下六个使用专题。重新导出：./doc/build-ai-docs.ps1。
 
 ---
 
-用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具和接口安全；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
+用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全和查询缓存；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
 
 ---
 
-适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-06 已运行本地库 JMH、JDK 25 编译和 Schema 定向测试；代码片段不等于所有数据库服务器均已集成验证，真实账号、表、路径和接口由业务提供。
+适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-09 已运行本地库 JMH、JDK 25 全模块测试编译、缓存专项测试和 Schema 定向测试；代码片段不等于所有数据库服务器均已集成验证，真实账号、表、路径和接口由业务提供。
 
 ---
 
@@ -477,7 +477,7 @@ public class MixedSessionConfig {
 
 MySQL 与 SQLite 共存时，保留原主库配置即可，SQLite 使用内部池和独立 sqlite 组。多个主 DataSource 没有唯一候选时，全部会话显式创建，不任意猜测。
 
-手动 new JdbcSessionFactory 后不能立即假定可用：当前工厂需要容器注入编码器、缓存、日志等。`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
+手动 new JdbcSessionFactory 后不能立即假定可用：当前工厂需要容器注入编码器、过滤器和日志等。缓存由 RouteSession 注册 Session 时统一注入；`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
 
 ### 默认会话组
 
@@ -969,7 +969,7 @@ Integer affected = update.execute();
 
 此入口走通用 update 执行路径，命令 ParseType 同为 update；不根据 SQL 首词猜测 INSERT/DELETE 类型。适用于后端支持的写语句，不作为返回查询结果的入口。DDL、驱动批量改写、受影响行数等行为仍由目标数据库/驱动决定。
 
-Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始 SQL 不知道自己影响哪些业务实体，不自动提供精确的实体查询缓存失效承诺；依赖缓存的业务应显式协调。
+Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数；缓存只按 TTL 失效，写 SQL 不主动清理查询缓存。
 
 #### 占位符与安全
 
@@ -1161,7 +1161,7 @@ try {
 
 - 更新通常跳过 null；普通 copyProperties 或懒同步的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
-- cache() 会保存并复制查询模型，模型必须符合深克隆支持范围；原始 SQL 与外部写入需要业务管理缓存一致性。
+- cache() 会保存并复制查询模型，模型必须符合深克隆支持范围；缓存只按写入后 TTL 失效，写操作不会主动清理，强一致查询不要启用缓存。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
 - 日期范围为空先核对列类型、格式、时区与条件，不默认归咎于数据库驱动。
 - 表达式、JOIN、JSON 路径、行锁按目标库核对；没有跨库 SQL 自动翻译器。
@@ -1965,3 +1965,136 @@ public class SecureValueService {
 - 当前未实现时间戳、nonce 防重放和密钥轮换；这些属于下一阶段，不应在文档或业务中假设已经具备。
 
 本专题于 2026-10-06 按源码编写。本轮未运行测试、编译或打包，使用前应在业务工程中验证浏览器协议和异常响应约定。
+
+---
+
+<!-- source: doc/08-查询缓存.md -->
+## 查询缓存
+
+查询缓存是可选能力。`core` 只提供统一协议和无缓存兜底；不引入缓存模块时，应用照常启动，标记为缓存的查询会直接访问数据源。
+
+### 选择实现
+
+只引入一个实现，不要同时引入两个。
+
+#### Caffeine 内存缓存
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>cache-caffeine</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+调用链为 `Caffeine → 数据源`。它适合追求最低本地延迟、允许应用重启后缓存消失的服务。
+
+```yaml
+yulinlin:
+  cache:
+    ttl: 10m
+    caffeine:
+      maximum-size: 10000
+      record-stats: true
+```
+
+#### Ehcache 持久化缓存
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>cache-ehcache</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+调用链为 `Ehcache Heap → Ehcache Disk → 数据源`。Ehcache 自己管理内存热点层和磁盘层，不需要再引入 Caffeine。
+
+```yaml
+yulinlin:
+  cache:
+    ttl: 10m
+    ehcache:
+      directory: ./data/cache
+      heap-entries: 10000
+      disk-size-mb: 1024
+```
+
+持久化目录只能由一个 CacheManager 占用。正常关闭时框架调用 `close()`；异常退出后磁盘缓存允许丢失，缓存损坏或反序列化失败会删除对应项并回源查询。
+
+### 启用查询缓存
+
+模型查询直接调用 `cache()`：
+
+```java
+List<SysUser> users = ModelSelectWrapper
+        .newInstance("mysql", SysUser.class)
+        .cache()
+        .where(where -> where.eq("status", 1))
+        .selectList();
+```
+
+自定义 SQL 同样支持缓存：
+
+```java
+QueryRequest<SysUser> request = QueryRequest.newInstance(
+        "select * from sys_user where status = #{status}",
+        Map.of("status", 1),
+        SysUser.class
+);
+request.setSession("mysql");
+request.setCache(true);
+List<SysUser> users = request.selectList();
+```
+
+列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。
+
+### Key 规则
+
+Key 在 `core` 中统一生成，不依赖某一种数据库最终 SQL：
+
+```text
+MurmurHash3-x64-128(
+    版本
+  + 路由后的 group/cluster
+  + Session 类型
+  + entityClass/fromClass
+  + 查询类型
+  + 完整 INode 元数据
+)
+```
+
+元数据直接流入128位哈希器，不构建完整中间字符串。`CacheKey` 在内存中只保存两个 `long`；Caffeine 直接使用该对象作为 Key，只有 Ehcache 持久化或日志输出时才按需生成 `v2:` 开头的32位十六进制文本。实体反射字段通过 `ClassValue` 缓存，不会在每次查询时重新扫描、排序。
+
+`CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
+
+数据源 group 必须进入 Key。同一个实体和条件在 `mysql`、`pgsql` 或其他 group 中不会串缓存；同一个逻辑 group 下的负载均衡节点可以共享逻辑 Key。
+
+### 失效和一致性
+
+唯一失效机制是写入后 TTL：
+
+- 默认 TTL 为 10 分钟，且必须大于 0。
+- 读取不会延长 TTL。
+- insert、update、delete 不主动清理缓存。
+- 自定义写 SQL 不主动清理缓存。
+- 数据变化后，在 TTL 到期前允许读到旧值。
+
+这使复杂 SQL、JOIN、聚合和非 SQL 数据源不需要分析表依赖。业务必须把 TTL 设置为可接受的最大陈旧时间；强一致查询不要调用 `cache()`。
+
+### 并发与对象边界
+
+同一个 Key 回源时使用分段锁和二次检查，降低缓存到期瞬间的重复查询。缓存保存查询增强前的数据；返回给业务前会复制模型并创建当前调用需要的懒加载/懒同步代理，旧事务代理不会被保存复用。
+
+Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化要求。连接、流、Statement、ResultSet 等资源对象不能作为缓存查询结果。
+
+### 启动规则
+
+| 项目依赖 | 启动结果 |
+| --- | --- |
+| 不引入缓存模块 | 正常启动，查询直接访问数据源 |
+| 只引入 `cache-caffeine` | 启用内存缓存 |
+| 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
+| 同时引入两个实现 | 启动失败并报告多个缓存 Provider |
+
+手动注册新的 Session 时，`RouteSession.registerSession` 会把当前缓存 Provider 注入 Session。第三方数据源继承 `AbstractSession` 即可获得相同行为；直接实现 `EntitySession` 时，需要实现 `setQueryCache` 才能接入查询缓存。

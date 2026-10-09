@@ -1,7 +1,10 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.cache.CacheKey;
-import com.yulinlin.data.core.cache.DbCache;
+import com.yulinlin.data.core.cache.CacheLookup;
+import com.yulinlin.data.core.cache.CacheValueType;
+import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.coder.IDataBuffer;
 import com.yulinlin.data.core.filter.IFilterManager;
@@ -9,6 +12,7 @@ import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.data.core.parse.ParseResult;
+import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.parse.SimpParamsContext;
 import com.yulinlin.data.core.proxy.EntityProxyService;
 import com.yulinlin.data.core.request.BaseRequest;
@@ -40,7 +44,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     private ICoderManager coderManager;
 
-    private DbCache cacheManager;
+    private QueryCache cacheManager = NoOpQueryCache.INSTANCE;
 
 
 
@@ -341,9 +345,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             return total;
         });
 
-        // A write changes single-row, list, count and paginated queries, not just its WHERE key.
-        if (request.isCache()) cacheManager.update(request.getEntityClass());
-
         return val;
     }
 
@@ -356,30 +357,31 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         E value = null;
         if(request.isCache()){
 
-                CacheKey cacheKey = CacheKey.of(result.getType(), request.getWrapper(), group() + ":" + cluster());
+                CacheKey cacheKey = CacheKey.query(
+                        group(), cluster(), getClass(), request.getEntityClass(),
+                        request.getFromClass(), result.getType(), request.getWrapper());
+                CacheValueType valueType = result.getType() == ParseType.count
+                        ? CacheValueType.scalar(Integer.class)
+                        : CacheValueType.listOf(request.getEntityClass());
 
-                Integer key =cacheKey.getKey();
-
-                value = cacheManager.get(request.getEntityClass(), cacheKey);
-                if(value != null){
-                    return value;
+                CacheLookup lookup = cacheManager.get(cacheKey, valueType);
+                if(lookup.hit()){
+                    return (E) lookup.value();
                 }
-                Lock cacheLock = segmentLock.getLock(key);
+                Lock cacheLock = segmentLock.getLock(cacheKey);
 
                 cacheLock.lock();
 
                 try {
                     //二次检查
-                    value = cacheManager.get(request.getEntityClass(), cacheKey);
-                    if(value != null){
-                        return value;
+                    lookup = cacheManager.get(cacheKey, valueType);
+                    if(lookup.hit()){
+                        return (E) lookup.value();
                     }
 
 
                     value = callable.get();
-                    if(value != null){
-                        cacheManager.put(request.getEntityClass(), cacheKey,value);
-                    }
+                    cacheManager.put(cacheKey, valueType, value);
                 } finally {
                     cacheLock.unlock();
                 }
@@ -517,11 +519,18 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     }
 
 
-    public void setCacheManager(DbCache cacheManager) {
-        this.cacheManager = cacheManager;
+    @Override
+    public void setQueryCache(QueryCache cacheManager) {
+        this.cacheManager = cacheManager == null ? NoOpQueryCache.INSTANCE : cacheManager;
     }
 
-    public DbCache getCacheManager() {
+    /** @deprecated Use {@link #setQueryCache(QueryCache)}. */
+    @Deprecated
+    public void setCacheManager(QueryCache cacheManager) {
+        setQueryCache(cacheManager);
+    }
+
+    public QueryCache getCacheManager() {
         return cacheManager;
     }
 

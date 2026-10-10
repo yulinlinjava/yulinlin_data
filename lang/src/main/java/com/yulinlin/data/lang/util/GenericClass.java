@@ -9,7 +9,6 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class GenericClass extends BaseGeneric {
 
@@ -145,13 +144,16 @@ public class GenericClass extends BaseGeneric {
 
 
 
-    private static ConcurrentHashMap<Type,GenericClass> cache = new ConcurrentHashMap();
+    private static final ClassValue<GenericClass> CACHE = new ClassValue<>() {
+        @Override
+        protected GenericClass computeValue(Class<?> type) {
+            return new GenericClass(type);
+        }
+    };
 
 
     public static GenericClass newInstance(Class clazz){
-     return    cache.computeIfAbsent(clazz,type -> {
-            return new GenericClass(type);
-        });
+        return CACHE.get(clazz);
     }
 
 

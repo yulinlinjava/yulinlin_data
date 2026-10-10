@@ -2,6 +2,7 @@ package com.yulinlin.data.core.anno;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
+import java.lang.annotation.Documented;
 
 import static java.lang.annotation.ElementType.*;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
@@ -14,6 +15,7 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
  */
 @Retention(RUNTIME)
 @Target(value={TYPE,METHOD,FIELD})
+@Documented
 public @interface JoinSession {
 
     /**

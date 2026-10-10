@@ -1,13 +1,11 @@
 package com.yulinlin.repository.session;
 
-import com.yulinlin.data.lang.reflection.ProxyUtil;
-import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.repository.proxy.MethodParseManager;
-import org.springframework.cglib.proxy.MethodInterceptor;
-import org.springframework.cglib.proxy.MethodProxy;
 
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -23,45 +21,38 @@ public class RepositorySession {
 
     public <E> E create(Class<E> key){
         return key.cast(cache.computeIfAbsent(key, type -> {
+            if (!type.isInterface()) {
+                throw new IllegalArgumentException("Repository type must be an interface: " + type.getName());
+            }
             methodParseManager.validate(type);
-            return new Proxy(type).getProxyInstance();
+            return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type},
+                    new RepositoryInvocationHandler(type));
         }));
     }
 
-    /**
-     * 字段代理
-     */
-    private class Proxy implements MethodInterceptor {
+    private final class RepositoryInvocationHandler implements InvocationHandler {
+        private final Class<?> repositoryType;
 
-        private Class target;
-
-
-
-
-        public Proxy(Class target) {
-            this.target = target;
+        private RepositoryInvocationHandler(Class<?> repositoryType) {
+            this.repositoryType = repositoryType;
         }
 
         @Override
-        public Object intercept(Object o, Method method, Object[] objects, MethodProxy methodProxy) throws Throwable {
-            boolean isAbstract =  Modifier.isAbstract(method.getModifiers());
-           if(method.isDefault() || !isAbstract ){
-              // return methodProxy.invokeSuper(o,objects);
-                return ReflectionUtil.invokeMethod(o,method,objects);
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            Object[] values = args == null ? new Object[0] : args;
+            if (method.getDeclaringClass() == Object.class) {
+                return switch (method.getName()) {
+                    case "equals" -> proxy == values[0];
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "toString" -> repositoryType.getName() + " proxy";
+                    default -> throw new IllegalStateException("Unsupported Object method: " + method);
+                };
             }
-            return methodParseManager.apply(method.getName(),objects,method,o);
-
-
-        }
-
-        public Object getProxyInstance() {
-            Class clazz = ProxyUtil.getProxyClass( target);
-
-            Object o =  ProxyUtil.getProxyInstance(clazz,this);
-
-
-
-            return  o;
+            if (method.isDefault()) return InvocationHandler.invokeDefault(proxy, method, values);
+            if (!Modifier.isAbstract(method.getModifiers())) {
+                throw new IllegalStateException("Unsupported Repository method: " + method.toGenericString());
+            }
+            return methodParseManager.apply(method.getName(), values, method, proxy);
         }
     }
 }

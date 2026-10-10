@@ -6,7 +6,7 @@ import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.core.type.ClassMetadata;
 import org.springframework.core.type.classreading.MetadataReader;
 import org.springframework.core.type.classreading.MetadataReaderFactory;
-import org.springframework.core.type.classreading.SimpleMetadataReaderFactory;
+import org.springframework.core.type.classreading.CachingMetadataReaderFactory;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.SystemPropertyUtils;
 
@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 public class ScanUtils {
 
     private static final ResourcePatternResolver RESOLVER = new PathMatchingResourcePatternResolver();
-    private static final MetadataReaderFactory METADATA_READER_FACTORY = new SimpleMetadataReaderFactory();
+    private static final MetadataReaderFactory METADATA_READER_FACTORY = new CachingMetadataReaderFactory(RESOLVER);
 
 
 
@@ -38,19 +38,22 @@ public class ScanUtils {
         String packageSearchPath = ResourcePatternResolver.CLASSPATH_ALL_URL_PREFIX + path + "/**/*.class";
 
         Set<Class<?>> classes = new HashSet<>();
+        MetadataReaderFactory metadataReaderFactory = resourcePatternResolver == RESOLVER
+                ? METADATA_READER_FACTORY : new CachingMetadataReaderFactory(resourcePatternResolver);
+        ClassLoader classLoader = resourcePatternResolver.getClassLoader();
         try {
             Resource[] resources = resourcePatternResolver.getResources(packageSearchPath);
             for (Resource resource : resources) {
                 if (resource.isReadable()) {
-                    MetadataReader metadataReader = METADATA_READER_FACTORY.getMetadataReader(resource);
+                    MetadataReader metadataReader = metadataReaderFactory.getMetadataReader(resource);
                     ClassMetadata classMetadata = metadataReader.getClassMetadata();
                     if(isInterface){
                         if (classMetadata.isInterface() || classMetadata.isAbstract()) {
-                            classes.add(Class.forName(classMetadata.getClassName()));
+                            classes.add(Class.forName(classMetadata.getClassName(), false, classLoader));
                         }
                     }else {
                         if (classMetadata.isConcrete()) {
-                            classes.add(Class.forName(classMetadata.getClassName()));
+                            classes.add(Class.forName(classMetadata.getClassName(), false, classLoader));
                         }
                     }
 
@@ -73,8 +76,10 @@ public class ScanUtils {
      * @return 扫描到的类
      */
     public static Set<Class<?>> scanSubclass(String scanPath, Class<?> superclass, boolean mustConcrete) {
-        Set<Class<?>> scanClass = scanClass(scanPath, mustConcrete);
-        return scanClass.stream().filter(superclass::isAssignableFrom).collect(Collectors.toSet());
+        Set<Class<?>> classes = new HashSet<>(scanClass(scanPath, false));
+        if (!mustConcrete) classes.addAll(scanClass(scanPath, true));
+        return classes.stream().filter(type -> type != superclass && superclass.isAssignableFrom(type))
+                .collect(Collectors.toSet());
     }
 
 }

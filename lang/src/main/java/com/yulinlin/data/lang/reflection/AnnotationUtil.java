@@ -7,9 +7,6 @@ import org.springframework.core.annotation.AnnotationUtils;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 注解工具类
@@ -85,8 +82,7 @@ public class AnnotationUtil {
      * @return
      */
     public static <E extends Annotation> E findAnnotation(Method method, Class<E> anno,int i){
-
-        return method.getParameterTypes()[i].getAnnotation(anno);
+        return method.getParameters()[i].getAnnotation(anno);
     }
 
 

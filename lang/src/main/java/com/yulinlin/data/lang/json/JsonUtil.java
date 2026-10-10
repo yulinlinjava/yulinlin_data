@@ -12,11 +12,12 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.text.SimpleDateFormat;
 import java.util.Collection;
+import java.util.Objects;
 
 
 public class JsonUtil {
 
-    private static ObjectMapper mapper;
+    private static volatile ObjectMapper mapper;
 
     static {
         mapper=new ObjectMapper();
@@ -29,7 +30,7 @@ public class JsonUtil {
     }
 
     public static void setMapper(ObjectMapper mapper) {
-        JsonUtil.mapper = mapper;
+        JsonUtil.mapper = Objects.requireNonNull(mapper, "mapper");
     }
 
     public static ObjectMapper getMapper(){
@@ -75,10 +76,10 @@ public class JsonUtil {
     public static <T> T parseJson(String json,Class<T> cla,Class<?>... clazz) {
 
         try {
+            ObjectMapper mapper = getMapper();
             if(clazz.length == 0){
                 return mapper.readValue(json,cla);
             }else{
-                ObjectMapper mapper =getMapper();
                 JavaType javaType =  mapper.getTypeFactory()
                         .constructParametricType(cla, clazz);
                 return mapper.readValue(json,javaType);

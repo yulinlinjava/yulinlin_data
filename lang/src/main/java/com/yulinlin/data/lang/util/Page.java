@@ -91,10 +91,11 @@ public class Page<E>  implements Iterable<E>{
     }
 
     public   Page<E> random(int len){
+        if (len < 0) throw new IllegalArgumentException("len must not be negative");
         if(len >= list.size()){
             return this;
         }
-        int start = RandomUtil.randomInt(0, list.size() - len);
+        int start = RandomUtil.randomInt(0, list.size() - len + 1);
         List<E> es = list.subList(start, start + len);
         return new Page(new ArrayList(es),total);
     }
@@ -106,6 +107,9 @@ public class Page<E>  implements Iterable<E>{
 
 
     public static  <E> List<E> page(List<E> data, int pageNumber,int pageSize){
+
+        if (pageNumber < 1) throw new IllegalArgumentException("pageNumber must be at least 1");
+        if (pageSize <= 0) throw new IllegalArgumentException("pageSize must be positive");
 
         if(data.isEmpty()){
             return data;

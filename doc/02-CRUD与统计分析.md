@@ -617,6 +617,28 @@ yulinlin:
 
 Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。
 
+Repository 接口和方法都可以使用 `@JoinSession`切换数据源，方法注解优先于接口注解：
+
+```java
+@JoinRepository
+@JoinSession("mysql")
+public interface DemoUserRepository extends BaseRepository<DemoUser> {
+
+    // 使用 mysql/master
+    DemoUser findByUsernameEq(String username);
+
+    // 仅此方法切换到 postgresql/master，返回后恢复 mysql
+    @JoinSession("postgresql")
+    List<DemoUser> findByStatusEq(Integer status);
+
+    // 指定同组从库
+    @JoinSession(value = "mysql", cluster = JoinCluster.slave)
+    List<DemoUser> findByTypeEq(Integer type);
+}
+```
+
+Repository 必须从 Spring 容器注入后调用，不能自行创建代理。显式 Request group 仍高于注解；最终选中的 group 和 cluster 会进入查询缓存 Key，因此不同数据源不会共用查询缓存。
+
 只有查询方法显式标记 `@JoinCache`才使用查询缓存；接口上不能添加该注解，也没有自动开启全部 Repository 缓存的配置：
 
 ```java

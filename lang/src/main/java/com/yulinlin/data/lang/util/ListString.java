@@ -65,7 +65,7 @@ public class ListString<E> extends ArrayList<E>  implements CodeObject<String> {
     }
 
     public String encode () {
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         for (Object s : this) {
             if(sb.length() > 0){
                 sb.append(splitStr);

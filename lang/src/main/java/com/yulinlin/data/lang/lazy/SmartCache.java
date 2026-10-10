@@ -9,48 +9,63 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
-public class SmartCache<T> {
+public class SmartCache<T> implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(SmartCache.class);
-    private static final ScheduledExecutorService scheduler =
-            Executors.newScheduledThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors() / 2));
+    private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2), runnable -> {
+                Thread thread = new Thread(runnable, "smart-cache-worker");
+                thread.setDaemon(true);
+                return thread;
+            });
     private static final Map<Object, SmartCache<?>> cacheMap = new ConcurrentHashMap<>();
 
     private final Supplier<T> supplier;
     private final int ttlSeconds;
-    private final boolean autoRefresh;
+    private final ScheduledFuture<?> autoRefreshTask;
 
     private volatile T value;
-    private volatile long expireTime = 0L;
+    private volatile long expireTimeNanos;
+    private volatile boolean closed;
     private final ReentrantLock lock = new ReentrantLock();
 
     private SmartCache(Supplier<T> supplier, int ttlSeconds, boolean autoRefresh) {
-        this.supplier = supplier;
+        if (ttlSeconds <= 0) throw new IllegalArgumentException("ttlSeconds must be positive");
+        this.supplier = java.util.Objects.requireNonNull(supplier, "supplier");
         this.ttlSeconds = ttlSeconds;
-        this.autoRefresh = autoRefresh;
-
-        if (autoRefresh) {
-            scheduler.scheduleAtFixedRate(this::safeRefresh, ttlSeconds, ttlSeconds, TimeUnit.SECONDS);
-        }
+        this.autoRefreshTask = autoRefresh
+                ? scheduler.scheduleAtFixedRate(this::safeRefresh, ttlSeconds, ttlSeconds, TimeUnit.SECONDS)
+                : null;
     }
 
     private void safeRefresh() {
-        if (lock.tryLock()) {
-            try {
-                refresh();
-            } catch (Exception e) {
-                log.warn("SmartCache auto-refresh error", e);
-            } finally {
-                lock.unlock();
-            }
+        if (closed) return;
+        if (!lock.tryLock()) return;
+        try {
+            if (!closed) refreshValue();
+        } catch (Exception e) {
+            log.warn("SmartCache auto-refresh error", e);
+        } finally {
+            lock.unlock();
         }
     }
 
     // 刷新缓存
     public void refresh() {
+        checkOpen();
+        lock.lock();
+        try {
+            checkOpen();
+            refreshValue();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void refreshValue() {
         T newValue = supplier.get();
         if (newValue != null) {
             this.value = newValue;
-            this.expireTime = System.currentTimeMillis() + ttlSeconds * 1000L;
+            this.expireTimeNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(ttlSeconds);
         }
     }
 
@@ -58,14 +73,15 @@ public class SmartCache<T> {
 
 
     public boolean isExpired() {
-        return System.currentTimeMillis() >= expireTime;
+        return System.nanoTime() >= expireTimeNanos;
     }
 
     public void refreshAsync() {
+        checkOpen();
         if (isRefreshing.compareAndSet(false, true)) {
             scheduler.submit(() -> {
                 try {
-                    refresh();
+                    if (!closed) refresh();
                 } finally {
                     isRefreshing.set(false);
                 }
@@ -75,13 +91,15 @@ public class SmartCache<T> {
 
     // 获取缓存数据
     public T get() {
+        checkOpen();
 
         if (value == null) {
             // 首次加载，仍然阻塞等待加载
             lock.lock();
             try {
                 if (value == null) {
-                    refresh(); // 同步加载
+                    checkOpen();
+                    refreshValue(); // 同步加载
                 }
             } finally {
                 lock.unlock();
@@ -99,7 +117,24 @@ public class SmartCache<T> {
     // 清除当前缓存
     public void clear() {
         value = null;
-        expireTime = 0;
+        expireTimeNanos = 0;
+    }
+
+    /** Cancels automatic refresh and releases the cached value. */
+    @Override
+    public void close() {
+        closed = true;
+        if (autoRefreshTask != null) autoRefreshTask.cancel(false);
+        lock.lock();
+        try {
+            clear();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void checkOpen() {
+        if (closed) throw new IllegalStateException("SmartCache is closed");
     }
 
 
@@ -127,7 +162,7 @@ public class SmartCache<T> {
     }
     // 清除所有缓存
     public static void clearAllCache() {
-        cacheMap.values().forEach(SmartCache::clear);
+        cacheMap.values().forEach(SmartCache::close);
         cacheMap.clear();
     }
 

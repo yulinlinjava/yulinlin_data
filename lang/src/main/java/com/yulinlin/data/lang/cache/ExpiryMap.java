@@ -7,6 +7,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +18,11 @@ import java.util.function.Function;
 public class ExpiryMap<K, V> {
 
     private static final int DEFAULT_MAX_SIZE = 20_000;
+    private static final ScheduledExecutorService CLEANER = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "expiry-map-cleaner");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final Map<K, Entry<V>> values = new ConcurrentHashMap<>();
     private final Queue<V> expiredQueue = new ConcurrentLinkedQueue<>();
@@ -24,7 +30,7 @@ public class ExpiryMap<K, V> {
     private final long durationNanos;
     private final long maximumSize;
     private final int randomTtlSeconds;
-    private final ScheduledExecutorService scheduler;
+    private final ScheduledFuture<?> cleanupTask;
 
     public ExpiryMap() {
         this(1, TimeUnit.MINUTES, DEFAULT_MAX_SIZE, null);
@@ -46,12 +52,7 @@ public class ExpiryMap<K, V> {
         this.maximumSize = maximumSize;
         this.randomTtlSeconds = Math.max(0, randomTtl);
         this.consumer = consumer;
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "expiry-map-cleaner");
-            thread.setDaemon(true);
-            return thread;
-        });
-        scheduler.scheduleAtFixedRate(this::cleanUp, 1, 1, TimeUnit.MINUTES);
+        this.cleanupTask = CLEANER.scheduleAtFixedRate(this::cleanUp, 1, 1, TimeUnit.MINUTES);
     }
 
     public void put(K key, V value) {
@@ -73,6 +74,7 @@ public class ExpiryMap<K, V> {
     public V get(K key, Function<K, V> loader) {
         V current = get(key);
         if (current != null) return current;
+        if (values.size() >= maximumSize && !values.containsKey(key)) evictOne();
         Entry<V> entry = values.compute(key, (ignored, existing) -> {
             if (existing != null && existing.expireAtNanos() > System.nanoTime()) return existing;
             if (existing != null) removed(existing.value());
@@ -88,8 +90,8 @@ public class ExpiryMap<K, V> {
     }
 
     public void shutdown() {
+        cleanupTask.cancel(false);
         cleanUp();
-        scheduler.shutdownNow();
         values.clear();
         expiredQueue.clear();
     }

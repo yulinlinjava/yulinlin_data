@@ -1,25 +1,29 @@
 package com.yulinlin.data.lang.util;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 public class WeightedSelector<T> {
-    private final NavigableMap<Integer, T> weightMap = new TreeMap<>();
-    private final Random random = new Random();
-    private int totalWeight = 0;
+    private final ConcurrentSkipListMap<Integer, T> weightMap = new ConcurrentSkipListMap<>();
+    private volatile int totalWeight;
 
-    public void add(T item, int weight) {
+    public synchronized void add(T item, int weight) {
         if (weight <= 0) return;
-        totalWeight += weight;
-        weightMap.put(totalWeight, item);
+        int nextTotal = Math.addExact(totalWeight, weight);
+        weightMap.put(nextTotal, item);
+        totalWeight = nextTotal;
     }
 
 
     public Collection<T> list(){
-        return weightMap.values();
+        return Collections.unmodifiableCollection(weightMap.values());
     }
 
     public T select() {
-        int r = random.nextInt(totalWeight) + 1; // [1, totalWeight]
+        int bound = totalWeight;
+        if (bound == 0) throw new IllegalStateException("No positive-weight item registered");
+        int r = ThreadLocalRandom.current().nextInt(bound) + 1; // [1, totalWeight]
         return weightMap.ceilingEntry(r).getValue();
     }
 

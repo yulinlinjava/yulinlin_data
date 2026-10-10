@@ -105,7 +105,7 @@ public class Snowflake implements Serializable {
     private long tilNextMillis(long lastTimestamp) {
         long timestamp;
         for(timestamp = this.genTime(); timestamp == lastTimestamp; timestamp = this.genTime()) {
-            ;
+            Thread.onSpinWait();
         }
 
         if (timestamp < lastTimestamp) {

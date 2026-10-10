@@ -1,6 +1,7 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.anno.JoinCluster;
+import com.yulinlin.data.core.anno.JoinSession;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
@@ -70,5 +71,41 @@ class RouteSessionRawSqlTest {
             doReturn(rows).when(node).select(query);
             assertThat(route.select(query)).isSameAs(rows);
         } finally { RouteSession.deep = previousLimit; }
+    }
+
+    @Test void annotationRouteOutranksEntityRouteAndIsRestored() {
+        EntitySession methodNode = node("method");
+        EntitySession entityNode = node("entity");
+        var route = RouteSession.builder().filterManager(new IFilterManager() { }).build();
+        route.setLoadBalance(new RandomLoadBalance());
+        route.registerSession(List.of(methodNode, entityNode));
+        var query = QueryRequest.newInstance("select 1 as value", Map.of(), Map.class);
+        query.setFromClass(EntityRouted.class);
+        var rows = List.of(Map.of("value", 1));
+        doReturn(rows).when(methodNode).select(query);
+
+        route.pushAnnotatedSession("method", JoinCluster.master);
+        try {
+            assertThat(route.select(query)).isSameAs(rows);
+        } finally {
+            route.popAnnotatedSession();
+        }
+
+        assertThat(query.getSession()).isEqualTo("method");
+        verify(methodNode).select(query);
+        verify(entityNode, never()).select(query);
+    }
+
+    private EntitySession node(String group) {
+        var node = mock(EntitySession.class);
+        when(node.group()).thenReturn(group);
+        when(node.cluster()).thenReturn(JoinCluster.master);
+        when(node.weight()).thenReturn(1);
+        when(node.ping()).thenReturn(true);
+        return node;
+    }
+
+    @JoinSession("entity")
+    static class EntityRouted {
     }
 }

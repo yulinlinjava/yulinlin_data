@@ -7,17 +7,28 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.StringUtil;
 
 import java.lang.invoke.SerializedLambda;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class LambdaUtils {
 
-    /**
-     * SerializedLambda 反序列化缓存
-     */
-    private static final Map<Class<?>, SerializedLambda> cache = new ConcurrentHashMap<>();
+    /** Caches only the accessor, never a SerializedLambda that may retain captured arguments. */
+    private static final ClassValue<MethodHandle> WRITE_REPLACE = new ClassValue<>() {
+        @Override
+        protected MethodHandle computeValue(Class<?> type) {
+            try {
+                Method method = type.getDeclaredMethod("writeReplace");
+                method.trySetAccessible();
+                return MethodHandles.lookup().unreflect(method)
+                        .asType(MethodType.methodType(Object.class, Object.class));
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalArgumentException("Not a serializable lambda: " + type.getName(), e);
+            }
+        }
+    };
 
     /**
      * 获取序列化对象
@@ -25,19 +36,13 @@ public class LambdaUtils {
      * @return
      */
     public static  SerializedLambda serializedLambda(Object fn) {
-        Class key =  fn.getClass();
-        SerializedLambda lambda =  cache.get(key);
-        if(lambda == null){
-            try {
-                Method method = key.getDeclaredMethod("writeReplace");
-                method.setAccessible(Boolean.TRUE);
-                lambda= (SerializedLambda) method.invoke(fn);
-                cache.put(key,lambda);
-            } catch (ReflectiveOperationException e) {
-                throw new RuntimeException(e);
-            }
+        if (fn == null) throw new IllegalArgumentException("lambda must not be null");
+        try {
+            Object serialized = (Object) WRITE_REPLACE.get(fn.getClass()).invokeExact((Object) fn);
+            return (SerializedLambda) serialized;
+        } catch (Throwable error) {
+            return LambdaUtils.<RuntimeException, SerializedLambda>fail(error);
         }
-        return  lambda;
     }
 
 
@@ -84,6 +89,11 @@ public class LambdaUtils {
             name =    StringUtil.toLowerCaseFirstOne(name);
 
          return ReflectionUtil.findField(objectClass,name);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable, T> T fail(Throwable error) throws E {
+        throw (E) error;
     }
 
 }

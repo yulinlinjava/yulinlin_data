@@ -19,6 +19,7 @@ public class SegmentLock {
     }
 
     public SegmentLock(int segmentCount) {
+        if (segmentCount <= 0) throw new IllegalArgumentException("segmentCount must be positive");
         this.segmentCount = segmentCount;
         this.locks = new ReentrantLock[segmentCount];
 
@@ -44,7 +45,8 @@ public class SegmentLock {
      * @return 锁段索引
      */
     private int getSegmentIndex(Object key) {
-        return Math.floorMod(key.hashCode(), segmentCount);
+        int hash = key.hashCode();
+        return Math.floorMod(hash ^ (hash >>> 16), segmentCount);
 
     }
 

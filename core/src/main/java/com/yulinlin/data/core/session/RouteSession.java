@@ -1,5 +1,6 @@
 package com.yulinlin.data.core.session;
 
+import com.yulinlin.data.core.anno.JoinCluster;
 import com.yulinlin.data.core.anno.JoinSession;
 import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
@@ -46,6 +47,7 @@ public class RouteSession  extends  RegisterSession{
 
     private final ThreadLocal<PendingInvalidation> pendingInvalidation =
             ThreadLocal.withInitial(PendingInvalidation::new);
+    private final ThreadLocal<Integer> annotatedSessionDepth = ThreadLocal.withInitial(() -> 0);
     private final Object springInvalidationResource = new Object();
 
     private static final class PendingInvalidation {
@@ -65,7 +67,8 @@ public class RouteSession  extends  RegisterSession{
 
 
         Class<?> fromClass = request.getFromClass();
-        if(fromClass != null && fromClass != Object.class && StringUtil.isNull(request.getSession())){
+        if(fromClass != null && fromClass != Object.class && StringUtil.isNull(request.getSession())
+                && !hasAnnotatedSession()){
             JoinSession joinDataSource = AnnotationUtil.findAnnotation(fromClass,JoinSession.class);
             if(joinDataSource != null){
                 request.setSession(joinDataSource.value());
@@ -416,6 +419,28 @@ public class RouteSession  extends  RegisterSession{
             }
         }
         if (failure != null) throw failure;
+    }
+
+    /** Enters a route selected by {@link JoinSession}; method-level routing outranks entity metadata. */
+    public void pushAnnotatedSession(String code, JoinCluster cluster) {
+        pushSession(code, cluster);
+        annotatedSessionDepth.set(annotatedSessionDepth.get() + 1);
+    }
+
+    /** Leaves the most recent annotation-selected route and restores the enclosing route. */
+    public void popAnnotatedSession() {
+        int depth = annotatedSessionDepth.get();
+        if (depth <= 0) throw new IllegalStateException("No @JoinSession route to leave");
+        try {
+            popSession();
+        } finally {
+            if (depth == 1) annotatedSessionDepth.remove();
+            else annotatedSessionDepth.set(depth - 1);
+        }
+    }
+
+    private boolean hasAnnotatedSession() {
+        return annotatedSessionDepth.get() > 0;
     }
 /*
 

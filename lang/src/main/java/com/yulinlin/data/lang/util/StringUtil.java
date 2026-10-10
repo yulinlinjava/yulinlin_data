@@ -3,12 +3,9 @@ package com.yulinlin.data.lang.util;
 import java.io.Serializable;
 import java.lang.reflect.Method;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class StringUtil implements Serializable {
 
-    static Pattern p = Pattern.compile("\\s*|\t|\r|\n");
     private static final int charMargin = 32;
     /**
      * 删除换行符
@@ -16,9 +13,14 @@ public class StringUtil implements Serializable {
      * @return
      */
     public static String removeLine(String str){
-        Matcher m = p.matcher(str);
-        String content = m.replaceAll("");
-        return content;
+        int length = str.length();
+        StringBuilder content = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            char value = str.charAt(i);
+            if (value != ' ' && value != '\t' && value != '\r' && value != '\n'
+                    && value != '\f' && value != '\u000B') content.append(value);
+        }
+        return content.length() == length ? str : content.toString();
     }
 
     public static boolean isNull(String s){
@@ -30,7 +32,7 @@ public class StringUtil implements Serializable {
     }
 
   public static boolean isLowerCaseFirstOne(char c) {
-      return c >= 'A' && c <= 'Z';
+      return c >= 'a' && c <= 'z';
   }
 
         //首字母转小写
@@ -75,10 +77,10 @@ public class StringUtil implements Serializable {
 
     public static String javaToColumn(String columnName){
         char[] cs = columnName.toCharArray();
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder(columnName.length() + 8);
         for(char c:cs){
             if(c >='A' && c<='Z'){
-                sb.append("_"+toLowerCaseFirstOne(c));
+                sb.append('_').append(toLowerCaseFirstOne(c));
             }else{
                 sb.append(c);
             }
@@ -89,7 +91,7 @@ public class StringUtil implements Serializable {
 
     public static String columnToJava(String columnName){
         char[] cs = columnName.toCharArray();
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder(columnName.length());
         boolean b = false;
         for(char c:cs){
             if(c == '_'){

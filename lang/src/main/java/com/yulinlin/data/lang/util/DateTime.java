@@ -1,13 +1,13 @@
 package com.yulinlin.data.lang.util;
 
-import org.springframework.util.NumberUtils;
-
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * plus* 都是自增
@@ -17,7 +17,7 @@ public  class DateTime {
 
     private LocalDateTime localDateTime;
 
-    private static List<String> formats = Arrays.asList(
+    private static final List<String> FORMATS = List.of(
             "yyyy-MM-dd HH:mm:ss",
             "yyyyMMddHHmmss",
             "yyyy-MM-dd",
@@ -26,6 +26,7 @@ public  class DateTime {
             "yyyyMM",
             "yyyy"
     );
+    private static final ConcurrentMap<String, DateTimeFormatter> FORMATTERS = new ConcurrentHashMap<>();
 
     private DateTime() {
         this(LocalDateTime.now());
@@ -75,7 +76,7 @@ public  class DateTime {
     }
 
     public String toString(String format) {
-        DateTimeFormatter formatter =  DateTimeFormatter.ofPattern(format);
+        DateTimeFormatter formatter = FORMATTERS.computeIfAbsent(format, DateTimeFormatter::ofPattern);
         return formatter.format(localDateTime);
     }
 
@@ -182,14 +183,16 @@ public  class DateTime {
     public DateTime beginOfDay(){
          return this.withHour(00)
                 .withSecond(00)
-                .withMinute(00);
+                .withMinute(00)
+                .withNano(0);
     }
 
 
     public DateTime endOfDay(){
         return this.withHour(23)
                 .withSecond(59)
-                .withMinute(59);
+                .withMinute(59)
+                .withNano(999_999_999);
     }
 
     public DateTime beginOfYear(){
@@ -275,7 +278,7 @@ public  class DateTime {
             }
         }
 
-        for (String format : formats) {
+        for (String format : FORMATS) {
             if(format.length() == str.length()){
                 return parse(str,format);
             }

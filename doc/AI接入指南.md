@@ -2,11 +2,11 @@
 
 ---
 
-> 派生文件，维护源为 doc 下六个使用专题。重新导出：./doc/build-ai-docs.ps1。
+> 派生文件，维护源为 doc 下七个使用专题。重新导出：./doc/build-ai-docs.ps1。
 
 ---
 
-用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全和查询缓存；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
+用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存和项目最佳实践；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
 
 ---
 
@@ -1250,6 +1250,38 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 Repository 必须从 Spring 容器注入后调用，不能自行创建代理。显式 Request group 仍高于注解；最终选中的 group 和 cluster 会进入查询缓存 Key，因此不同数据源不会共用查询缓存。
 
+#### Service 与 Repository 的职责边界
+
+推荐把一个完整的业务事务放在 Service 层：Service 方法使用 `@Transactional`（或框架 `@JoinTransaction`）定义事务边界，需要 setter 自动回写时再同时添加 `@JoinSync`。Repository 主要声明查询方法、`@JoinCache` 缓存策略，以及确实需要的 `@JoinSession` 数据源路由。
+
+```java
+@JoinRepository
+public interface DemoUserRepository extends BaseRepository<DemoUser> {
+
+    @JoinCache
+    DemoUser findByIdEq(String id);
+}
+
+@Service
+public class DemoUserService {
+    private final DemoUserRepository repository;
+
+    public DemoUserService(DemoUserRepository repository) {
+        this.repository = repository;
+    }
+
+    @Transactional
+    @JoinSync
+    public void rename(String id, String name) {
+        DemoUser user = repository.findByIdEq(id);
+        if (user == null) throw new IllegalStateException("user not found");
+        user.setName(name); // 事务提交前生成部分更新
+    }
+}
+```
+
+`@JoinSync` 只开启查询结果的自动更新策略，不会开启事务。它可用在 Repository 查询方法上，用于精确指定某个查询返回代理对象；但 setter 仍必须发生在外层 Service 持有的原事务内。一般业务更推荐在 Service 统一使用 `@Transactional + @JoinSync`，避免把事务和更新意图分散到多个 Repository。不要只在 Repository 查询方法上开启事务后，在方法返回之外再修改实体；此时原始事务已经结束。只读查询不需要 `@JoinSync`，显式 Wrapper 查询仍可在事务内使用 `.autoUpdate()` 覆盖单次行为。
+
 `@JoinCache` 可以标记 Repository 接口，为其中全部抽象查询方法提供默认缓存配置；方法级注解优先，可覆盖接口配置或用 `CacheMode.NONE` 关闭单个查询。父接口上的类级和方法级配置均可继承：
 
 ```java
@@ -1600,6 +1632,8 @@ public void rename(String id, String name) {
 ```
 
 `@JoinSync` 只开启当前调用作用域的自动更新，不创建事务；需配合 `@Transactional`、`@JoinTransaction` 或 `RouteSession.transaction(...)`。它不再允许标在字段上。
+
+在 Spring 项目中，推荐把 `@Transactional` 和 `@JoinSync` 一起放在 Service 的 public 业务方法上，让查询、setter 修改与提交共享同一个边界。Repository 保持查询声明，通常只配置 `@JoinCache` 和必要的 `@JoinSession`。Repository 方法也可用 `@JoinSync` 精确指定该查询返回代理，但后续 setter 必须仍位于外层 Service 的活动事务内；不建议把它当作默认分层方式。代理对象不能在创建它的事务结束后继续自动更新。只读 Service 不需要 `@JoinSync`。Repository 完整示例见[第二专题](02-CRUD与统计分析.md#service-与-repository-的职责边界)。
 
 主对象的关联查询继承相同策略。懒字段首次 getter 得到的实体或集合元素也是同一层代理，因此在原事务内调用关联实体 setter 同样会写回对应表。
 
@@ -2839,3 +2873,360 @@ Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化
 | 同时引入两个实现 | 启动失败并报告多个缓存 Provider |
 
 手动注册新的 Session 时，`RouteSession.registerSession` 会把当前缓存 Provider 注入 Session。第三方数据源继承 `AbstractSession` 即可获得相同行为；直接实现 `EntitySession` 时，需要实现 `setQueryCache` 才能接入查询缓存。
+
+---
+
+<!-- source: doc/09-项目开发最佳实践.md -->
+## 项目开发最佳实践
+
+本文给出一套推荐的 Spring Boot 项目结构和完整业务案例。它负责回答“业务代码应该放在哪里”；完整 API 签名仍以[接入与数据源](01-接入与数据源.md)、[CRUD 与统计](02-CRUD与统计分析.md)、[关联查询与代理](03-关联查询与代理.md)和[查询缓存](08-查询缓存.md)为准。
+
+阅读导航：[核心规则](#核心规则) · [目录结构](#推荐目录结构) · [完整案例](#完整业务案例) · [事务与代理](#事务与自动更新) · [缓存](#缓存规范) · [多数据源](#多数据源规范) · [批量写入](#批量写入规范) · [反例](#常见反例) · [评审清单](#上线前评审清单)
+
+### 核心规则
+
+| 层次 | 应该负责 | 不应负责 |
+| --- | --- | --- |
+| Controller | HTTP 参数校验、身份与响应 DTO | 组装 Wrapper、开启事务、返回可变持久化实体 |
+| Service | 业务规则、事务边界、自动更新作用域、结果组装 | 依赖 Controller 或吞掉异常 |
+| Repository | 声明式查询和标准 CRUD，可选查询缓存与数据源路由 | 业务事务、跨多个 Repository 的流程 |
+| Entity | 表映射、字段与索引元数据 | Controller 响应协议和与表无关的业务状态 |
+| DTO/VO | 请求、响应、JoinQuery 投影或统计结果 | 拥有表结构；不要与完整 Entity 同时 `autoSchema=true` |
+
+默认决策：
+
+1. 事务标在 Spring 管理的 Service public 方法上。
+2. 需要 setter 自动回写时，在同一个 Service 方法上组合 `@Transactional + @JoinSync`。
+3. Repository 默认不承担业务事务；缓存只标记查询方法。
+4. 一般查询返回 DTO；需要修改的代理 Entity 不逃离原始线程和事务。
+5. 多数据源时明确 group；不依赖 Bean 注册顺序或 `primary` 名称。
+6. 查询缓存是可丢失的加速层，不是事务一致性或业务状态存储。
+7. 写入必须校验主键或条件，并检查影响行数；不假设“调用没报错”等于写入成功。
+8. 同一物理表只有一个完整 Entity 拥有自动 Schema；字段改名、改类型和数据搬迁使用版本化脚本。
+
+### 推荐目录结构
+
+按业务域组织代码，不要把整个项目的 Controller、Service、Entity 分成三个巨型目录：
+
+```text
+com.example.app
+├── user
+│   ├── api
+│   │   ├── UserController.java
+│   │   └── UserResponse.java
+│   ├── domain
+│   │   └── UserEntity.java
+│   ├── repository
+│   │   └── UserRepository.java
+│   └── service
+│       └── UserService.java
+├── video
+│   └── ...
+└── shared
+    ├── config
+    └── error
+```
+
+Repository 扫描和 Schema 扫描是两件事：`yulinlin.repository.scan-packages` 找接口，`yulinlin.<module>.schema-packages` 找显式 `autoSchema=true` 的完整实体。两者都可按业务包递归扫描。
+
+### 完整业务案例
+
+下面用“用户查询、创建、改名和删除”展示推荐分层。案例假设已引入 starter、mysql 和 repository；查询缓存模块仍是可选的。
+
+#### 1. 完整实体
+
+```java
+package com.example.app.user.domain;
+
+import com.yulinlin.common.domain.IdEntity;
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinIndex;
+import com.yulinlin.data.core.anno.JoinTable;
+import com.yulinlin.data.core.anno.JoinWhere;
+
+@JoinTable(value = "sys_user", autoSchema = true)
+@JoinIndex(fields = "username", unique = true)
+public class UserEntity extends IdEntity<UserEntity> {
+    @JoinField(name = "user_name", textLength = 64, description = "登录用户名")
+    @JoinWhere
+    private String username;
+
+    @JoinField(description = "状态：1启用，0停用")
+    @JoinWhere
+    private Integer status;
+
+    public UserEntity() { }
+
+    public String getUsername() { return username; }
+    public void setUsername(String username) { this.username = username; }
+    public Integer getStatus() { return status; }
+    public void setStatus(Integer status) { this.status = status; }
+}
+```
+
+Entity 保持非 final，提供无参构造和标准 getter/setter，以便编解码和代理。上例假设框架拥有该表全部列，因此明确设置 `autoSchema=true`；配套扫描配置如下：
+
+```yaml
+yulinlin:
+  repository:
+    scan-packages:
+      - "com.example.app.**.repository"
+  mysql:
+    schema-mode: CREATE
+    schema-packages:
+      - "com.example.app.**.domain"
+```
+
+如果生产表由 Flyway、Liquibase 或发布脚本管理，保留 `autoSchema=false` 默认值，不配置 `CREATE` 扫描，并在迁移脚本中创建同等的唯一索引。
+
+#### 2. Repository
+
+```java
+package com.example.app.user.repository;
+
+import com.example.app.user.domain.UserEntity;
+import com.yulinlin.data.core.anno.JoinCache;
+import com.yulinlin.data.core.anno.JoinRepository;
+import com.yulinlin.repository.dao.BaseRepository;
+
+@JoinRepository
+public interface UserRepository extends BaseRepository<UserEntity> {
+
+    @JoinCache
+    UserEntity findByUsernameEq(String username);
+}
+```
+
+`BaseRepository` 已提供按 ID 查询、全量查询、新增、更新和删除。方法级 `@JoinCache` 让缓存意图可见；如果希望接口中全部查询默认缓存，也可标在接口上，但方法级更容易评审。不要在 insert/update/delete 方法上使用 `@JoinCache`。
+
+#### 3. 响应 DTO
+
+```java
+package com.example.app.user.api;
+
+import com.example.app.user.domain.UserEntity;
+
+public record UserResponse(String id, String username, Integer status) {
+    public static UserResponse from(UserEntity user) {
+        return new UserResponse(user.getId(), user.getUsername(), user.getStatus());
+    }
+}
+```
+
+在 Service 内完成 Entity 到 DTO 的转换，可以避免 Controller 触发懒加载，也不会把事务绑定代理暴露给 JSON 序列化层。
+
+#### 4. Service
+
+```java
+package com.example.app.user.service;
+
+import com.example.app.user.api.UserResponse;
+import com.example.app.user.domain.UserEntity;
+import com.example.app.user.repository.UserRepository;
+import com.yulinlin.data.core.anno.JoinSync;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class UserService {
+    private final UserRepository repository;
+
+    public UserService(UserRepository repository) {
+        this.repository = repository;
+    }
+
+    public UserResponse findByUsername(String username) {
+        UserEntity user = repository.findByUsernameEq(requireText(username, "username"));
+        if (user == null) throw new IllegalArgumentException("user not found");
+        return UserResponse.from(user);
+    }
+
+    @Transactional
+    public String create(String username) {
+        UserEntity user = new UserEntity();
+        user.setUsername(requireText(username, "username"));
+        user.setStatus(1);
+        int affected = repository.insert(user);
+        if (affected != 1) throw new IllegalStateException("user insert failed");
+        return user.getId();
+    }
+
+    @Transactional
+    @JoinSync
+    public void rename(String id, String username) {
+        UserEntity user = repository.findByIdEq(requireText(id, "id"));
+        if (user == null) throw new IllegalArgumentException("user not found");
+        user.setUsername(requireText(username, "username"));
+        // 无需手动 update；提交前按主键生成部分更新。
+    }
+
+    @Transactional
+    public void delete(String id) {
+        int affected = repository.deleteByIdEq(requireText(id, "id"));
+        if (affected != 1) throw new IllegalArgumentException("user not found");
+    }
+
+    private static String requireText(String value, String name) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(name + " is required");
+        return value;
+    }
+}
+```
+
+创建和删除是显式写入，只需事务。`rename` 依赖 setter 跟踪，因此同时使用 `@Transactional` 和 `@JoinSync`。查询、setter 与提交全部在同一个 Service 调用内完成。
+
+#### 5. Controller
+
+```java
+package com.example.app.user.api;
+
+import com.example.app.user.service.UserService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/users")
+public class UserController {
+    private final UserService service;
+
+    public UserController(UserService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/by-username")
+    public UserResponse findByUsername(@RequestParam String username) {
+        return service.findByUsername(username);
+    }
+
+    @PostMapping
+    public String create(@Valid @RequestBody CreateUserRequest request) {
+        return service.create(request.username());
+    }
+
+    @PatchMapping("/{id}/name")
+    public void rename(@PathVariable String id, @Valid @RequestBody RenameUserRequest request) {
+        service.rename(id, request.username());
+    }
+
+    public record CreateUserRequest(@NotBlank @Size(max = 64) String username) { }
+    public record RenameUserRequest(@NotBlank @Size(max = 64) String username) { }
+}
+```
+
+Controller 只处理协议、校验和 DTO，不直接调用 Wrapper 或持有事务。真实项目应将异常统一转换为约定的错误响应，不在每个 Controller 重复 try/catch。
+
+### 事务与自动更新
+
+#### 推荐写法
+
+```java
+@Transactional
+@JoinSync
+public void changeProfile(String id, String username) {
+    UserEntity user = repository.findByIdEq(id);
+    if (user == null) throw new IllegalArgumentException("user not found");
+    user.setUsername(username);
+}
+```
+
+- `@Transactional` 定义事务，`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
+- 必须通过 Spring Bean 从外部调用 public 方法；`this.changeProfile(...)` 式自调用会绕过 Spring AOP。
+- 不要将代理 Entity 传给异步任务、虚拟线程或事务外的 Controller。它只能在创建它的原线程和原事务中 setter。
+- 业务失败让异常离开事务方法。如果必须捕获，应继续抛出或明确设置 rollback-only，不要吞掉后继提交。
+- 只读方法不加 `@JoinSync`。全局 `yulinlin.data.auto-update=true` 适合对边界非常一致的项目；一般项目优先显式方法注解。
+- Repository 方法可使用 `@JoinSync` 只增强特定查询，但仍需外层 Service 活动事务。推荐默认放在 Service，避免事务和更新意图分散。
+
+自动更新跳过 null，`setX(null)` 不表示把列清为 SQL NULL。如果业务必须清空列，使用参数化自定义 SQL；不要利用字符串拼接绕过参数绑定。
+
+### 缓存规范
+
+```java
+@JoinCache
+UserEntity findByUsernameEq(String username);
+```
+
+- 只缓存价值明确、读多写少且可接受 TTL 窗口的查询。不是每个 Repository 方法都应该加缓存。
+- 标准 insert/update/delete 在事务提交成功后按表 namespace 使缓存失效；回滚不发布失效。
+- 自定义 SQL 或跨表投影无法完整推导依赖时，通过 `namespaces` 补充表命名空间。
+- 事务内必须读到最新数据的查询使用 `CacheMode.NONE`；强制回源并重写缓存使用 `CacheMode.REFRESH`。
+- 未引入缓存 Provider 时，普通查询安全回源数据库。一个应用只选 Caffeine 或 Ehcache 之一，不要同时引入。
+- 默认 TTL 放在 `yulinlin.cache.ttl`，默认不让 TTL 参与 Key。监控统计默认关闭，只在确实需要观测时开启。
+
+### 多数据源规范
+
+只有一个 group 时可省略指定；同时注册多个 group 时设定默认组：
+
+```yaml
+yulinlin:
+  datasource:
+    default-group: mysql
+```
+
+一个 Repository 始终属于同一数据源时，可在接口标记：
+
+```java
+@JoinRepository
+@JoinSession("postgresql")
+public interface SearchRepository extends BaseRepository<SearchEntity> {
+    // 默认使用 postgresql
+}
+```
+
+只有个别方法需要切换时使用方法级 `@JoinSession`。代码中显式 group 的 Request 优先级更高。不要在一条原始 SQL 中假设框架会自动翻译 MySQL、PostgreSQL、SQLite 和 H2 方言。
+
+跨多个 group 的业务可使用 Service 层 `@JoinTransaction` 或 `RouteSession.transaction(...)` 统一收集参与会话。这是多个本地事务的协调提交，不是 2PC/XA；对严格原子性业务使用消息、补偿、幂等或专用分布式事务方案。
+
+### 批量写入规范
+
+```java
+@Transactional
+public int importUsers(List<UserEntity> users) {
+    if (users == null || users.isEmpty()) return 0;
+    return ModelInsertWrapper.newInstance("mysql", users)
+            .batch()
+            .execute();
+}
+```
+
+- 普通集合写入先使用 JDBC batch；数据足够大、数据库与连接池有余量时，才启用 `.batch()` 多连接拆分。
+- `parallel-connections` 控制一个框架事务的最大物理连接数，`execute-batch-size` 控制一次 `executeBatch()` 的行数，都应结合连接池和数据库实测。
+- SQLite 单文件只有一个写者，Session 会拒绝多连接拆组；不要用增加写线程的方式解决 SQLite 锁竞争。
+- 业务上可以每批 128 个对象提交给上层，底层仍由 `execute-batch-size` 限制 JDBC 批大小。不为每 128 条数据创建一个新线程或新事务。
+- 大文本、JSON 和二进制内容应限制单条大小；不把不受控的 InputStream 或超大对象混入普通批次。
+
+### Schema 管理规范
+
+- 生产项目默认使用版本化 DDL 迁移；框架 `CREATE` 模式更适合本地数据库、新项目和可控表。
+- 只有拥有全部持久化列的 Entity 设置 `autoSchema=true`。投影 DTO、Join 模型和统计模型保持 false。
+- 自动 Schema 可创建表、缺失普通列和声明索引，不会安全推断字段改名、类型变更、删列、外键或数据转换。
+- 先用 `EntitySession.createTableSql(Entity.class)` 审查 DDL，再在目标环境启用自动初始化。所有执行的 Schema SQL 都应在日志中可见。
+
+### 常见反例
+
+| 反例 | 问题 | 推荐替代 |
+| --- | --- | --- |
+| Controller 直接调 Wrapper | 协议层与数据层耦合，无法统一事务 | Controller 只调 Service |
+| 在 Repository 方法开事务，返回后再 setter | Repository 返回时事务可能已结束 | Service 上组合 `@Transactional + @JoinSync` |
+| 全局开启自动更新，却大量无事务查询 | 需要代理的查询会明确报“请开启事务” | 默认关闭，在写业务方法显式 `@JoinSync` |
+| 将 `@JoinCache` 加到写方法 | 缓存注解是查询策略，不是写入失效开关 | 依赖标准写入的提交后 namespace 失效 |
+| 多 group 不配默认值，也不显式路由 | 框架无法判断业务数据库 | 配置 `default-group` 或使用 group/`@JoinSession` |
+| 在事务中启动 `CompletableFuture` 修改同一实体 | ThreadLocal、连接和代理不自动跨线程 | 同一事务同步完成；异步任务自建业务边界 |
+| 用 null 期望清空数据库列 | 普通更新和自动更新都跳过 null | 参数化自定义 SQL |
+| 多个不完整模型共同拥有一张表的 Schema | 可创建残缺表或发生拥有者冲突 | 只让一个完整 Entity `autoSchema=true` |
+| 把跨库本地协调当作分布式原子事务 | 某库提交后另一库仍可失败 | 设计幂等、补偿或专用分布式方案 |
+
+### 上线前评审清单
+
+- [ ] 所有写 Service 都有清晰的事务边界，通过 Spring Bean 外部调用。
+- [ ] 使用 `@JoinSync` 的查询、setter 和提交处在同一线程与事务。
+- [ ] 实体具有无参构造、完整主键映射和可预期的列名；非列字段明确 `exist=false`。
+- [ ] 更新和删除校验主键/条件及影响行数，已考虑 null 跳过语义。
+- [ ] 缓存仅用于查询，TTL、namespace 和一致性要求已明确，应用未同时引入两个 Provider。
+- [ ] 多数据源项目设置了默认 group 或显式路由，原始 SQL 已按目标方言审查。
+- [ ] 多连接批处理已在真实驱动、连接池和数据库上压测；SQLite 未强行并发写入。
+- [ ] 每张自动表只有一个 Schema 拥有者，生产字段改名和类型变更都有可回滚迁移脚本。
+- [ ] 测试至少覆盖成功提交、异常回滚、缓存未命中/失效、批量失败和多数据源路由。
+
+如果项目不使用 Repository，保留相同的分层和事务规则，在 Service 中使用 Model Wrapper 即可。Repository 是声明式入口，不是使用事务、缓存或自动更新的强制前提。

@@ -11,13 +11,14 @@ $manualFiles = @(
     '05-扩展开发与维护.md',
     '06-接口安全.md',
     '07-SQLite与H2性能报告.md',
-    '08-查询缓存.md'
+    '08-查询缓存.md',
+    '09-项目开发最佳实践.md'
 )
-$aiFiles = @($manualFiles[0..3]) + $manualFiles[5] + $manualFiles[7]
+$aiFiles = @($manualFiles[0..3]) + $manualFiles[5] + $manualFiles[7..8]
 $parts = @(
     '# yulinlin-data AI 使用指南',
-    '> 派生文件，维护源为 doc 下六个使用专题。重新导出：./doc/build-ai-docs.ps1。',
-    '用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全和查询缓存；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。',
+    '> 派生文件，维护源为 doc 下七个使用专题。重新导出：./doc/build-ai-docs.ps1。',
+    '用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存和项目最佳实践；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。',
     '适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-10 已运行本地库 JMH、JDK 25 全模块测试编译、lang/缓存专项测试和 Schema 定向测试；代码片段不等于所有数据库服务器均已集成验证，真实账号、表、路径和接口由业务提供。'
 )
 foreach ($name in $aiFiles) {

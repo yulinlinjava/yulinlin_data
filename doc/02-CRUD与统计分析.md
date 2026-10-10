@@ -683,6 +683,38 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 Repository 必须从 Spring 容器注入后调用，不能自行创建代理。显式 Request group 仍高于注解；最终选中的 group 和 cluster 会进入查询缓存 Key，因此不同数据源不会共用查询缓存。
 
+### Service 与 Repository 的职责边界
+
+推荐把一个完整的业务事务放在 Service 层：Service 方法使用 `@Transactional`（或框架 `@JoinTransaction`）定义事务边界，需要 setter 自动回写时再同时添加 `@JoinSync`。Repository 主要声明查询方法、`@JoinCache` 缓存策略，以及确实需要的 `@JoinSession` 数据源路由。
+
+```java
+@JoinRepository
+public interface DemoUserRepository extends BaseRepository<DemoUser> {
+
+    @JoinCache
+    DemoUser findByIdEq(String id);
+}
+
+@Service
+public class DemoUserService {
+    private final DemoUserRepository repository;
+
+    public DemoUserService(DemoUserRepository repository) {
+        this.repository = repository;
+    }
+
+    @Transactional
+    @JoinSync
+    public void rename(String id, String name) {
+        DemoUser user = repository.findByIdEq(id);
+        if (user == null) throw new IllegalStateException("user not found");
+        user.setName(name); // 事务提交前生成部分更新
+    }
+}
+```
+
+`@JoinSync` 只开启查询结果的自动更新策略，不会开启事务。它可用在 Repository 查询方法上，用于精确指定某个查询返回代理对象；但 setter 仍必须发生在外层 Service 持有的原事务内。一般业务更推荐在 Service 统一使用 `@Transactional + @JoinSync`，避免把事务和更新意图分散到多个 Repository。不要只在 Repository 查询方法上开启事务后，在方法返回之外再修改实体；此时原始事务已经结束。只读查询不需要 `@JoinSync`，显式 Wrapper 查询仍可在事务内使用 `.autoUpdate()` 覆盖单次行为。
+
 `@JoinCache` 可以标记 Repository 接口，为其中全部抽象查询方法提供默认缓存配置；方法级注解优先，可覆盖接口配置或用 `CacheMode.NONE` 关闭单个查询。父接口上的类级和方法级配置均可继承：
 
 ```java

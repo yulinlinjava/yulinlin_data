@@ -1,6 +1,7 @@
 package com.yulinlin.data.core.model;
 
 import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.session.SessionUtil;
@@ -152,6 +153,16 @@ public class BaseModelSelectWrapper<E,
 
     public R cache(Duration ttl){
         request.cache(ttl);
+        return (R)this;
+    }
+
+    public R cache(CacheMode mode){
+        request.cache(mode);
+        return (R)this;
+    }
+
+    public R cache(CacheMode mode, Duration ttl){
+        request.cache(mode, ttl);
         return (R)this;
     }
 

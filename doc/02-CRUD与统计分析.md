@@ -2,7 +2,7 @@
 
 本文从一个用户实体完成 CRUD，再扩展条件查询、SQL JOIN、自定义 SQL、统计模型和事务。数据库接入与 group 注册先看 [第一专题](01-接入与数据源.md)。
 
-阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [事务](#事务使用) · [边界](#使用边界与排障)
+阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
 
 ## 最小实体和配套表
 
@@ -590,11 +590,63 @@ try {
 
 嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
 
+## Repository 接口
+
+Repository 根据方法名生成普通 Wrapper 查询。引入模块后自动启用，不再需要扫描注解：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>repository</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+未配置扫描路径时，默认从 `@SpringBootApplication`所在根包递归查找。需要限制范围或扫描多个业务模块时，在配置文件指定：
+
+```yaml
+yulinlin:
+  repository:
+    scan-packages:
+      - "com.example.*.*.local"       # 每个 * 匹配一层
+      - "com.example.**.repository"  # ** 跨任意层级
+      - "${APP_REPOSITORY_PACKAGE:com.example.repository}"
+```
+
+扫描使用类元数据，不会加载路径下所有普通类。普通包名递归扫描；路径段支持 Ant 风格通配符：`*`匹配一级包，`**`匹配任意层级，`?`匹配单个字符。YAML 中包含 `*`的路径必须加引号。配置缺失时使用应用根包，而配置存在时只扫描列出的路径。
+
+Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。
+
+只有查询方法显式标记 `@JoinCache`才使用查询缓存；接口上不能添加该注解，也没有自动开启全部 Repository 缓存的配置：
+
+```java
+@JoinRepository
+public interface DemoUserRepository extends BaseRepository<DemoUser> {
+
+    // 没有注解：每次查询数据源
+    DemoUser findByUsernameEq(String username);
+
+    // READ_THROUGH；使用 yulinlin.cache.ttl
+    @JoinCache
+    List<DemoUser> findByStatusEq(Integer status);
+
+    // 每次强制查库，并用最新结果覆盖对应缓存
+    @JoinCache(mode = CacheMode.REFRESH, ttl = 30, unit = TimeUnit.SECONDS)
+    DemoUser findByIdEq(String id);
+
+    // 额外把角色表版本纳入 Key，角色表更新后该查询也失效
+    @JoinCache(namespaces = "sys_role")
+    List<DemoUser> findAll();
+}
+```
+
+`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。写方法添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段直接失败；insert/update/delete 继续由框架在事务提交成功后自动失效相关查询缓存。
+
 ## 使用边界与排障
 
 - 更新通常跳过 null；普通 copyProperties 或懒同步的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
-- cache() 会保存并复制查询模型，模型必须符合深克隆支持范围；缓存只按写入后 TTL 失效，写操作不会主动清理，强一致查询不要启用缓存。
+- 查询缓存保存查询结果；标准写操作在事务提交成功后自动失效相关表命名空间，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
 - 日期范围为空先核对列类型、格式、时区与条件，不默认归咎于数据库驱动。
 - 表达式、JOIN、JSON 路径、行锁按目标库核对；没有跨库 SQL 自动翻译器。

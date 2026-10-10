@@ -24,7 +24,8 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
 
     private int batchSize = 128;
 
-    private boolean invalidate;
+    /** Writes invalidate related query-cache namespaces after a successful commit by default. */
+    private boolean invalidate = true;
 
     private boolean invalidateAll;
 

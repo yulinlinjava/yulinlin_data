@@ -1,6 +1,7 @@
 package com.yulinlin.data.core.proxy;
 
 import com.yulinlin.data.core.anno.*;
+import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.event.IProxyEvent;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.model.BaseModelSelectWrapper;
@@ -23,11 +24,13 @@ import java.util.*;
 /** One query result shares one thread-confined lazy association batch. */
 public class LazyProxyFactory implements IProxyFactory {
     private final SyncProxyFactory syncProxyFactory;
-    public record CacheContext(boolean enabled, Duration ttl) {
-        private static final CacheContext DISABLED = new CacheContext(false, null);
+    public record CacheContext(CacheMode mode, Duration ttl) {
+        private static final CacheContext DISABLED = new CacheContext(CacheMode.NONE, null);
         public CacheContext {
-            if (!enabled) ttl = null;
+            mode = mode == null ? CacheMode.NONE : mode;
+            if (mode == CacheMode.NONE) ttl = null;
         }
+        public boolean enabled() { return mode != CacheMode.NONE; }
     }
     private static final ThreadLocal<CacheContext> CACHE =
             ThreadLocal.withInitial(() -> CacheContext.DISABLED);
@@ -53,7 +56,9 @@ public class LazyProxyFactory implements IProxyFactory {
         }
     }
     public LazyProxyFactory(SyncProxyFactory syncProxyFactory) { this.syncProxyFactory = syncProxyFactory; }
-    public static void cache(boolean cache) { CACHE.set(new CacheContext(cache, null)); }
+    public static void cache(boolean cache) {
+        CACHE.set(new CacheContext(cache ? CacheMode.READ_THROUGH : CacheMode.NONE, null));
+    }
     public static void cache(CacheContext cache) { CACHE.set(cache == null ? CacheContext.DISABLED : cache); }
     public static CacheContext cacheContext() { return CACHE.get(); }
     public static boolean isCache() { return CACHE.get().enabled(); }
@@ -180,8 +185,8 @@ public class LazyProxyFactory implements IProxyFactory {
     private BaseModelSelectWrapper select(String session, Class<?> model, JoinQuery query, CacheContext cache, JoinSession explicit) {
         BaseModelSelectWrapper select = new BaseModelSelectWrapper(session, model);
         if (cache.enabled()) {
-            if (cache.ttl() == null) select.cache();
-            else select.cache(cache.ttl());
+            if (cache.ttl() == null) select.cache(cache.mode());
+            else select.cache(cache.mode(), cache.ttl());
         }
         if (explicit != null) select.getRequest().setCluster(explicit.cluster());
         for (JoinOrder order : query.order()) select.orderBy(order.name(), order.asc());

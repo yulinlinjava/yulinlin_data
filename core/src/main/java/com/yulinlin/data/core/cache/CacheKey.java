@@ -43,6 +43,19 @@ public final class CacheKey {
         return new CacheKey(hash.first(), hash.second());
     }
 
+    /** Key for the public application-cache domain; independent of ORM query versions. */
+    public static CacheKey application(String namespace, String key,
+                                       long globalVersion, long namespaceVersion) {
+        Murmur3Hash128 hasher = new Murmur3Hash128();
+        CacheKeyMetadata.write(hasher, "application-v1");
+        CacheKeyMetadata.write(hasher, namespace);
+        CacheKeyMetadata.write(hasher, key);
+        hasher.putLong(globalVersion);
+        hasher.putLong(namespaceVersion);
+        Murmur3Hash128.Result hash = hasher.finish();
+        return new CacheKey(hash.first(), hash.second());
+    }
+
     /** Derives a physical cache key from a logical query and a stable namespace-version snapshot. */
     public CacheKey scoped(long globalVersion, Map<CacheNamespace, Long> namespaceVersions) {
         return scoped(globalVersion, namespaceVersions, null);

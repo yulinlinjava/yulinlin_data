@@ -6,6 +6,7 @@ import java.time.Duration;
 public final class NoOpQueryCache implements QueryCache {
     public static final NoOpQueryCache INSTANCE = new NoOpQueryCache();
     private NoOpQueryCache() { }
+    @Override public boolean available() { return false; }
     @Override public CacheLookup get(CacheKey key, CacheValueType valueType) { return CacheLookup.miss(); }
     @Override public void put(CacheKey key, CacheValueType valueType, Object value, Duration ttl) { }
 }

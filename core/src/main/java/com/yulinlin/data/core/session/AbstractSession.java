@@ -1,6 +1,8 @@
 package com.yulinlin.data.core.session;
 
 import com.yulinlin.data.core.cache.CacheKey;
+import com.yulinlin.data.core.cache.CacheMissException;
+import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheValueType;
@@ -353,47 +355,44 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
 
-    private  <E> E getCacheValue(QueryRequest<?> request, ParseResult result, Supplier<E> callable ){
+    protected final <E> E getCacheValue(QueryRequest<?> request, ParseResult result, Supplier<E> callable ){
 
-        E value = null;
-        if(request.isCache()){
+        CacheMode mode = request.getCacheMode();
+        if (mode == CacheMode.NONE) return callable.get();
 
-                CacheKey cacheKey = CacheKey.query(
-                        group(), cluster(), getClass(), request.getEntityClass(),
-                        request.getFromClass(), result.getType(), request.getWrapper());
-                cacheKey = cacheManager.scope(cacheKey, CacheNamespaceResolver.resolve(
-                        getClass(), group(), request.getFromClass(), request.getWrapper(),
-                        request.getCacheNamespaces()), request.getCacheTtl());
-                CacheValueType valueType = result.getType() == ParseType.count
-                        ? CacheValueType.scalar(Integer.class)
-                        : CacheValueType.listOf(request.getEntityClass());
+        CacheKey cacheKey = CacheKey.query(
+                group(), cluster(), getClass(), request.getEntityClass(),
+                request.getFromClass(), result.getType(), request.getWrapper());
+        cacheKey = cacheManager.scope(cacheKey, CacheNamespaceResolver.resolve(
+                getClass(), group(), request.getFromClass(), request.getWrapper(),
+                request.getCacheNamespaces()), request.getCacheTtl());
+        CacheValueType valueType = result.getType() == ParseType.count
+                ? CacheValueType.scalar(Integer.class)
+                : CacheValueType.listOf(request.getEntityClass());
 
-                CacheLookup lookup = cacheManager.get(cacheKey, valueType);
-                if(lookup.hit()){
-                    return (E) lookup.value();
-                }
-                Lock cacheLock = segmentLock.getLock(cacheKey);
-
-                cacheLock.lock();
-
-                try {
-                    //二次检查
-                    lookup = cacheManager.get(cacheKey, valueType);
-                    if(lookup.hit()){
-                        return (E) lookup.value();
-                    }
-
-
-                    value = callable.get();
-                    cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
-                } finally {
-                    cacheLock.unlock();
-                }
-
-        }else{
-            value = callable.get();
+        if (mode == CacheMode.REFRESH) {
+            E value = callable.get();
+            cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
+            return value;
         }
-        return value;
+
+        CacheLookup lookup = cacheManager.get(cacheKey, valueType);
+        if (lookup.hit()) return (E) lookup.value();
+        if (mode == CacheMode.CACHE_ONLY) {
+            throw new CacheMissException("缓存未命中，CACHE_ONLY 不允许访问数据源: " + cacheKey.value());
+        }
+
+        Lock cacheLock = segmentLock.getLock(cacheKey);
+        cacheLock.lock();
+        try {
+            lookup = cacheManager.get(cacheKey, valueType);
+            if (lookup.hit()) return (E) lookup.value();
+            E value = callable.get();
+            cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
+            return value;
+        } finally {
+            cacheLock.unlock();
+        }
     }
 
 

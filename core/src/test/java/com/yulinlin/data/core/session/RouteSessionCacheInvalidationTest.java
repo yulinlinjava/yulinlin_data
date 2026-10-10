@@ -7,7 +7,6 @@ import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.QueryCache;
-import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
 import com.yulinlin.data.core.request.ExecuteRequest;
@@ -18,11 +17,8 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RouteSessionCacheInvalidationTest {
@@ -32,7 +28,7 @@ class RouteSessionCacheInvalidationTest {
         RecordingCache cache = new RecordingCache();
         EntitySession node = node();
         RouteSession route = route(node, cache);
-        ExecuteRequest<User> request = ExecuteRequest.ofUpdate(User.class).invalidate();
+        ExecuteRequest<User> request = ExecuteRequest.ofUpdate(User.class);
         doReturn(1).when(node).update(request);
 
         assertThat(route.update(request)).isEqualTo(1);
@@ -45,7 +41,7 @@ class RouteSessionCacheInvalidationTest {
         RecordingCache cache = new RecordingCache();
         EntitySession node = node();
         RouteSession route = route(node, cache);
-        ExecuteRequest<User> request = ExecuteRequest.ofUpdate(User.class).invalidate();
+        ExecuteRequest<User> request = ExecuteRequest.ofUpdate(User.class);
         doReturn(1).when(node).update(request);
 
         route.startTransaction();
@@ -62,18 +58,16 @@ class RouteSessionCacheInvalidationTest {
     }
 
     @Test
-    void rawSqlRequiresAnExplicitNamespace() {
+    void rawSqlFallsBackToGlobalInvalidationWhenNoNamespaceIsProvided() {
         RecordingCache cache = new RecordingCache();
         EntitySession node = node();
         RouteSession route = route(node, cache);
         ExecuteRequest<Object> request = ExecuteRequest
-                .newInstance("update users set name=#{name}", java.util.Map.of("name", "new"))
-                .invalidate();
+                .newInstance("update users set name=#{name}", java.util.Map.of("name", "new"));
+        doReturn(1).when(node).update(request);
 
-        assertThatThrownBy(() -> route.update(request))
-                .isInstanceOf(NoticeException.class)
-                .hasMessageContaining("invalidate(\"表名\")");
-        verify(node, never()).update(request);
+        assertThat(route.update(request)).isEqualTo(1);
+        assertThat(cache.allInvalidations).isEqualTo(1);
     }
 
     private static EntitySession node() {
@@ -98,9 +92,10 @@ class RouteSessionCacheInvalidationTest {
 
     private static final class RecordingCache implements QueryCache {
         final Set<CacheNamespace> namespaces = new LinkedHashSet<>();
+        int allInvalidations;
         @Override public CacheLookup get(CacheKey key, CacheValueType valueType) { return CacheLookup.miss(); }
         @Override public void put(CacheKey key, CacheValueType valueType, Object value, Duration ttl) { }
         @Override public void invalidate(Set<CacheNamespace> values) { namespaces.addAll(values); }
-        @Override public void invalidateAll() { namespaces.clear(); }
+        @Override public void invalidateAll() { allInvalidations++; namespaces.clear(); }
     }
 }

@@ -1,6 +1,7 @@
 package com.yulinlin.repository.proxy;
 
 import com.yulinlin.data.core.model.BaseModelUpdateWrapper;
+import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.wrapper.IConditionWrapper;
 
 import java.lang.reflect.Method;
@@ -55,5 +56,10 @@ public class UpdateMethodParse implements MethodParse
             }
         }
         return false;
+    }
+
+    @Override
+    public RequestType requestType() {
+        return RequestType.update;
     }
 }

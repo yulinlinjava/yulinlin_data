@@ -569,7 +569,7 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 
 本文从一个用户实体完成 CRUD，再扩展条件查询、SQL JOIN、自定义 SQL、统计模型和事务。数据库接入与 group 注册先看 [第一专题](01-接入与数据源.md)。
 
-阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [事务](#事务使用) · [边界](#使用边界与排障)
+阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
 
 ### 最小实体和配套表
 
@@ -1157,11 +1157,63 @@ try {
 
 嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
 
+### Repository 接口
+
+Repository 根据方法名生成普通 Wrapper 查询。引入模块后自动启用，不再需要扫描注解：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>repository</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+未配置扫描路径时，默认从 `@SpringBootApplication`所在根包递归查找。需要限制范围或扫描多个业务模块时，在配置文件指定：
+
+```yaml
+yulinlin:
+  repository:
+    scan-packages:
+      - "com.example.*.*.local"       # 每个 * 匹配一层
+      - "com.example.**.repository"  # ** 跨任意层级
+      - "${APP_REPOSITORY_PACKAGE:com.example.repository}"
+```
+
+扫描使用类元数据，不会加载路径下所有普通类。普通包名递归扫描；路径段支持 Ant 风格通配符：`*`匹配一级包，`**`匹配任意层级，`?`匹配单个字符。YAML 中包含 `*`的路径必须加引号。配置缺失时使用应用根包，而配置存在时只扫描列出的路径。
+
+Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。
+
+只有查询方法显式标记 `@JoinCache`才使用查询缓存；接口上不能添加该注解，也没有自动开启全部 Repository 缓存的配置：
+
+```java
+@JoinRepository
+public interface DemoUserRepository extends BaseRepository<DemoUser> {
+
+    // 没有注解：每次查询数据源
+    DemoUser findByUsernameEq(String username);
+
+    // READ_THROUGH；使用 yulinlin.cache.ttl
+    @JoinCache
+    List<DemoUser> findByStatusEq(Integer status);
+
+    // 每次强制查库，并用最新结果覆盖对应缓存
+    @JoinCache(mode = CacheMode.REFRESH, ttl = 30, unit = TimeUnit.SECONDS)
+    DemoUser findByIdEq(String id);
+
+    // 额外把角色表版本纳入 Key，角色表更新后该查询也失效
+    @JoinCache(namespaces = "sys_role")
+    List<DemoUser> findAll();
+}
+```
+
+`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。写方法添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段直接失败；insert/update/delete 继续由框架在事务提交成功后自动失效相关查询缓存。
+
 ### 使用边界与排障
 
 - 更新通常跳过 null；普通 copyProperties 或懒同步的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
-- cache() 会保存并复制查询模型，模型必须符合深克隆支持范围；缓存只按写入后 TTL 失效，写操作不会主动清理，强一致查询不要启用缓存。
+- 查询缓存保存查询结果；标准写操作在事务提交成功后自动失效相关表命名空间，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
 - 日期范围为空先核对列类型、格式、时区与条件，不默认归咎于数据库驱动。
 - 表达式、JOIN、JSON 路径、行锁按目标库核对；没有跨库 SQL 自动翻译器。
@@ -1973,6 +2025,32 @@ public class SecureValueService {
 
 查询缓存是可选能力。`core` 只提供统一协议和无缓存兜底；不引入缓存模块时，应用照常启动，标记为缓存的查询会直接访问数据源。
 
+### 公共配置
+
+```yaml
+yulinlin:
+  cache:
+    ttl: 10m
+    ttl-in-key: false
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `ttl` | `10m` | 查询缓存默认有效期 |
+| `ttl-in-key` | `false` | TTL 是否参与 ORM 查询缓存 Key；不影响 `CacheClient` 业务缓存 |
+
+默认关闭时，只要查询条件、数据源和 namespace 版本相同，不同 TTL 的查询就会复用同一个缓存条目。已有条目被命中时不会修改其过期时间；`REFRESH`或未命中重新写入时，才使用本次请求的 TTL。这样可以减少重复数据并提高缓存复用率。
+
+需要让不同 TTL 的相同查询完全隔离时开启：
+
+```yaml
+yulinlin:
+  cache:
+    ttl-in-key: true
+```
+
+开启后，解析出的默认 TTL 或请求级 TTL 会参与物理 Key，同一查询使用不同 TTL 时会保存为不同条目。namespace 名称和版本始终参与 Key，不受此开关影响。
+
 ### 选择实现
 
 只引入一个实现，不要同时引入两个。
@@ -1993,9 +2071,36 @@ public class SecureValueService {
 yulinlin:
   cache:
     ttl: 10m
+    ttl-in-key: false
     caffeine:
+      initial-capacity: 128
       maximum-size: 10000
+      expiration-policy: after-write
+      use-system-scheduler: false
+      executor: common-pool
       record-stats: true
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `initial-capacity` | `16` | Caffeine 内部表的初始容量；只影响扩容次数，不会一次性创建全部缓存对象 |
+| `maximum-size` | `10000` | 最大条目数；ORM 查询缓存与 `CacheClient` 业务缓存共用该容量 |
+| `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
+| `use-system-scheduler` | `false` | 使用 JDK 系统调度器更及时地触发过期维护；关闭时由正常读写维护，过期项仍不会被命中 |
+| `executor` | `common-pool` | `common-pool` 异步执行维护任务；`direct` 在调用线程执行，少一次调度但可能增加请求延迟 |
+| `record-stats` | `true` | 记录命中率、淘汰数和加载统计；不需要观测时可关闭以减少少量计数开销 |
+
+`expiration-policy`同时作用于 ORM 查询缓存和 `CacheClient`。请求级 `cache(Duration)` 或 `CacheClient.set(..., Duration)` 仍决定各条目的 TTL，策略只决定读取命中后是否重新开始计时。大多数接口服务建议保留 `after-write + common-pool`；会话类热点数据才考虑 `after-access`。
+
+需要监控时可以直接注入具体实现：
+
+```java
+@Resource
+private CaffeineQueryCache caffeineQueryCache;
+
+long entries = caffeineQueryCache.estimatedSize();
+CacheStats stats = caffeineQueryCache.stats();
+caffeineQueryCache.cleanUp(); // 主动执行待处理的过期和容量淘汰维护
 ```
 
 #### Ehcache 持久化缓存
@@ -2014,13 +2119,42 @@ yulinlin:
 yulinlin:
   cache:
     ttl: 10m
+    ttl-in-key: false
     ehcache:
       directory: ./data/cache
       heap-entries: 10000
+      offheap-size-mb: 0
       disk-size-mb: 1024
+      persistent: true
+      expiration-policy: after-write
+      disk-threads: 2
+      maximum-entry-size-mb: 16
+      record-statistics: true
 ```
 
-持久化目录只能由一个 CacheManager 占用。正常关闭时框架调用 `close()`；异常退出后磁盘缓存允许丢失，缓存损坏或反序列化失败会删除对应项并回源查询。
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `directory` | `data/cache` | 磁盘缓存目录，同一时间只能由一个 CacheManager 占用 |
+| `heap-entries` | `10000` | JVM 堆内热点条目数，ORM 查询与 `CacheClient` 共用 |
+| `offheap-size-mb` | `0` | 可选堆外中间层；`0` 表示关闭，适合降低大量缓存对象对 GC 的影响 |
+| `disk-size-mb` | `1024` | 磁盘层容量上限 |
+| `persistent` | `true` | 是否在正常关闭并重启后保留磁盘缓存 |
+| `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
+| `disk-threads` | `2` | Ehcache 磁盘层固定工作线程数；本地 SSD 通常使用 `2` 到 `4` |
+| `maximum-entry-size-mb` | `16` | 单条 JSON 序列化结果上限，超出后记录并跳过，防止一个大列表挤占缓存 |
+| `record-statistics` | `true` | 记录框架层命中、未命中、写入、超大条目和序列化失败计数 |
+
+正常关闭时框架调用 `close()`。即使 `persistent: true`，缓存仍应被视为可丢失数据；缓存损坏或反序列化失败会删除对应项并回源查询。启用堆外层会增加一次序列化/复制成本，只在缓存较大或 GC 压力明显时开启。
+
+可以直接注入具体实现读取和重置统计：
+
+```java
+@Resource
+private EhcacheQueryCache ehcacheQueryCache;
+
+EhcacheQueryCache.Stats stats = ehcacheQueryCache.stats();
+ehcacheQueryCache.resetStatistics();
+```
 
 ### 启用查询缓存
 
@@ -2053,9 +2187,77 @@ request.cache(); // 默认 TTL；也可 cache(Duration.ofSeconds(30))
 List<SysUser> users = request.selectList();
 ```
 
-列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。级联查询、批量预加载和懒加载会继承入口查询的缓存开关与请求级 TTL。
+列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。级联查询、批量预加载和懒加载会继承入口查询的缓存模式与请求级 TTL。
 
-同一条查询使用不同 TTL 时会生成不同物理 Key，互不覆盖；读取缓存不会续期。
+同一条查询使用不同 TTL 时会生成不同物理 Key，互不覆盖。默认 `after-write` 下读取不会续期；Provider 配置为 `after-access` 时，命中会按该条目的 TTL 重新计时。
+
+### CacheMode
+
+`CacheMode`明确控制一次查询是否读缓存、访问数据源和写缓存：
+
+| 模式 | 读缓存 | 未命中访问数据源 | 写缓存 |
+| --- | --- | --- | --- |
+| `NONE` | 否 | 是 | 否 |
+| `CACHE_ONLY` | 是 | 否 | 否 |
+| `READ_THROUGH` | 是 | 是 | 是 |
+| `REFRESH` | 否 | 是 | 是 |
+
+```java
+// cache() 等价于 READ_THROUGH
+List<SysUser> cached = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .cache(CacheMode.READ_THROUGH)
+        .selectList();
+
+// 只允许读取已有缓存；未命中抛出 CacheMissException，绝不查询数据库
+List<SysUser> offline = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .cache(CacheMode.CACHE_ONLY)
+        .selectList();
+
+// 强制查询数据库并覆盖缓存
+List<SysUser> refreshed = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .cache(CacheMode.REFRESH, Duration.ofMinutes(5))
+        .selectList();
+```
+
+未调用 `cache(...)` 时为 `NONE`。没有引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`仍能查询数据源，但不会保存结果；`CACHE_ONLY`一定抛出 `CacheMissException`。
+
+### 业务缓存 CacheClient
+
+框架始终暴露一个可注入的 `CacheClient` Bean。它与 ORM 查询缓存共用所选 Provider，但使用独立的 Key 和版本域；数据库写操作不会误删验证码、接口结果等业务缓存。
+
+```java
+@Resource
+private CacheClient cacheClient;
+
+cacheClient.set("user", "10001", user); // 使用系统默认 TTL
+cacheClient.set("user", "10002", user, Duration.ofMinutes(30));
+
+SysUser user = cacheClient.get("user", "10001", SysUser.class);
+boolean exists = cacheClient.exists("user", "10001");
+cacheClient.remove("user", "10001");
+cacheClient.invalidate("user"); // 整个业务命名空间立即失效
+cacheClient.clear();             // 只清理业务缓存，不清理 ORM 查询缓存
+```
+
+集合等泛型数据使用 Jackson `TypeReference`：
+
+```java
+List<SysUser> users = cacheClient.get(
+        "user-list", "enabled",
+        new TypeReference<List<SysUser>>() {}
+);
+```
+
+`getOrLoad`在同一 Key 回源时使用分段锁和二次检查：
+
+```java
+SysUser user = cacheClient.getOrLoad(
+        "user", userId, SysUser.class, Duration.ofMinutes(10),
+        () -> userService.findById(userId)
+);
+```
+
+业务缓存不接受空 namespace、空 key 或 `set(..., null)`。未引入缓存模块时，`available()`返回 false，读取为未命中，写入和失效操作安全地退化为空操作。
 
 ### Key 规则
 
@@ -2082,12 +2284,11 @@ MurmurHash3-x64-128(
 
 ### 失效和一致性
 
-缓存始终受 TTL 约束；需要写后立即不可见旧数据时，在写包装器上显式调用失效方法：
+缓存始终受 TTL 约束。标准 `insert/update/delete` 默认在提交成功后自动失效相关查询缓存，无需调用 `invalidate()`：
 
 ```java
 int affected = ModelUpdateWrapper
         .newInstance("mysql", patch)
-        .invalidate() // 自动解析实体和语法树涉及的表
         .execute();
 
 int deleted = ModelDeleteWrapper
@@ -2097,15 +2298,15 @@ int deleted = ModelDeleteWrapper
         .execute();
 ```
 
-三个写入 API 的语义如下：
+需要补充依赖或扩大范围时使用：
 
 | API | 行为 |
 | --- | --- |
-| `invalidate()` | 从 `INode`、`From/Join/Store`、`@JoinTable`、`@JoinTableList` 自动提取本次写入涉及的表并失效 |
+| 默认行为 / `invalidate()` | 从 `INode`、`From/Join/Store`、`@JoinTable`、`@JoinTableList` 自动提取本次写入涉及的表并失效 |
 | `invalidate("table", ...)` | 自动提取之外，再显式加入表名；自定义写 SQL 应使用它 |
 | `invalidateAll()` | 失效当前缓存 Provider 中的全部查询 |
 
-自定义 SQL 没有实体或节点表信息，框架无法可靠猜测 SQL 涉及的表，必须明确指定：
+自定义 SQL 没有实体或节点表信息时，框架无法可靠猜测 SQL 涉及的表，默认退化为全部查询缓存失效并输出警告。显式提供表名可以缩小范围：
 
 ```java
 ExecuteRequest<Object> write = ExecuteRequest.newInstance(
@@ -2127,7 +2328,7 @@ int affected = write.invalidate("sys_user").execute();
 - Spring 事务在 `afterCommit` 阶段失效；回滚或提交失败不失效。
 - 查询回源期间若并发发生更新，旧查询只能写入旧版本 Key，不能重新污染新版本缓存。
 
-写操作默认不会主动失效缓存；只有调用 `invalidate*` 才开启。即便开启主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。要求事务内读己之写或绝对强一致的查询不要调用 `cache()`。
+即使有主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 
 ### 并发与对象边界
 
@@ -2139,7 +2340,7 @@ Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化
 
 | 项目依赖 | 启动结果 |
 | --- | --- |
-| 不引入缓存模块 | 正常启动，查询直接访问数据源 |
+| 不引入缓存模块 | 正常启动；`CacheClient.available()`为 false，缓存优先查询直接访问数据源 |
 | 只引入 `cache-caffeine` | 启用内存缓存 |
 | 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
 | 同时引入两个实现 | 启动失败并报告多个缓存 Provider |

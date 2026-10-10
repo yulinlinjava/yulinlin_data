@@ -8,26 +8,24 @@ import org.springframework.cglib.proxy.MethodProxy;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 public class RepositorySession {
 
-    private Map<Class,Object> cache = new HashMap<>();
+    private final ConcurrentMap<Class<?>, Object> cache = new ConcurrentHashMap<>();
 
-    private MethodParseManager methodParseManager;
+    private final MethodParseManager methodParseManager;
 
     public RepositorySession(MethodParseManager methodParseManager) {
         this.methodParseManager = methodParseManager;
     }
 
     public <E> E create(Class<E> key){
-        Object val =  cache.get(key);
-        if(val == null){
-            val =new Proxy(key).getProxyInstance();
-            cache.put(key,val);
-        }
-        return (E)val;
+        return key.cast(cache.computeIfAbsent(key, type -> {
+            methodParseManager.validate(type);
+            return new Proxy(type).getProxyInstance();
+        }));
     }
 
     /**

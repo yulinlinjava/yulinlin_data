@@ -1,6 +1,7 @@
 package com.yulinlin.repository.proxy;
 
 import com.yulinlin.data.core.model.BaseModelInsertWrapper;
+import com.yulinlin.data.core.session.RequestType;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -37,5 +38,10 @@ public class InsertMethodParse implements MethodParse
             }
         }
         return false;
+    }
+
+    @Override
+    public RequestType requestType() {
+        return RequestType.insert;
     }
 }

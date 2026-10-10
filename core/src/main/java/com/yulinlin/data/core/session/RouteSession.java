@@ -3,6 +3,7 @@ package com.yulinlin.data.core.session;
 import com.yulinlin.data.core.anno.JoinSession;
 import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
+import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -17,6 +18,7 @@ import com.yulinlin.data.lang.util.Page;
 import com.yulinlin.data.lang.util.StringUtil;
 import lombok.Builder;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -31,6 +33,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiFunction;
 
 @Builder
+@Slf4j
 public class RouteSession  extends  RegisterSession{
 
 
@@ -133,7 +136,9 @@ public class RouteSession  extends  RegisterSession{
                     session.getClass(), session.group(), request.getFromClass(),
                     request.getWrappers(), request.getCacheNamespaces()));
             if (pending.namespaces.isEmpty()) {
-                throw new NoticeException("无法识别写操作的缓存命名空间，自定义SQL请调用 invalidate(\"表名\") 或 invalidateAll()");
+                pending.all = true;
+                log.warn("无法识别写操作的缓存命名空间，提交成功后将失效全部查询缓存；"
+                        + "自定义SQL建议调用 invalidate(\"表名\") 缩小范围");
             }
         }
         return pending;
@@ -197,10 +202,11 @@ public class RouteSession  extends  RegisterSession{
         LazyProxyFactory.CacheContext previousCache = LazyProxyFactory.cacheContext();
         boolean entered = false;
         try {
-            boolean cacheEnabled = previousCache.enabled() || req.isCache();
-            java.time.Duration cacheTtl = req.isCache() && req.getCacheTtl() != null
+            CacheMode cacheMode = req.getCacheMode() != CacheMode.NONE
+                    ? req.getCacheMode() : previousCache.mode();
+            java.time.Duration cacheTtl = req.getCacheMode() != CacheMode.NONE
                     ? req.getCacheTtl() : previousCache.ttl();
-            LazyProxyFactory.cache(new LazyProxyFactory.CacheContext(cacheEnabled, cacheTtl));
+            LazyProxyFactory.cache(new LazyProxyFactory.CacheContext(cacheMode, cacheTtl));
             EntitySession session = before(req);
             entered = true;
             return (E) switch (requestType) {

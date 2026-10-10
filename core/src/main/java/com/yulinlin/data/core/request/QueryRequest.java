@@ -1,5 +1,6 @@
 package com.yulinlin.data.core.request;
 
+import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.node.CommandNode;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseType;
@@ -34,21 +35,34 @@ public class QueryRequest<E> extends BaseRequest<E> {
         request.setRoot(getRoot());
         request.setSession(getSession());
         request.setCluster(getCluster());
-        request.setCache(isCache());
+        request.setCacheMode(getCacheMode());
         request.setCacheTtl(getCacheTtl());
         request.addCacheNamespaces(getCacheNamespaces().toArray(String[]::new));
         return request;
     }
 
     public QueryRequest<E> cache() {
-        setCache(true);
+        setCacheMode(CacheMode.READ_THROUGH);
         setCacheTtl(null);
         return this;
     }
 
     public QueryRequest<E> cache(Duration ttl) {
-        setCache(true);
+        setCacheMode(CacheMode.READ_THROUGH);
         setCacheTtl(ttl);
+        return this;
+    }
+
+    public QueryRequest<E> cache(CacheMode mode) {
+        setCacheMode(mode);
+        setCacheTtl(null);
+        return this;
+    }
+
+    public QueryRequest<E> cache(CacheMode mode, Duration ttl) {
+        setCacheMode(mode);
+        if (mode == null || mode == CacheMode.NONE) setCacheTtl(null);
+        else setCacheTtl(ttl);
         return this;
     }
 

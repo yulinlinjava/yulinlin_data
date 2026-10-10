@@ -1,6 +1,7 @@
 package com.yulinlin.data.core.request;
 
 import com.yulinlin.data.core.anno.JoinCluster;
+import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.cache.QueryCacheProperties;
 import com.yulinlin.data.core.session.RequestType;
 
@@ -18,7 +19,7 @@ public abstract class BaseRequest<E> {
     //标记来自那个实体类
     private Class<?> fromClass;
 
-    private boolean cache;
+    private CacheMode cacheMode = CacheMode.NONE;
 
     /** Null means use yulinlin.cache.ttl. */
     private Duration cacheTtl;
@@ -66,11 +67,20 @@ public abstract class BaseRequest<E> {
     }
 
     public boolean isCache() {
-        return cache;
+        return cacheMode != CacheMode.NONE;
     }
 
     public void setCache(boolean cache) {
-        this.cache = cache;
+        this.cacheMode = cache ? CacheMode.READ_THROUGH : CacheMode.NONE;
+    }
+
+    public CacheMode getCacheMode() {
+        return cacheMode;
+    }
+
+    public void setCacheMode(CacheMode cacheMode) {
+        this.cacheMode = cacheMode == null ? CacheMode.NONE : cacheMode;
+        if (this.cacheMode == CacheMode.NONE) this.cacheTtl = null;
     }
 
     public Duration getCacheTtl() {

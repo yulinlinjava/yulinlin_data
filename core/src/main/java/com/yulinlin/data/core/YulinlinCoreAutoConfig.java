@@ -4,6 +4,8 @@ import com.yulinlin.data.core.aop.JoinSessionAop;
 import com.yulinlin.data.core.aop.JoinTransactionAop;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCaches;
+import com.yulinlin.data.core.cache.CacheClient;
+import com.yulinlin.data.core.cache.DefaultCacheClient;
 import com.yulinlin.data.core.filter.IFilter;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.filter.InitFilter;
@@ -124,6 +126,12 @@ public class YulinlinCoreAutoConfig {
 
 
 
+
+    @ConditionalOnMissingBean
+    @Bean
+    public CacheClient cacheClient(ObjectProvider<QueryCache> queryCaches) {
+        return new DefaultCacheClient(QueryCaches.single(queryCaches.orderedStream().toList()));
+    }
 
     @ConditionalOnMissingBean
     @Bean

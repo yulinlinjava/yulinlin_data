@@ -1,11 +1,14 @@
 package com.yulinlin.repository.proxy;
 
 import com.yulinlin.data.core.model.BaseModelSelectWrapper;
+import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.wrapper.IConditionWrapper;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * 查询解析
@@ -14,6 +17,7 @@ public class SelectMethodParse implements MethodParse
 {
 
     public static List<String> keys = Arrays.asList("selectBy","findBy","searchBy","find");
+    private final ConcurrentMap<Method, JoinCacheOptions> cacheOptions = new ConcurrentHashMap<>();
 
     public void parseWhere(String name,Object[] args,IConditionWrapper conditionManager){
         for (String key : keys) {
@@ -42,6 +46,7 @@ public class SelectMethodParse implements MethodParse
             BaseModelSelectWrapper wrapper =new BaseModelSelectWrapper(null,clazz);
 
             parseWhere(name,args,wrapper);
+            cacheOptions.computeIfAbsent(method, JoinCacheOptions::from).apply(wrapper);
 
             if(List.class.isAssignableFrom(returnType)){
                 return wrapper.selectList();
@@ -59,5 +64,15 @@ public class SelectMethodParse implements MethodParse
             }
         }
         return false;
+    }
+
+    @Override
+    public RequestType requestType() {
+        return RequestType.select;
+    }
+
+    @Override
+    public void validate(Method method) {
+        cacheOptions.computeIfAbsent(method, JoinCacheOptions::from);
     }
 }

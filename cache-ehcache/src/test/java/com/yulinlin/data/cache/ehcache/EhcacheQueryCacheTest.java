@@ -32,6 +32,11 @@ class EhcacheQueryCacheTest {
     Path directory;
 
     @Test
+    void statisticsAreDisabledByDefault() {
+        assertThat(new EhcacheProperties().isRecordStatistics()).isFalse();
+    }
+
+    @Test
     void survivesCleanCacheManagerRestart() {
         QueryCacheProperties common = new QueryCacheProperties();
         EhcacheProperties properties = new EhcacheProperties();
@@ -175,6 +180,7 @@ class EhcacheQueryCacheTest {
         QueryCacheProperties common = new QueryCacheProperties();
         EhcacheProperties properties = properties();
         properties.setMaximumEntrySizeMb(1);
+        properties.setRecordStatistics(true);
 
         try (EhcacheQueryCache cache = new EhcacheQueryCache(common, properties, new ObjectMapper())) {
             String oversized = "x".repeat(1024 * 1024);

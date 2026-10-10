@@ -20,7 +20,8 @@ public class CaffeineCacheProperties {
     /** Executor used by Caffeine for maintenance and notifications. */
     private ExecutorMode executor = ExecutorMode.COMMON_POOL;
 
-    private boolean recordStats = true;
+    /** Disabled by default to avoid counters on the cache hot path. */
+    private boolean recordStats;
 
     public int getInitialCapacity() {
         return initialCapacity;

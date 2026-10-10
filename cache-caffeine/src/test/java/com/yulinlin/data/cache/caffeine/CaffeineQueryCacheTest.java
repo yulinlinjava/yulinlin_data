@@ -24,6 +24,16 @@ class CaffeineQueryCacheTest {
             .withConfiguration(AutoConfigurations.of(CaffeineCacheAutoConfiguration.class));
 
     @Test
+    void statisticsAreDisabledByDefault() {
+        CaffeineCacheProperties properties = new CaffeineCacheProperties();
+        assertThat(properties.isRecordStats()).isFalse();
+
+        CaffeineQueryCache cache = new CaffeineQueryCache(new QueryCacheProperties(), properties);
+        cache.get(key(), CacheValueType.scalar(String.class));
+        assertThat(cache.stats().requestCount()).isZero();
+    }
+
+    @Test
     void cachesNullAndExpiresAfterWrite() throws Exception {
         QueryCacheProperties common = new QueryCacheProperties();
         common.setTtl(Duration.ofMillis(40));

@@ -16,7 +16,8 @@ public class EhcacheProperties {
     private ExpirationPolicy expirationPolicy = ExpirationPolicy.AFTER_WRITE;
     private int diskThreads = 2;
     private long maximumEntrySizeMb = 16;
-    private boolean recordStatistics = true;
+    /** Disabled by default to avoid counters on the cache hot path. */
+    private boolean recordStatistics;
 
     public Path getDirectory() {
         return directory;

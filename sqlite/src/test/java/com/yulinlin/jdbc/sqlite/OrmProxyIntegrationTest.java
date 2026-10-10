@@ -5,7 +5,6 @@ import com.yulinlin.common.model.ModelSelectWrapper;
 import com.yulinlin.data.core.anno.*;
 import com.yulinlin.data.core.filter.IRequestFilter;
 import com.yulinlin.data.core.model.BaseModel;
-import com.yulinlin.data.core.proxy.LazyProxyFactory;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.session.RouteSession;
@@ -38,7 +37,6 @@ import static org.assertj.core.api.Assertions.*;
 class OrmProxyIntegrationTest {
     @TempDir Path directory;
     @AfterEach void clean() {
-        LazyProxyFactory.cache(false);
         if (SessionUtil.route() != null) {
             if (SessionUtil.route().isOpenTransaction()) SessionUtil.route().rollbackTransaction();
             SessionUtil.route().clear();
@@ -46,11 +44,18 @@ class OrmProxyIntegrationTest {
     }
 
     private void run(Consumer<Fixture> test) {
+        run(test, new String[0]);
+    }
+
+    private void run(Consumer<Fixture> test, String... additionalProperties) {
+        String[] properties = new String[additionalProperties.length + 2];
+        properties[0] = "yulinlin.sqlite.file=" + directory.resolve("proxy.db");
+        properties[1] = "yulinlin.sqlite.group=local";
+        System.arraycopy(additionalProperties, 0, properties, 2, additionalProperties.length);
         new ApplicationContextRunner()
                 .withUserConfiguration(SqliteIntegrationTest.TestInfrastructure.class,
                         SqliteIntegrationTest.BootConfiguration.class, RecordingConfiguration.class)
-                .withPropertyValues("yulinlin.sqlite.file=" + directory.resolve("proxy.db"),
-                        "yulinlin.sqlite.group=local")
+                .withPropertyValues(properties)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     var f = new Fixture(SessionUtil.route(),
@@ -98,6 +103,39 @@ class OrmProxyIntegrationTest {
             return null;
         }));
     }
+
+    @Test void autoUpdateQueryRequiresAnActiveTransaction() {
+        run(f -> assertThatThrownBy(() -> ModelSelectWrapper.newInstance("local", User.class)
+                .autoUpdate().eq("id", "1").selectOne())
+                .hasMessageContaining("请开启事务"));
+    }
+
+    @Test void globalAutoUpdateRequiresAnActiveTransaction() {
+        run(f -> assertThatThrownBy(() -> f.user("1")).hasMessageContaining("请开启事务"),
+                "yulinlin.data.auto-update=true");
+    }
+
+    @Test void globalAutoUpdateTracksSettersInsideTransaction() {
+        run(f -> {
+            f.route.transaction(() -> {
+                f.user("1").setName("global");
+                return null;
+            });
+            assertThat(f.sql.queryForObject("select name from proxy_user where id='1'", String.class))
+                    .isEqualTo("global");
+        }, "yulinlin.data.auto-update=true");
+    }
+
+    @Test void queryCanDisableGlobalAutoUpdate() {
+        run(f -> {
+            User user = ModelSelectWrapper.newInstance("local", User.class)
+                    .autoUpdate(false).eq("id", "1").selectOne();
+            user.setName("memory-only");
+            assertThat(f.sql.queryForObject("select name from proxy_user where id='1'", String.class))
+                    .isEqualTo("user-1");
+        }, "yulinlin.data.auto-update=true");
+    }
+
     @Test void chunkedInQueriesDistributeListsAndKeepOrdering() {
         run(f -> f.route.transaction(() -> {
             List<ChunkRelations> rows = f.lazy(List.of(chunk("1", "3"), chunk("2", "1"), chunk("missing"), chunk()));
@@ -320,11 +358,12 @@ class OrmProxyIntegrationTest {
             });
         });
     }
-    @Test void associationJoinSyncUpdatesOnlyExplicitSetters() {
+    @Test void autoUpdateQueryPropagatesToLazyAssociations() {
         run(f -> {
             f.route.transaction(() -> {
-                SyncRelation relation = new SyncRelation(); relation.setChildId("1");
-                SyncRelation proxy = f.lazy(relation); proxy.getChild().setName("association");
+                Parent parent = ModelSelectWrapper.newInstance("local", Parent.class)
+                        .autoUpdate().eq("id", "a").selectOne();
+                parent.getChild().setName("association");
                 return null;
             });
             assertThat(f.sql.queryForObject("select name from proxy_user where id='1'", String.class)).isEqualTo("association");
@@ -349,10 +388,9 @@ class OrmProxyIntegrationTest {
             assertThat(f.sql.queryForObject("select name from proxy_version", String.class)).isEqualTo("new");
         });
     }
-    @Test void cacheFlagDoesNotLeakFromPreviousQuery() {
+    @Test void cacheContextDoesNotLeakFromPreviousQuery() {
         run(f -> f.route.transaction(() -> {
             List<Parent> cached = ModelSelectWrapper.newInstance("local", Parent.class).cache().selectList();
-            assertThat(LazyProxyFactory.isCache()).isFalse();
             cached.getFirst().getChild();
             assertThat(f.recorder.userCacheFlags).containsExactly(true);
             f.parents().getFirst().getChild();
@@ -456,10 +494,6 @@ class OrmProxyIntegrationTest {
     @Getter @Setter public static class Circular {
         @JoinLazy @JoinQuery(value = "${child.id}") private Circular child;
     }
-    @Getter @Setter public static class SyncRelation {
-        private String childId;
-        @JoinLazy @JoinSync @JoinQuery(value = "${childId}") private User child;
-    }
     @Getter @Setter @JoinTable("proxy_user") public static class NoKey { private String name; }
     @Getter @Setter @JoinTable("proxy_hook") public static class HookUser extends IdEntity<HookUser> implements BaseModel {
         private String name;
@@ -499,15 +533,14 @@ class OrmProxyIntegrationTest {
         @Bean SpringService springService() { return new SpringService(); }
     }
     public static class SpringService {
-        @Transactional public void rename(boolean fail) {
+        @Transactional @JoinSync public void rename(boolean fail) {
             User user = ModelSelectWrapper.newInstance("local", User.class).eq("id", "1").selectOne();
-            User proxy = SessionUtil.callable("local", () -> SessionUtil.route().getSyncProxy(user));
-            proxy.setName(fail ? "must-rollback" : "spring");
+            user.setName(fail ? "must-rollback" : "spring");
             if (fail) throw new IllegalStateException("business failure");
         }
-        @Transactional(readOnly = true) public void readOnly() {
+        @Transactional(readOnly = true) @JoinSync public void readOnly() {
             User user = ModelSelectWrapper.newInstance("local", User.class).eq("id", "1").selectOne();
-            SessionUtil.callable("local", () -> SessionUtil.route().getSyncProxy(user)).setName("forbidden");
+            user.setName("forbidden");
         }
     }
 }

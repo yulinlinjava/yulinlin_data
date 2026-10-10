@@ -176,6 +176,18 @@ public class BaseModelSelectWrapper<E,
         return (R)this;
     }
 
+    /** Makes this query return transaction-managed entities. */
+    public R autoUpdate() {
+        request.autoUpdate();
+        return (R)this;
+    }
+
+    /** Overrides the global/@JoinSync automatic-update policy for this query. */
+    public R autoUpdate(boolean enabled) {
+        request.autoUpdate(enabled);
+        return (R)this;
+    }
+
     public  R orderBy(LambdaPropertyFunction<E> name, boolean asc) {
         wrapper.orderBy(name,asc);
         return (R)this;

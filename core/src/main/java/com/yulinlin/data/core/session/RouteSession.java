@@ -4,11 +4,9 @@ import com.yulinlin.data.core.anno.JoinCluster;
 import com.yulinlin.data.core.anno.JoinSession;
 import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
-import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
-import com.yulinlin.data.core.proxy.LazyProxyFactory;
 import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
@@ -195,6 +193,8 @@ public class RouteSession  extends  RegisterSession{
 
     @SuppressWarnings("unchecked")
     private <E> E executeList(QueryRequest<?> req, RequestType requestType) {
+        if (proxyService != null && proxyService.requiresTransaction(req) && !isOpenTransaction())
+            throw new NoticeException("Entity auto-update query requires an active transaction. 请开启事务。");
         // Keep the recursion guard for raw SQL, without requiring an entity or changing the request.
         Class<?> depthKey = req.getFromClass() == null ? Object.class : req.getFromClass();
         LongAdder depth = mapThreadLocal.get().computeIfAbsent(depthKey, ignored -> new LongAdder());
@@ -202,14 +202,8 @@ public class RouteSession  extends  RegisterSession{
             throw new NoticeException("递归查询深度超过" + deep + ",请使用懒加载:"
                     + (depthKey == Object.class ? "自定义SQL" : depthKey.getName()));
         depth.increment();
-        LazyProxyFactory.CacheContext previousCache = LazyProxyFactory.cacheContext();
         boolean entered = false;
         try {
-            CacheMode cacheMode = req.getCacheMode() != CacheMode.NONE
-                    ? req.getCacheMode() : previousCache.mode();
-            java.time.Duration cacheTtl = req.getCacheMode() != CacheMode.NONE
-                    ? req.getCacheTtl() : previousCache.ttl();
-            LazyProxyFactory.cache(new LazyProxyFactory.CacheContext(cacheMode, cacheTtl));
             EntitySession session = before(req);
             entered = true;
             return (E) switch (requestType) {
@@ -219,7 +213,6 @@ public class RouteSession  extends  RegisterSession{
                 default -> throw new IllegalArgumentException("Not a query: " + requestType);
             };
         } finally {
-            LazyProxyFactory.cache(previousCache);
             depth.decrement();
             if (depth.intValue() == 0) mapThreadLocal.get().remove(depthKey);
             if (mapThreadLocal.get().isEmpty()) mapThreadLocal.remove();

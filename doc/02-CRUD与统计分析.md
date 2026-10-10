@@ -200,7 +200,7 @@ second.setStatus(2);
 int affected = ModelUpdateWrapper.newInstance("mysql", List.of(first, second)).execute();
 ```
 
-普通对象更新、懒同步更新和显式 `.field(name, null)` 都跳过 null；它们不能把数据库列清成 NULL。需要清空字段时使用参数化的[自定义写入](#自定义写入)。`@JoinField(update = false)` 字段不参与对象更新；version 字段按当前值加入条件并递增，仍应检查影响行数判断并发冲突。
+普通对象更新、自动更新代理和显式 `.field(name, null)` 都跳过 null；它们不能把数据库列清成 NULL。需要清空字段时使用参数化的[自定义写入](#自定义写入)。`@JoinField(update = false)` 字段不参与对象更新；version 字段按当前值加入条件并递增，仍应检查影响行数判断并发冲突。
 
 ### 删除用法
 
@@ -272,13 +272,57 @@ var users = query.selectList();
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
 
-对象构造条件示例：
+### 查询条件对象
+
+直接把实体作为查询条件：
 
 ```java
 DemoUser filter = new DemoUser();
 filter.setStatus(1); // 因为字段有 JoinWhere，参与条件。
 var users = ModelSelectWrapper.newInstance("mysql", filter).selectList();
 ```
+
+实体类型和查询参数也可以分开。推荐 Controller 接收独立查询 DTO，再把它作为第三个参数传入：
+
+```java
+package demo.query;
+
+import com.yulinlin.data.core.anno.ConditionEnum;
+import com.yulinlin.data.core.anno.JoinWhere;
+import lombok.Data;
+
+import java.util.List;
+
+@Data
+public class UserQuery {
+    @JoinWhere(name = "id", condition = ConditionEnum.in)
+    private List<String> ids;
+
+    @JoinWhere(name = "username", condition = ConditionEnum.like)
+    private String keyword;
+
+    @JoinWhere(name = "status", condition = ConditionEnum.between)
+    private List<Integer> statusRange;
+}
+```
+
+```java
+UserQuery condition = new UserQuery();
+condition.setIds(List.of("user-1", "user-2"));
+condition.setKeyword("alice");
+condition.setStatusRange(List.of(1, 3));
+
+List<DemoUser> users = ModelSelectWrapper
+        .newInstance("mysql", DemoUser.class, condition)
+        .orderByDesc("crtTime")
+        .selectList();
+```
+
+这里 `DemoUser.class` 决定查询表、返回字段和结果类型，`condition` 只负责生成 WHERE。查询 DTO 不需要 `@JoinTable`，但必须提供可读取的 getter。`@JoinWhere.name` 写目标实体的 Java 属性名；省略时使用查询 DTO 自己的属性名。`condition` 可使用 `eq/ne/gt/gte/lt/lte/like/likeRight/match/in/between/isNull`。
+
+只有带 `@JoinWhere` 的属性才会参与查询。`null`、空字符串和空集合会被忽略；`between` 传两个元素的集合，`in` 传集合。`isNull` 条件需要一个非 null 的启用字段，例如 Boolean 值为 true 时生成目标列的 `IS NULL`，值为 null 时不生成该条件。生成对象条件后仍可继续调用 `.eq()`、`.orderByDesc()`、`.page()` 等链式方法追加条件和排序。
+
+`JoinWhere.and()` 默认为 `true`。所有 `and=true` 的字段进入同一个 AND 分组；`and=false` 的字段进入外层 OR 分组。混合 AND/OR 时应先确认期望的括号语义，复杂嵌套条件优先使用 Wrapper 的 `.where(...)`、`.and(...)`、`.or(...)`，不要只靠查询 DTO 猜测组合顺序。
 
 不是所有非 null 属性都自动成为 WHERE 条件。字符串条件优先使用 Java 属性名，使 JoinField 映射生效。没有默认的全表写入保护；UPDATE/DELETE 前业务必须验证主键或条件。
 
@@ -615,7 +659,7 @@ yulinlin:
 
 扫描使用类元数据，不会加载路径下所有普通类。普通包名递归扫描；路径段支持 Ant 风格通配符：`*`匹配一级包，`**`匹配任意层级，`?`匹配单个字符。YAML 中包含 `*`的路径必须加引号。配置缺失时使用应用根包，而配置存在时只扫描列出的路径。
 
-Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。
+Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。`JoinRepository`、`JoinCache` 和 `JoinSession` 均从 `com.yulinlin.data.core.anno` 导入；Repository 模块只提供扫描与代理实现。
 
 Repository 接口和方法都可以使用 `@JoinSession`切换数据源，方法注解优先于接口注解：
 
@@ -639,20 +683,21 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 Repository 必须从 Spring 容器注入后调用，不能自行创建代理。显式 Request group 仍高于注解；最终选中的 group 和 cluster 会进入查询缓存 Key，因此不同数据源不会共用查询缓存。
 
-只有查询方法显式标记 `@JoinCache`才使用查询缓存；接口上不能添加该注解，也没有自动开启全部 Repository 缓存的配置：
+`@JoinCache` 可以标记 Repository 接口，为其中全部抽象查询方法提供默认缓存配置；方法级注解优先，可覆盖接口配置或用 `CacheMode.NONE` 关闭单个查询。父接口上的类级和方法级配置均可继承：
 
 ```java
 @JoinRepository
+@JoinCache(ttl = 10, unit = TimeUnit.MINUTES)
 public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
-    // 没有注解：每次查询数据源
+    // 继承接口配置：READ_THROUGH，缓存 10 分钟
     DemoUser findByUsernameEq(String username);
 
-    // READ_THROUGH；使用 yulinlin.cache.ttl
-    @JoinCache
+    // 明确关闭该查询的缓存
+    @JoinCache(mode = CacheMode.NONE)
     List<DemoUser> findByStatusEq(Integer status);
 
-    // 每次强制查库，并用最新结果覆盖对应缓存
+    // 方法配置完整覆盖接口配置：强制查库，TTL 改为 30 秒
     @JoinCache(mode = CacheMode.REFRESH, ttl = 30, unit = TimeUnit.SECONDS)
     DemoUser findByIdEq(String id);
 
@@ -662,11 +707,13 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 }
 ```
 
-`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。写方法添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段直接失败；insert/update/delete 继续由框架在事务提交成功后自动失效相关查询缓存。
+方法级注解是完整替换而不是逐项合并：上例 `REFRESH` 方法不会继承接口的 10 分钟 TTL。`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。
+
+接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；insert/update/delete 继续在事务提交成功后按解析出的表自动失效查询缓存。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
 
 ## 使用边界与排障
 
-- 更新通常跳过 null；普通 copyProperties 或懒同步的 null 跳过不等于数据库清列。
+- 更新通常跳过 null；普通 copyProperties 或自动更新代理的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
 - 查询缓存保存查询结果；标准写操作在事务提交成功后自动失效相关表命名空间，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。

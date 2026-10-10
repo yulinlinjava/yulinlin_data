@@ -9,7 +9,7 @@ import java.lang.reflect.Method;
  */
 public interface MethodParse {
 
-    Object apply(String name,Object[] args,Method method,Object obj);
+    Object apply(String name, Object[] args, Method method, Object obj);
 
     boolean support(String name);
 
@@ -17,6 +17,11 @@ public interface MethodParse {
 
     /** Validate method-level configuration when the Repository proxy is created. */
     default void validate(Method method) {
+    }
+
+    /** Repository-aware validation while retaining the original extension API. */
+    default void validate(Class<?> repositoryType, Method method) {
+        validate(method);
     }
 
 }

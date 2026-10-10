@@ -1,25 +1,55 @@
 package com.yulinlin.data.core.proxy;
 
 import com.yulinlin.data.core.transaction.TransactionListener;
+import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.session.DataProperties;
+import com.yulinlin.data.core.session.SessionUtil;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 public class EntityProxyService implements TransactionListener {
 
-    private LazyProxyFactory lazyFactory;
+    private final EntityProxyFactory factory;
+    private final DataProperties properties;
+    private final ThreadLocal<Integer> autoUpdateDepth = ThreadLocal.withInitial(() -> 0);
 
-    private SyncProxyFactory syncFactory;
-
-    private EntityProxyService(LazyProxyFactory lazyFactory, SyncProxyFactory syncFactory) {
-        this.lazyFactory = lazyFactory;
-        this.syncFactory = syncFactory;
+    private EntityProxyService(EntityProxyFactory factory, DataProperties properties) {
+        this.factory = factory;
+        this.properties = properties;
     }
 
     public static EntityProxyService newInstance(){
-        SyncProxyFactory syncProxyFactory = new SyncProxyFactory();
-        LazyProxyFactory lazyProxyFactory = new LazyProxyFactory(syncProxyFactory);
-        return new EntityProxyService(lazyProxyFactory,syncProxyFactory);
+        return newInstance(new DataProperties());
+    }
+
+    public static EntityProxyService newInstance(DataProperties properties) {
+        return new EntityProxyService(new EntityProxyFactory(),
+                properties == null ? new DataProperties() : properties);
+    }
+
+    public void enterAutoUpdate() {
+        autoUpdateDepth.set(autoUpdateDepth.get() + 1);
+    }
+
+    public void exitAutoUpdate() {
+        int depth = autoUpdateDepth.get();
+        if (depth <= 1) autoUpdateDepth.remove();
+        else autoUpdateDepth.set(depth - 1);
+    }
+
+    public boolean isAutoUpdate(QueryRequest<?> request) {
+        Boolean override = request.getAutoUpdate();
+        return override != null ? override : autoUpdateDepth.get() > 0 || properties.isAutoUpdate();
+    }
+
+    public boolean requiresTransaction(QueryRequest<?> request) {
+        return isAutoUpdate(request) && factory.supportsAutoUpdate(request.getEntityClass());
+    }
+
+    public <E> List<E> enhance(String source, QueryRequest<E> request, List<E> data) {
+        EntityProxyFactory.CacheContext cache = new EntityProxyFactory.CacheContext(
+                request.getCacheMode(), request.getCacheTtl());
+        return factory.enhance(source, data, isAutoUpdate(request), cache);
     }
 
     /**
@@ -28,39 +58,41 @@ public class EntityProxyService implements TransactionListener {
      * @return
      */
    public   Object getLazyProxy(Object data){
-       return lazyFactory.getProxy(data);
+       return factory.getLazyProxy(SessionUtil.nowSession(), data);
    }
 
 
    public <E> List<E> getLazyProxyList(List<E> data){
-       return lazyFactory.getProxyList(data);
+       return factory.getLazyProxyList(SessionUtil.nowSession(), data,
+               EntityProxyFactory.CacheContext.DISABLED);
    }
 
     public   Object getSyncProxy(Object data){
-        return syncFactory.getProxy(data);
+        return factory.getManagedProxy(SessionUtil.nowSession(), data);
     }
 
 
     public List<Object> getSyncProxyList(List<?> data){
-        return data.stream().map(this::getSyncProxy).collect(Collectors.toList());
+        return (List<Object>) (List<?>) factory.getManagedProxyList(SessionUtil.nowSession(), data,
+                EntityProxyFactory.CacheContext.DISABLED);
     }
 
     @Override
     public void startTransaction() {
-        syncFactory.startTransaction();
+        factory.startTransaction();
 
     }
 
     @Override
     public void commitTransaction() {
-        syncFactory.commitTransaction();
+        factory.commitTransaction();
     }
 
     @Override
     public void rollbackTransaction() {
-        syncFactory.rollbackTransaction();
+        factory.rollbackTransaction();
     }
 
-    @Override public void afterCompletion() { syncFactory.afterCompletion(); }
+    @Override public void afterCompletion() { factory.afterCompletion(); }
 }
 

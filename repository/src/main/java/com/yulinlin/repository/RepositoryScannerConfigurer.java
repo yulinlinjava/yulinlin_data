@@ -1,6 +1,6 @@
 package com.yulinlin.repository;
 
-import com.yulinlin.repository.anno.JoinRepository;
+import com.yulinlin.data.core.anno.JoinRepository;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
 import org.springframework.beans.factory.config.BeanDefinition;

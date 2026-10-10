@@ -17,7 +17,7 @@ public class SelectMethodParse implements MethodParse
 {
 
     public static List<String> keys = Arrays.asList("selectBy","findBy","searchBy","find");
-    private final ConcurrentMap<Method, JoinCacheOptions> cacheOptions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<CacheOptionsKey, JoinCacheOptions> cacheOptions = new ConcurrentHashMap<>();
 
     public void parseWhere(String name,Object[] args,IConditionWrapper conditionManager){
         for (String key : keys) {
@@ -39,14 +39,16 @@ public class SelectMethodParse implements MethodParse
 
     }
         @Override
-    public Object apply(String name, Object[] args,Method method,Object obj) {
+    public Object apply(String name, Object[] args, Method method, Object obj) {
+        Class<?> repositoryType = repositoryType(obj, method);
             Class returnType =  method.getReturnType();
         Class clazz = WhereParseUtil.forMethodReturnType(method,obj);
 
             BaseModelSelectWrapper wrapper =new BaseModelSelectWrapper(null,clazz);
 
             parseWhere(name,args,wrapper);
-            cacheOptions.computeIfAbsent(method, JoinCacheOptions::from).apply(wrapper);
+            cacheOptions.computeIfAbsent(new CacheOptionsKey(repositoryType, method),
+                    key -> JoinCacheOptions.from(key.repositoryType(), key.method())).apply(wrapper);
 
             if(List.class.isAssignableFrom(returnType)){
                 return wrapper.selectList();
@@ -72,7 +74,20 @@ public class SelectMethodParse implements MethodParse
     }
 
     @Override
-    public void validate(Method method) {
-        cacheOptions.computeIfAbsent(method, JoinCacheOptions::from);
+    public void validate(Class<?> repositoryType, Method method) {
+        cacheOptions.computeIfAbsent(new CacheOptionsKey(repositoryType, method),
+                key -> JoinCacheOptions.from(key.repositoryType(), key.method()));
+    }
+
+    private record CacheOptionsKey(Class<?> repositoryType, Method method) {
+    }
+
+    private static Class<?> repositoryType(Object proxy, Method method) {
+        if (proxy != null) {
+            for (Class<?> candidate : proxy.getClass().getInterfaces()) {
+                if (method.getDeclaringClass().isAssignableFrom(candidate)) return candidate;
+            }
+        }
+        return method.getDeclaringClass();
     }
 }

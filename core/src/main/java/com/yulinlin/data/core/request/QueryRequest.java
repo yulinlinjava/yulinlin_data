@@ -18,6 +18,9 @@ public class QueryRequest<E> extends BaseRequest<E> {
 
     private INode wrapper;
 
+    /** Null inherits the current @JoinSync/global policy; otherwise this request overrides it. */
+    private Boolean autoUpdate;
+
 
 
     private QueryRequest(Class entityClass, INode wrapper) {
@@ -37,8 +40,26 @@ public class QueryRequest<E> extends BaseRequest<E> {
         request.setCluster(getCluster());
         request.setCacheMode(getCacheMode());
         request.setCacheTtl(getCacheTtl());
+        request.setAutoUpdate(getAutoUpdate());
         request.addCacheNamespaces(getCacheNamespaces().toArray(String[]::new));
         return request;
+    }
+
+    public QueryRequest<E> autoUpdate() {
+        return autoUpdate(true);
+    }
+
+    public QueryRequest<E> autoUpdate(boolean enabled) {
+        this.autoUpdate = enabled;
+        return this;
+    }
+
+    public Boolean getAutoUpdate() {
+        return autoUpdate;
+    }
+
+    public void setAutoUpdate(Boolean autoUpdate) {
+        this.autoUpdate = autoUpdate;
     }
 
     public QueryRequest<E> cache() {

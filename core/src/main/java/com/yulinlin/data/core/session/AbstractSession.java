@@ -474,7 +474,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     private <E> List<E> enhanceQueryResults(QueryRequest<E> request, List<E> data) {
         // Never cache transaction-bound proxies, loaded relations, or caller-owned mutable entities.
         if (request.isCache()) data = ReflectionUtil.deepClone(data);
-        data = proxyService.getLazyProxyList(data);
+        data = proxyService.enhance(group(), request, data);
         filterManager.after(this.group(), request, data);
         return data;
     }

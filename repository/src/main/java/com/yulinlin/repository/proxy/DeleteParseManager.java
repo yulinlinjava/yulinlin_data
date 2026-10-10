@@ -24,7 +24,7 @@ public class DeleteParseManager implements MethodParse{
     }
 
     @Override
-    public Object apply(String name, Object[] args,Method method,Object obj) {
+    public Object apply(String name, Object[] args, Method method, Object obj) {
 
         Class clazz = WhereParseUtil.forMethodReturnType(method,obj);
 

@@ -1,21 +1,20 @@
 package com.yulinlin.data.core.anno;
 
+import java.lang.annotation.Inherited;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 
-import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.TYPE;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 /**
- * 对象懒同步注解
- * 如果对象头加注解，该实例一定被代理
- * 如果字段加注解，字段值被代理
+ * Enables automatic entity updates for every query executed in the annotated method or type.
+ * A transaction must still be opened with {@code @Transactional}, {@code @JoinTransaction},
+ * or the programmatic RouteSession transaction API.
  */
 @Retention(RUNTIME)
-@Target(value={FIELD,TYPE})
+@Target({METHOD, TYPE})
+@Inherited
 public @interface JoinSync {
-
-
-
 }

@@ -30,7 +30,7 @@ public class UpdateMethodParse implements MethodParse
 
 
     @Override
-    public Object apply(String name, Object[] args,Method method,Object obj) {
+    public Object apply(String name, Object[] args, Method method, Object obj) {
         Object arg = args[0];
         BaseModelUpdateWrapper wrapper;
         int total = 0;

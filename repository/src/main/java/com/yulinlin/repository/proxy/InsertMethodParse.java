@@ -17,7 +17,7 @@ public class InsertMethodParse implements MethodParse
     public static List<String> keys = Arrays.asList("insert");
 
     @Override
-    public Object apply(String name, Object[] args,Method method,Object obj) {
+    public Object apply(String name, Object[] args, Method method, Object obj) {
         int total = 0;
         for (Object arg : args) {
             if(arg instanceof Collection){

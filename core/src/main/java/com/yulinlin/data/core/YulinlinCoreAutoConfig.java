@@ -1,6 +1,7 @@
 package com.yulinlin.data.core;
 
 import com.yulinlin.data.core.aop.JoinSessionAop;
+import com.yulinlin.data.core.aop.JoinSyncAop;
 import com.yulinlin.data.core.aop.JoinTransactionAop;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCaches;
@@ -19,6 +20,7 @@ import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.log.LogPrint;
 import com.yulinlin.data.core.proxy.EntityProxyService;
 import com.yulinlin.data.core.session.EntitySession;
+import com.yulinlin.data.core.session.DataProperties;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionListener;
@@ -43,7 +45,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 
 @AutoConfiguration(after = {JacksonAutoConfiguration.class, RestClientAutoConfiguration.class})
-@EnableConfigurationProperties({HttpRequestProperties.class, LoadBalanceProperties.class})
+@EnableConfigurationProperties({HttpRequestProperties.class, LoadBalanceProperties.class, DataProperties.class})
 public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
@@ -111,9 +113,15 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public EntityProxyService entityProxyService(){
-        EntityProxyService manager =EntityProxyService.newInstance();
+    public EntityProxyService entityProxyService(DataProperties properties){
+        EntityProxyService manager =EntityProxyService.newInstance(properties);
         return manager;
+    }
+
+    @ConditionalOnMissingBean
+    @Bean
+    public JoinSyncAop joinSyncAop(EntityProxyService proxyService) {
+        return new JoinSyncAop(proxyService);
     }
 
     @ConditionalOnMissingBean

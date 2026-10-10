@@ -1,7 +1,6 @@
 package com.yulinlin.repository.proxy;
 
 import com.yulinlin.data.core.session.RequestType;
-import com.yulinlin.repository.anno.JoinCache;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -30,13 +29,14 @@ public class MethodParseManager {
         methodParseList.add(parse);
     }
 
-    public Object apply(String name, Object[] args, Method method,Object obj){
-        return resolve(name).apply(name,args,method,obj);
+    public Object apply(String name, Object[] args, Method method, Object obj){
+        return resolve(name).apply(name, args, method, obj);
     }
 
     public void validate(Class<?> repositoryType) {
+        JoinCacheOptions.validateRepository(repositoryType);
         for (Method method : repositoryType.getMethods()) {
-            if (method.getAnnotation(JoinCache.class) == null) continue;
+            if (!JoinCacheOptions.hasMethodAnnotation(repositoryType, method)) continue;
             if (!Modifier.isAbstract(method.getModifiers())) {
                 throw new IllegalArgumentException("@JoinCache only supports abstract Repository query methods: "
                         + method.toGenericString());
@@ -46,7 +46,7 @@ public class MethodParseManager {
                 throw new IllegalArgumentException("@JoinCache cannot be used on Repository write method: "
                         + method.toGenericString());
             }
-            parser.validate(method);
+            parser.validate(repositoryType, method);
         }
     }
 

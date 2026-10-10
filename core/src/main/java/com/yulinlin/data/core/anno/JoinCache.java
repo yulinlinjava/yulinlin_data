@@ -1,4 +1,4 @@
-package com.yulinlin.repository.anno;
+package com.yulinlin.data.core.anno;
 
 import com.yulinlin.data.core.cache.CacheMode;
 
@@ -9,10 +9,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.util.concurrent.TimeUnit;
 
-/** Enables the framework query cache for one Repository query method. */
+/** Configures query caching for a Repository interface or one Repository query method. */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)
-@Target(ElementType.METHOD)
+@Target({ElementType.TYPE, ElementType.METHOD})
 public @interface JoinCache {
 
     CacheMode mode() default CacheMode.READ_THROUGH;

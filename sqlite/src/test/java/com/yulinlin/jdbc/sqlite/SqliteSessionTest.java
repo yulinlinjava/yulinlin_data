@@ -21,7 +21,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 
@@ -49,7 +51,8 @@ class SqliteSessionTest {
         session.setLogManager(new LogManager());
         session.setFilterManager(new IFilterManager() { });
         var proxy = mock(EntityProxyService.class);
-        doAnswer(call -> call.getArgument(0)).when(proxy).getLazyProxyList(anyList());
+        doAnswer(call -> call.getArgument(2)).when(proxy)
+                .enhance(anyString(), any(QueryRequest.class), anyList());
         session.setProxyService(proxy);
         sessions.add(session);
         return session;

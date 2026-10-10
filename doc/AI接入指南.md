@@ -767,7 +767,7 @@ second.setStatus(2);
 int affected = ModelUpdateWrapper.newInstance("mysql", List.of(first, second)).execute();
 ```
 
-普通对象更新、懒同步更新和显式 `.field(name, null)` 都跳过 null；它们不能把数据库列清成 NULL。需要清空字段时使用参数化的[自定义写入](#自定义写入)。`@JoinField(update = false)` 字段不参与对象更新；version 字段按当前值加入条件并递增，仍应检查影响行数判断并发冲突。
+普通对象更新、自动更新代理和显式 `.field(name, null)` 都跳过 null；它们不能把数据库列清成 NULL。需要清空字段时使用参数化的[自定义写入](#自定义写入)。`@JoinField(update = false)` 字段不参与对象更新；version 字段按当前值加入条件并递增，仍应检查影响行数判断并发冲突。
 
 #### 删除用法
 
@@ -839,13 +839,57 @@ var users = query.selectList();
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
 
-对象构造条件示例：
+#### 查询条件对象
+
+直接把实体作为查询条件：
 
 ```java
 DemoUser filter = new DemoUser();
 filter.setStatus(1); // 因为字段有 JoinWhere，参与条件。
 var users = ModelSelectWrapper.newInstance("mysql", filter).selectList();
 ```
+
+实体类型和查询参数也可以分开。推荐 Controller 接收独立查询 DTO，再把它作为第三个参数传入：
+
+```java
+package demo.query;
+
+import com.yulinlin.data.core.anno.ConditionEnum;
+import com.yulinlin.data.core.anno.JoinWhere;
+import lombok.Data;
+
+import java.util.List;
+
+@Data
+public class UserQuery {
+    @JoinWhere(name = "id", condition = ConditionEnum.in)
+    private List<String> ids;
+
+    @JoinWhere(name = "username", condition = ConditionEnum.like)
+    private String keyword;
+
+    @JoinWhere(name = "status", condition = ConditionEnum.between)
+    private List<Integer> statusRange;
+}
+```
+
+```java
+UserQuery condition = new UserQuery();
+condition.setIds(List.of("user-1", "user-2"));
+condition.setKeyword("alice");
+condition.setStatusRange(List.of(1, 3));
+
+List<DemoUser> users = ModelSelectWrapper
+        .newInstance("mysql", DemoUser.class, condition)
+        .orderByDesc("crtTime")
+        .selectList();
+```
+
+这里 `DemoUser.class` 决定查询表、返回字段和结果类型，`condition` 只负责生成 WHERE。查询 DTO 不需要 `@JoinTable`，但必须提供可读取的 getter。`@JoinWhere.name` 写目标实体的 Java 属性名；省略时使用查询 DTO 自己的属性名。`condition` 可使用 `eq/ne/gt/gte/lt/lte/like/likeRight/match/in/between/isNull`。
+
+只有带 `@JoinWhere` 的属性才会参与查询。`null`、空字符串和空集合会被忽略；`between` 传两个元素的集合，`in` 传集合。`isNull` 条件需要一个非 null 的启用字段，例如 Boolean 值为 true 时生成目标列的 `IS NULL`，值为 null 时不生成该条件。生成对象条件后仍可继续调用 `.eq()`、`.orderByDesc()`、`.page()` 等链式方法追加条件和排序。
+
+`JoinWhere.and()` 默认为 `true`。所有 `and=true` 的字段进入同一个 AND 分组；`and=false` 的字段进入外层 OR 分组。混合 AND/OR 时应先确认期望的括号语义，复杂嵌套条件优先使用 Wrapper 的 `.where(...)`、`.and(...)`、`.or(...)`，不要只靠查询 DTO 猜测组合顺序。
 
 不是所有非 null 属性都自动成为 WHERE 条件。字符串条件优先使用 Java 属性名，使 JoinField 映射生效。没有默认的全表写入保护；UPDATE/DELETE 前业务必须验证主键或条件。
 
@@ -1182,7 +1226,7 @@ yulinlin:
 
 扫描使用类元数据，不会加载路径下所有普通类。普通包名递归扫描；路径段支持 Ant 风格通配符：`*`匹配一级包，`**`匹配任意层级，`?`匹配单个字符。YAML 中包含 `*`的路径必须加引号。配置缺失时使用应用根包，而配置存在时只扫描列出的路径。
 
-Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。
+Repository 默认 Bean 名是接口简单类名首字母小写。同名接口会明确报错，不会静默覆盖；使用 `@JoinRepository("localUserRepository")`指定唯一名称。重复或重叠扫描路径会自动去重。`JoinRepository`、`JoinCache` 和 `JoinSession` 均从 `com.yulinlin.data.core.anno` 导入；Repository 模块只提供扫描与代理实现。
 
 Repository 接口和方法都可以使用 `@JoinSession`切换数据源，方法注解优先于接口注解：
 
@@ -1206,20 +1250,21 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 Repository 必须从 Spring 容器注入后调用，不能自行创建代理。显式 Request group 仍高于注解；最终选中的 group 和 cluster 会进入查询缓存 Key，因此不同数据源不会共用查询缓存。
 
-只有查询方法显式标记 `@JoinCache`才使用查询缓存；接口上不能添加该注解，也没有自动开启全部 Repository 缓存的配置：
+`@JoinCache` 可以标记 Repository 接口，为其中全部抽象查询方法提供默认缓存配置；方法级注解优先，可覆盖接口配置或用 `CacheMode.NONE` 关闭单个查询。父接口上的类级和方法级配置均可继承：
 
 ```java
 @JoinRepository
+@JoinCache(ttl = 10, unit = TimeUnit.MINUTES)
 public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
-    // 没有注解：每次查询数据源
+    // 继承接口配置：READ_THROUGH，缓存 10 分钟
     DemoUser findByUsernameEq(String username);
 
-    // READ_THROUGH；使用 yulinlin.cache.ttl
-    @JoinCache
+    // 明确关闭该查询的缓存
+    @JoinCache(mode = CacheMode.NONE)
     List<DemoUser> findByStatusEq(Integer status);
 
-    // 每次强制查库，并用最新结果覆盖对应缓存
+    // 方法配置完整覆盖接口配置：强制查库，TTL 改为 30 秒
     @JoinCache(mode = CacheMode.REFRESH, ttl = 30, unit = TimeUnit.SECONDS)
     DemoUser findByIdEq(String id);
 
@@ -1229,11 +1274,13 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 }
 ```
 
-`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。写方法添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段直接失败；insert/update/delete 继续由框架在事务提交成功后自动失效相关查询缓存。
+方法级注解是完整替换而不是逐项合并：上例 `REFRESH` 方法不会继承接口的 10 分钟 TTL。`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。
+
+接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；insert/update/delete 继续在事务提交成功后按解析出的表自动失效查询缓存。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
 
 ### 使用边界与排障
 
-- 更新通常跳过 null；普通 copyProperties 或懒同步的 null 跳过不等于数据库清列。
+- 更新通常跳过 null；普通 copyProperties 或自动更新代理的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
 - 查询缓存保存查询结果；标准写操作在事务提交成功后自动失效相关表命名空间，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
@@ -1248,22 +1295,23 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 <!-- source: doc/03-关联查询与代理.md -->
 ## 关联查询与代理
 
-本文说明 JoinQuery、JoinLazy 和 JoinSync：如何组装用户角色菜单、批量加载列表关联，以及在事务提交时写回 setter 修改。
+本文说明 JoinQuery、JoinLazy 和事务托管自动更新：如何组装用户角色菜单、批量加载列表关联，以及在事务提交前写回 setter 修改。
 
-阅读导航：[行为速查](#行为速查) · [级联案例](#用户角色菜单级联) · [懒加载](#懒加载) · [批量预加载](#列表批量预加载) · [懒同步](#懒同步) · [会话与边界](#会话与代理边界)
+阅读导航：[行为速查](#行为速查) · [级联案例](#用户角色菜单级联) · [复杂条件](#复杂查询条件) · [懒加载](#懒加载) · [批量预加载](#列表批量预加载) · [自动更新](#自动更新) · [会话与边界](#会话与代理边界)
 
 接入和实体定义见 [第一专题](01-接入与数据源.md)与 [第二专题](02-CRUD与统计分析.md)。这里是应用侧追加查询和 CGLIB 代理，不是 SQL JOIN，也不是 JPA 的实体管理。
 
 ### 行为速查
 
-| 字段注解 | 加载 | 修改 |
+| 配置/注解 | 加载 | 修改 |
 | --- | --- | --- |
 | JoinQuery | 查询结果增强时立即查询关联 | 普通对象，不因此自动写库 |
 | JoinQuery + JoinLazy | 路由事务内首次访问 getter 时加载 | 仅延迟读取 |
-| JoinQuery + JoinSync | 立即加载，路由事务内增强关联对象 | 代理 setter 的非 null 修改在提交时写回 |
-| 三者组合 | getter 加载并创建关联同步代理 | 事务内 setter 修改延后写回 |
+| 查询 `.autoUpdate()` | 主对象与关联对象使用同一层代理 | setter 的非 null 修改在提交前写回 |
+| 方法/类 `@JoinSync` | 作用域内所有查询等同 `.autoUpdate()` | 必须同时存在路由事务 |
+| `yulinlin.data.auto-update=true` | 全局查询默认自动更新 | 可由单次 `.autoUpdate(false)` 覆盖 |
 
-ORM 查询得到的模型会经过 EntityProxyService，由 LazyProxyFactory 处理关联，符合条件的关联再由 SyncProxyFactory 增强。通常不用业务再次代理查询结果。自己 new 出来的 DTO 需要调用公开入口。
+ORM 查询得到的模型统一由 EntityProxyFactory 增强。一个实体最多只有一层代理；同一拦截器处理 JoinLazy getter 与持久化 setter，不再叠加 LazyProxy/SyncProxy。自己 new 出来的 DTO 仍需调用 RouteSession 的兼容代理入口。
 
 ### 用户角色菜单级联
 
@@ -1338,6 +1386,110 @@ RouterDetails details = SessionUtil.callable("mysql", () ->
 
 List/Set 的元素类型必须可推断，不使用原始 List、List<?> 或不明确泛型。无匹配时单对象为 null，集合为空；单对象匹配键应保证唯一，否则取第一条。
 
+#### 复杂查询条件
+
+`wheres` 用于根据当前父对象的多个属性构造关联查询。下面的对象会查询指定视频下、状态可见、创建时间较新且正文包含关键词的前 20 条评论：
+
+```java
+package demo.dto;
+
+import com.yulinlin.data.core.anno.ConditionEnum;
+import com.yulinlin.data.core.anno.JoinOrder;
+import com.yulinlin.data.core.anno.JoinQuery;
+import com.yulinlin.data.core.anno.JoinWhere;
+import demo.domain.CommentEntity;
+import lombok.Data;
+
+import java.util.List;
+
+@Data
+public class VideoCommentDetails {
+    private String videoId;
+    private List<Integer> visibleStatuses;
+    private String keyword;
+    private String createdAfter;
+    private String createdBefore;
+
+    @JoinQuery(
+        wheres = {
+            @JoinWhere(name = "videoId", value = "${videoId}"),
+            @JoinWhere(
+                name = "status",
+                value = "${visibleStatuses}",
+                condition = ConditionEnum.in
+            ),
+            @JoinWhere(
+                name = "content",
+                value = "${keyword}",
+                condition = ConditionEnum.like
+            ),
+            @JoinWhere(
+                name = "crtTime",
+                value = "${createdAfter}",
+                condition = ConditionEnum.gte
+            ),
+            @JoinWhere(
+                name = "crtTime",
+                value = "${createdBefore}",
+                condition = ConditionEnum.lte
+            )
+        },
+        order = @JoinOrder(name = "crtTime", asc = false),
+        size = 20
+    )
+    private List<CommentEntity> comments;
+}
+```
+
+创建条件对象并执行关联增强：
+
+```java
+VideoCommentDetails details = new VideoCommentDetails();
+details.setVideoId("video-1001");
+details.setVisibleStatuses(List.of(1, 2));
+details.setKeyword("Java");
+details.setCreatedAfter("2026-10-01 00:00:00");
+details.setCreatedBefore("2026-11-01 00:00:00");
+
+VideoCommentDetails result = SessionUtil.callable("mysql", () ->
+        SessionUtil.route().getLazyProxy(details));
+
+List<CommentEntity> comments = result.getComments();
+```
+
+该示例等价于以下逻辑条件：
+
+```sql
+video_id = ?
+AND status IN (?, ?)
+AND content LIKE ?
+AND crt_time >= ?
+AND crt_time <= ?
+ORDER BY crt_time DESC
+LIMIT 20
+```
+
+`name` 写目标实体的 Java 属性名，字段到数据库列名的转换仍由 `@JoinField` 和具体数据源解析器完成。`value = "${...}"` 从当前父对象取值；不带 `${}` 的值会作为固定字符串，例如 `@JoinWhere(name = "type", value = "PUBLIC")`。
+
+值为 `null`、空字符串或空集合的条件会被忽略；如果所有动态条件都没有值，框架返回空关联结果，不会退化成无条件全表查询。`ConditionEnum.in` 的值必须是集合或数组属性，其元素会展开并去重。
+
+当前 `wheres` 中的条件统一按 AND 使用，并且每个父对象单独构造查询。因此列表场景可能产生 N+1，不享受普通 `primary/value` 分支的批量 IN 分配。`JoinWhere.and()` 当前没有接入代理查询；`between` 也不应在 `wheres` 中使用，需要范围条件时分别写 `gte` 和 `lte` 两个父对象属性。
+
+关联计数使用 `model` 指定被统计的实体，字段使用 `Long`：
+
+```java
+@JoinQuery(
+    model = CommentEntity.class,
+    wheres = {
+        @JoinWhere(name = "videoId", value = "${videoId}"),
+        @JoinWhere(name = "status", value = "${visibleStatuses}", condition = ConditionEnum.in)
+    }
+)
+private Long visibleCommentCount;
+```
+
+这里的 `model` 会进入 `count()` 分支，不是用来替代 `List<CommentEntity>` 泛型声明的通用参数。
+
 ### 懒加载
 
 在上面的三个关联字段上各加 JoinLazy；其余类结构不变：
@@ -1405,53 +1557,53 @@ SessionUtil.route().transaction(() ->
 
 `@JoinQuery(value = "${ids}", batchSize = 256)` 可调每批 IN 键上限。关联集合不保证输入 ID 顺序；复杂 wheres/model 分支仍可能 N+1，不把全部关联规则都描述成自动 IN。
 
-### 懒同步
+### 自动更新
 
-懒同步捕获事务内的 setter 修改，在提交阶段更新数据库，不是后台线程写入。关联字段增加 JoinSync，例如：
-
-```java
-import com.yulinlin.data.core.anno.JoinSync;
-
-@JoinSync
-@JoinQuery(primary = "username", value = "${username}")
-private SysUserEntity user;
-```
-
-方法体片段使用上文 DTO 和有 nickname 持久化属性的业务实体：
-
-```java
-SessionUtil.route().transaction(() ->
-        SessionUtil.callable("mysql", () -> {
-            RouterDetails details = SessionUtil.route()
-                    .getLazyProxy(new RouterDetails(username, loginType));
-            var user = details.getUser();
-            if (user == null) throw new IllegalStateException("user not found");
-            user.setNickname(newNickname);
-            return null;
-        }));
-```
-
-正常提交阶段写回，异常回滚丢弃待同步记录；不会还原 Java 对象。与 JoinLazy 组合时，必须先 getter 得到真正的关联同步代理。
-
-#### 显式增强普通实体
-
-普通根查询结果不等于已经具有同步代理。以下方法体片段使用第二专题的 DemoUser：
+自动更新捕获事务内的 setter 修改，在提交前统一更新数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。单次查询开启：
 
 ```java
 SessionUtil.route().transaction(() ->
         SessionUtil.callable("mysql", () -> {
             DemoUser user = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
-                    .eq("id", id).selectOne();
+                    .autoUpdate()
+                    .eq("id", id)
+                    .selectOne();
             if (user == null) throw new IllegalStateException("user not found");
-            DemoUser sync = SessionUtil.route().getSyncProxy(user);
-            sync.setStatus(1);
+            user.setStatus(1);
             return null;
         }));
 ```
 
-调用前校验 id。模型有 createLazyProxy/createSyncProxy/commitUpdate 快捷方法；createSyncProxy 在无路由事务时会开始一个，commitUpdate 结束一层路由事务，不只是提交当前对象。业务中优先用成对回调，避免提前结束外层事务。
+没有路由事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。正常提交写回，异常回滚丢弃待更新记录；回滚不会还原 Java 对象的内存值。
 
-类上的 JoinSync 不意味着任意根查询都自动增强；自动关联路径检查字段注解。公开入口是 RouteSession/模型方法，不直接 new 内部 SyncProxyFactory。
+全局开启：
+
+```yaml
+yulinlin:
+  data:
+    auto-update: true
+```
+
+全局开启后，可更新实体的查询都必须处于事务中。单次查询可用 `.autoUpdate(false)` 明确返回普通对象。
+
+方法或类级入口：
+
+```java
+@Transactional
+@JoinSync
+public void rename(String id, String name) {
+    DemoUser user = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+            .eq("id", id)
+            .selectOne();
+    user.setName(name);
+}
+```
+
+`@JoinSync` 只开启当前调用作用域的自动更新，不创建事务；需配合 `@Transactional`、`@JoinTransaction` 或 `RouteSession.transaction(...)`。它不再允许标在字段上。
+
+主对象的关联查询继承相同策略。懒字段首次 getter 得到的实体或集合元素也是同一层代理，因此在原事务内调用关联实体 setter 同样会写回对应表。
+
+通常直接使用 `.autoUpdate()` 或 `@JoinSync`，不再手动调用 `getSyncProxy`；旧公开方法只用于已有代码迁移。
 
 ### 会话与代理边界
 
@@ -1481,7 +1633,7 @@ LocalUserEntity 与 localUserId 由业务提供。未指定时关联上下文保
 - 只捕获真正持久化属性的单参数 setter；普通方法、直接写字段、修改原对象不自动同步。
 - null 跳过：setX(null) 不清列，并取消此前该字段的待同步值。
 - 集合 add、Map.put、嵌套对象原地变化不自动跟踪，需要调用持久化属性 setter 或显式更新。
-- 未调用的 setter 不产生部分更新，未修改的 0/false/初始化值不会被全部覆盖到数据库；同值 setter 仍可能计为修改。
+- 未调用的 setter 不产生部分更新，未修改的 0/false/初始化值不会被全部覆盖到数据库；设回原值不会产生更新。
 - setter 捕获对象引用，不是深快照；setter 后原地修改同一对象可能改变最终编码值。
 - 支持的 Integer/int、Long/long 版本字段按原始版本条件递增；写入数不匹配视为乐观锁失败，不承诺全部 Wrapper 都具备相同版本机制。
 - 代理绑定原始线程与路由事务，结束后不能继续 setter 修改。缓存保存未增强数据，读取时复制并创建当前查询代理，不能复用旧事务代理。
@@ -2673,7 +2825,7 @@ int affected = write.invalidate("sys_user").execute();
 
 ### 并发与对象边界
 
-同一个 Key 回源时使用分段锁和二次检查，降低缓存到期瞬间的重复查询。缓存保存查询增强前的数据；返回给业务前会复制模型并创建当前调用需要的懒加载/懒同步代理，旧事务代理不会被保存复用。
+同一个 Key 回源时使用分段锁和二次检查，降低缓存到期瞬间的重复查询。缓存保存查询增强前的数据；返回给业务前会复制模型并创建当前调用需要的统一实体代理，旧事务代理不会被保存复用。
 
 Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化要求。连接、流、Statement、ResultSet 等资源对象不能作为缓存查询结果。
 

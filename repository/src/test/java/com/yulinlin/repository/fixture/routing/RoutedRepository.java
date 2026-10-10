@@ -3,7 +3,7 @@ package com.yulinlin.repository.fixture.routing;
 import com.yulinlin.data.core.anno.JoinCluster;
 import com.yulinlin.data.core.anno.JoinSession;
 import com.yulinlin.data.core.session.SessionUtil;
-import com.yulinlin.repository.anno.JoinRepository;
+import com.yulinlin.data.core.anno.JoinRepository;
 import com.yulinlin.repository.dao.BaseRepository;
 
 @JoinRepository

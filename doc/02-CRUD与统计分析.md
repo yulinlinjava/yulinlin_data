@@ -2,7 +2,7 @@
 
 本文从一个用户实体完成 CRUD，再扩展条件查询、SQL JOIN、自定义 SQL、统计模型和事务。数据库接入与 group 注册先看 [第一专题](01-接入与数据源.md)。
 
-阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
+阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [延迟写队列](#延迟写队列) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
 
 ## 最小实体和配套表
 
@@ -572,13 +572,45 @@ yulinlin:
     execute-batch-size: 256
 ```
 
-这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接，把整批数据均匀分成最多 4 个大组，一组一个任务/连接；同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。128 是 ExecuteRequest 的并发启用最小请求条数，不是 JDBC 提交大小。
+这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接；调用 `.batch()` 时，把整批数据均匀分成最多 4 个大组，一组一个任务/连接。同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。
 
 只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
 
 executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
 
 多个连接有各自的本地事务，中途提交失败无法撤销已成功提交的连接；跨连接未提交数据也不保证可读。严格单库原子性和事务内读己之写使用 parallel-connections: 1。
+
+## 延迟写队列
+
+适合点赞、浏览统计等允许最终一致、希望把短时间内的小批写入合并执行的业务。插入、更新和删除使用同一个入口：
+
+```java
+ModelInsertWrapper.newInstance("mysql", users).queue().execute();
+ModelUpdateWrapper.newInstance("mysql", user).queue().execute();
+ModelDeleteWrapper.newInstance("mysql", User.class)
+        .eq(User::getId, id)
+        .queue()
+        .execute();
+```
+
+`execute()` 在节点成功进入内存队列后立即返回 `0`，不代表数据库影响了零行，也不返回自增主键。Wrapper 创建时已经把对象当时的字段值生成到 `INode`；入队后重新给实体字段赋值不会改变这次写入，Node 中原本保存的 List、Map、Date 等可变值引用则不要再原地修改。普通请求不调用 `.queue()`，仍按原方式立即执行。
+
+```yaml
+yulinlin:
+  data:
+    queue:
+      flush-interval: 1m
+      flush-size: 10000
+      capacity: 100000
+      concurrency: 4
+      retry-count: 3
+```
+
+`capacity` 按待执行 Node 数量计算，不按 Wrapper 调用次数计算；队列已满会抛异常，不会静默丢弃。每次刷新会在整个队列快照内，按实际 `EntitySession` 实例、请求类型和 `fromClass` 统一分组。某个分组累计到 `flush-size` 时会立即异步刷新当前整个队列快照，不必等待 `flush-interval`；该阈值不拆分请求，也不改变事务边界。
+
+不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才执行查询缓存失效。
+
+这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
 
 ## 事务使用
 

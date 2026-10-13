@@ -11,6 +11,7 @@
 - 通过 `JoinQuery`/`JoinLazy` 表达关联查询，主键关联可批量预加载，减少列表场景的 N+1。
 - 通过显式 `@JoinSync` 或 `.autoUpdate()` 在事务内按 setter 跟踪部分更新，不要求所有查询都进入持久化上下文。
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
+- 最终一致的高频小写入可显式使用 `.queue()`，由进程内定时队列合并 `INode` 后复用现有 Session 和 JDBC batch。
 - 查询缓存是可选模块：可选 Caffeine 或 Ehcache，Key 包含数据源与查询元数据，标准写入提交后按表 namespace 失效。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描；只有 `autoSchema=true` 的完整实体才可创建缺失表、普通列和声明索引。
 

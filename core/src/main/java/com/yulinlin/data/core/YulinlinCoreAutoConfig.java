@@ -19,6 +19,7 @@ import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.log.LogPrint;
 import com.yulinlin.data.core.proxy.EntityProxyService;
+import com.yulinlin.data.core.queue.WriteQueueManager;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.DataProperties;
 import com.yulinlin.data.core.session.RouteSession;
@@ -131,6 +132,12 @@ public class YulinlinCoreAutoConfig {
         return manager;
     }
 
+    @ConditionalOnMissingBean
+    @Bean(destroyMethod = "close")
+    public WriteQueueManager writeQueueManager(DataProperties properties) {
+        return new WriteQueueManager(properties.getQueue());
+    }
+
 
 
 
@@ -147,6 +154,7 @@ public class YulinlinCoreAutoConfig {
                                      EntityProxyService proxyService,
                                      LoadBalance loadbalance,IFilterManager filterManager,
                                      TransactionListenerManager listenerManager,
+                                     WriteQueueManager writeQueueManager,
                                      ObjectProvider<QueryCache> queryCaches){
         QueryCache queryCache = QueryCaches.single(queryCaches.orderedStream().toList());
         RouteSession build = RouteSession.builder()
@@ -162,6 +170,7 @@ public class YulinlinCoreAutoConfig {
         build.setLoadBalance(loadbalance);
         build.setWrapperFactory(wrapperFactory());
         build.setQueryCache(queryCache);
+        build.setWriteQueueManager(writeQueueManager);
         build.registerSession(list);
         return build;
     }

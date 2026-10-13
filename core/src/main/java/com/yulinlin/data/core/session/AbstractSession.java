@@ -292,14 +292,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                     : List.of(parseNodes(requestType, request.getRoot(), request.getWrappers(), request.getFromClass()));
             int rows = lists.stream().mapToInt(List::size).sum();
             if (rows > 0) beforeExecute(request);
-            if (rows < Math.max(1, request.getBatchSize())) {
-                parallel = false;
-                if (lists.size() > 1) {
-                    List<ParseResult> combined = new ArrayList<>(rows);
-                    lists.forEach(combined::addAll);
-                    lists = List.of(combined);
-                }
-            }
             int total = 0;
             Throwable failure = null;
             List<CompletableFuture<Integer>> futures = new ArrayList<>();

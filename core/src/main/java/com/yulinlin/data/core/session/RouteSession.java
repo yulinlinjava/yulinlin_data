@@ -7,6 +7,7 @@ import com.yulinlin.data.core.cache.CacheNamespaceResolver;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
+import com.yulinlin.data.core.queue.WriteQueueManager;
 import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
@@ -43,6 +44,8 @@ public class RouteSession  extends  RegisterSession{
 
     private  TransactionListenerManager transactionListenerManager;
 
+    private WriteQueueManager writeQueueManager;
+
     private final ThreadLocal<PendingInvalidation> pendingInvalidation =
             ThreadLocal.withInitial(PendingInvalidation::new);
     private final ThreadLocal<Integer> annotatedSessionDepth = ThreadLocal.withInitial(() -> 0);
@@ -59,20 +62,24 @@ public class RouteSession  extends  RegisterSession{
         boolean empty() { return !all && namespaces.isEmpty(); }
     }
 
+    private record PreparedWrite(EntitySession session, ExecuteRequest<?> request, int routeDepth) {
+    }
 
-    private EntitySession before(BaseRequest request){
-
-
-
+    private void applyEntityRoute(BaseRequest request) {
         Class<?> fromClass = request.getFromClass();
-        if(fromClass != null && fromClass != Object.class && StringUtil.isNull(request.getSession())
-                && !hasAnnotatedSession()){
-            JoinSession joinDataSource = AnnotationUtil.findAnnotation(fromClass,JoinSession.class);
-            if(joinDataSource != null){
+        if (fromClass != null && fromClass != Object.class && StringUtil.isNull(request.getSession())
+                && !hasAnnotatedSession()) {
+            JoinSession joinDataSource = AnnotationUtil.findAnnotation(fromClass, JoinSession.class);
+            if (joinDataSource != null) {
                 request.setSession(joinDataSource.value());
                 request.setCluster(joinDataSource.cluster());
             }
         }
+    }
+
+
+    private EntitySession before(BaseRequest request){
+        applyEntityRoute(request);
 
         EntitySession session = session(request);
         pushSession(session);
@@ -90,6 +97,34 @@ public class RouteSession  extends  RegisterSession{
             throw error;
         }
     }
+
+    private PreparedWrite beforeWrite(ExecuteRequest<?> original) {
+        applyEntityRoute(original);
+        EntitySession session = session(original);
+        pushSession(session);
+        int routeDepth = 1;
+        try {
+            String name = session.group();
+            BaseRequest<?> filtered = filterManager.before(name, original);
+            if (!(filtered instanceof ExecuteRequest<?> request)) {
+                throw new IllegalStateException("A write filter must return ExecuteRequest");
+            }
+            request.inheritExecutionOptions(original);
+            if (!name.equals(request.getSession())) {
+                session = session(request);
+                pushSession(session);
+                routeDepth++;
+            }
+            return new PreparedWrite(session, request, routeDepth);
+        } catch (RuntimeException | Error error) {
+            while (routeDepth-- > 0) popSession();
+            throw error;
+        }
+    }
+
+    private void after(PreparedWrite prepared) {
+        for (int i = 0; i < prepared.routeDepth(); i++) popSession();
+    }
     private void after(BaseRequest request){
 
         if(request.isSessionChange()){
@@ -100,32 +135,76 @@ public class RouteSession  extends  RegisterSession{
 
 
     @SneakyThrows
-    private  <E> E execute(BaseRequest request,RequestType requestType ){
-
-        EntitySession session = before(request);
-
-        try {
-                ExecuteRequest req = (ExecuteRequest)request;
-                PendingInvalidation invalidation = resolveInvalidation(session, req);
-                Object call = null;
-                if(requestType == RequestType.insert){
-                    call =  session.insert(req);
-                }else if(requestType == RequestType.delete){
-                    call =  session.delete(req);
-                }else if(requestType== RequestType.update){
-                    call =  session.update(req);
-                }
-
-                if(call != null){
-                    scheduleInvalidation(invalidation);
-                    filterManager.after(session.group(),request,call);
-                }
-                return (E)call;
-
-        }finally {
-            after(request);
+    private  <E> E execute(BaseRequest request){
+        ExecuteRequest<?> original = (ExecuteRequest<?>) request;
+        if (original.isQueued() && (isOpenTransaction()
+                || TransactionSynchronizationManager.isActualTransactionActive())) {
+            throw new NoticeException("Delayed write queue cannot be used inside an active transaction. 请在事务外调用 queue()。");
         }
 
+        PreparedWrite prepared = beforeWrite(original);
+
+        try {
+            ExecuteRequest<?> req = prepared.request();
+            if (req.isQueued()) {
+                if (prepared.session().isOpenTransaction()) {
+                    throw new NoticeException("Delayed write queue cannot use a session with an active transaction. 请在事务外调用 queue()。");
+                }
+                if (writeQueueManager == null) {
+                    throw new IllegalStateException("Write queue is not configured");
+                }
+                return (E) Integer.valueOf(writeQueueManager.submit(prepared.session(), req));
+            }
+            return (E) executeNow(prepared.session(), req, false);
+
+        }finally {
+            after(prepared);
+        }
+
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Integer executeNow(EntitySession session, ExecuteRequest<?> request, boolean delayed) {
+        PendingInvalidation invalidation = resolveInvalidation(session, request);
+        Integer affected = switch (request.getRequestType()) {
+            case insert -> session.insert((ExecuteRequest) request);
+            case delete -> session.delete((ExecuteRequest) request);
+            case update -> session.update((ExecuteRequest) request);
+            default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
+        };
+
+        if (affected != null) {
+            if (delayed) {
+                try {
+                    scheduleInvalidation(invalidation);
+                } catch (RuntimeException error) {
+                    log.error("Delayed write succeeded but query-cache invalidation failed", error);
+                }
+                try {
+                    filterManager.after(session.group(), request, affected);
+                } catch (RuntimeException error) {
+                    log.error("Delayed write succeeded but after-filter failed", error);
+                }
+            } else {
+                scheduleInvalidation(invalidation);
+                filterManager.after(session.group(), request, affected);
+            }
+        }
+        return affected;
+    }
+
+    private int executeQueued(EntitySession session, ExecuteRequest<?> request) {
+        pushSession(session);
+        try {
+            return executeNow(session, request, true);
+        } finally {
+            popSession();
+        }
+    }
+
+    public void setWriteQueueManager(WriteQueueManager writeQueueManager) {
+        this.writeQueueManager = writeQueueManager;
+        if (writeQueueManager != null) writeQueueManager.setExecutor(this::executeQueued);
     }
 
     private PendingInvalidation resolveInvalidation(EntitySession session, ExecuteRequest<?> request) {
@@ -221,7 +300,7 @@ public class RouteSession  extends  RegisterSession{
     }
 
     public <E> Integer insert(ExecuteRequest<E> request) {
-        return execute(request,RequestType.insert);
+        return execute(request);
 
 
 
@@ -229,14 +308,14 @@ public class RouteSession  extends  RegisterSession{
 
 
     public <E> Integer update(ExecuteRequest<E> request) {
-        return execute(request,RequestType.update);
+        return execute(request);
 
 
     }
 
 
     public <E> Integer delete(ExecuteRequest<E> request) {
-        return execute(request,RequestType.delete);
+        return execute(request);
 
 
     }

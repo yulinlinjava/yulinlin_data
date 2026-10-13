@@ -43,6 +43,12 @@ public class BaseModelDeleteWrapper<
         return batch(true);
     }
 
+    /** Enqueues this write and returns {@code 0} immediately after successful submission. */
+    public R queue(){
+        if (request != null) request.queue();
+        return (R)this;
+    }
+
     private void init(String session, Object list){
         if(list instanceof Collection){
             for (Object o : (Collection)list) {

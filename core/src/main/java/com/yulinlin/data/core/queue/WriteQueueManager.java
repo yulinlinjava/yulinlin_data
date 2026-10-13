@@ -8,11 +8,9 @@ import com.yulinlin.data.lang.util.ThreadUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
@@ -101,7 +99,6 @@ public final class WriteQueueManager implements AutoCloseable {
     private record LaneResult(int affected, Throwable failure) {
     }
 
-    private final int capacity;
     private final int retryCount;
     private final int flushSize;
     private final int concurrency;
@@ -113,12 +110,12 @@ public final class WriteQueueManager implements AutoCloseable {
     private final AtomicBoolean immediateFlushRunning = new AtomicBoolean();
     private final AtomicBoolean immediateFlushRequested = new AtomicBoolean();
     private final Object queueLock = new Object();
-    private Map<GroupKey, Integer> activeGroupSizes = new HashMap<>();
+    /** Number of nodes in {@link #active}; guarded by {@link #queueLock}. */
+    private int activeSize;
     private final ScheduledFuture<?> schedule;
 
     public WriteQueueManager(DataProperties.QueueProperties properties) {
         Objects.requireNonNull(properties, "properties");
-        capacity = properties.getCapacity();
         retryCount = properties.getRetryCount();
         flushSize = properties.getFlushSize();
         concurrency = properties.getConcurrency();
@@ -141,19 +138,19 @@ public final class WriteQueueManager implements AutoCloseable {
         if (closed.get()) throw new IllegalStateException("Write queue is closed");
         if (executor.get() == null) throw new IllegalStateException("Write queue executor is not configured");
 
-        int size = request.getWrappers().size();
+        ExecuteRequest<?> snapshot = request.queuedSnapshot();
+        int size = snapshot.getWrappers().size();
         if (size == 0) return 0;
-        reserve(size);
+        pending.addAndGet(size);
         boolean accepted = false;
         boolean flushNow = false;
         try {
-            ExecuteRequest<?> snapshot = request.queuedSnapshot();
             synchronized (queueLock) {
                 if (closed.get()) throw new IllegalStateException("Write queue is closed");
                 QueuedWrite write = new QueuedWrite(session, snapshot, 0, true);
                 active.get().add(write);
-                int groupSize = activeGroupSizes.merge(groupKey(write), write.size(), Integer::sum);
-                flushNow = groupSize >= flushSize;
+                activeSize += write.size();
+                flushNow = activeSize >= flushSize;
                 accepted = true;
             }
         } finally {
@@ -172,7 +169,7 @@ public final class WriteQueueManager implements AutoCloseable {
         ConcurrentLinkedQueue<QueuedWrite> snapshot;
         synchronized (queueLock) {
             snapshot = active.getAndSet(new ConcurrentLinkedQueue<>());
-            activeGroupSizes = new HashMap<>();
+            activeSize = 0;
         }
         if (snapshot.isEmpty()) return 0;
 
@@ -325,23 +322,21 @@ public final class WriteQueueManager implements AutoCloseable {
         synchronized (queueLock) {
             ConcurrentLinkedQueue<QueuedWrite> current = active.get();
             ConcurrentLinkedQueue<QueuedWrite> reordered = new ConcurrentLinkedQueue<>();
-            waiting.forEach(reordered::add);
+            int restoredSize = 0;
+            for (QueuedWrite write : waiting) {
+                reordered.add(write);
+                restoredSize += write.size();
+            }
             QueuedWrite write;
             while ((write = current.poll()) != null) reordered.add(write);
             active.set(reordered);
-            activeGroupSizes = groupSizes(reordered);
+            activeSize += restoredSize;
         }
     }
 
     private static GroupKey groupKey(QueuedWrite write) {
         ExecuteRequest<?> request = write.request();
         return new GroupKey(write.session(), request.getRequestType(), request.getFromClass());
-    }
-
-    private static Map<GroupKey, Integer> groupSizes(Iterable<QueuedWrite> writes) {
-        Map<GroupKey, Integer> sizes = new HashMap<>();
-        for (QueuedWrite write : writes) sizes.merge(groupKey(write), write.size(), Integer::sum);
-        return sizes;
     }
 
     private void requestImmediateFlush() {
@@ -370,20 +365,6 @@ public final class WriteQueueManager implements AutoCloseable {
         } catch (RuntimeException error) {
             immediateFlushRunning.set(false);
             log.error("Unable to schedule immediate delayed-write flush; periodic flush remains active", error);
-        }
-    }
-
-    private void reserve(int size) {
-        if (size > capacity) {
-            throw new IllegalStateException("Write queue request contains " + size
-                    + " nodes, exceeding capacity " + capacity);
-        }
-        while (true) {
-            int current = pending.get();
-            if (current > capacity - size) {
-                throw new IllegalStateException("Write queue is full: " + current + "/" + capacity + " nodes");
-            }
-            if (pending.compareAndSet(current, current + size)) return;
         }
     }
 

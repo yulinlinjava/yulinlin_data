@@ -20,9 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class WriteQueueManagerTest {
+
+    @Test
+    void defaultFlushSizeIs1024Nodes() {
+        assertThat(new DataProperties.QueueProperties().getFlushSize()).isEqualTo(1024);
+    }
 
     @Test
     void submitReturnsZeroAndFlushExecutesTheQueuedNodes() {
@@ -32,7 +36,7 @@ class WriteQueueManagerTest {
         AtomicInteger executions = new AtomicInteger();
         AtomicReference<ExecuteRequest<?>> executed = new AtomicReference<>();
 
-        try (WriteQueueManager queue = queue(10, 0, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, (actualSession, request) -> {
             executions.incrementAndGet();
             assertThat(actualSession).isSameAs(session);
             executed.set(request);
@@ -72,7 +76,7 @@ class WriteQueueManagerTest {
         AtomicInteger executions = new AtomicInteger();
         List<ExecuteRequest<?>> executed = new ArrayList<>();
 
-        try (WriteQueueManager queue = queue(10, 0, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, (actualSession, request) -> {
             executions.incrementAndGet();
             executed.add(request);
             return request.getWrappers().size();
@@ -103,7 +107,7 @@ class WriteQueueManagerTest {
                 .queue();
         List<RequestType> operations = new ArrayList<>();
 
-        try (WriteQueueManager queue = queue(10, 0, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, (actualSession, request) -> {
             operations.add(request.getRequestType());
             return request.getWrappers().size();
         })) {
@@ -117,35 +121,6 @@ class WriteQueueManagerTest {
     }
 
     @Test
-    void capacityCountsNodesRatherThanRequests() {
-        EntitySession session = session();
-        ExecuteRequest<?> twoNodes = ExecuteRequest.ofInsert(User.class)
-                .addRequest(node())
-                .addRequest(node());
-        ExecuteRequest<?> anotherTwoNodes = ExecuteRequest.ofInsert(User.class)
-                .addRequest(node())
-                .addRequest(node());
-        ExecuteRequest<?> oneNode = ExecuteRequest.ofInsert(User.class)
-                .addRequest(node());
-
-        try (WriteQueueManager queue = queue(3, 0,
-                (actualSession, request) -> request.getWrappers().size())) {
-            assertThat(queue.submit(session, twoNodes)).isZero();
-            assertThat(queue.pending()).isEqualTo(2);
-
-            assertThatThrownBy(() -> queue.submit(session, anotherTwoNodes))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("2/3 nodes");
-            assertThat(queue.pending()).isEqualTo(2);
-
-            assertThat(queue.submit(session, oneNode)).isZero();
-            assertThat(queue.pending()).isEqualTo(3);
-            assertThat(queue.flush()).isEqualTo(3);
-            assertThat(queue.pending()).isZero();
-        }
-    }
-
-    @Test
     void failedBatchIsRetriedOnTheNextFlush() {
         EntitySession session = session();
         ExecuteRequest<?> first = ExecuteRequest.ofDelete(User.class)
@@ -154,7 +129,7 @@ class WriteQueueManagerTest {
                 .addRequest(node());
         AtomicInteger attempts = new AtomicInteger();
 
-        try (WriteQueueManager queue = queue(10, 1, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(1, (actualSession, request) -> {
             if (attempts.getAndIncrement() == 0) {
                 throw new IllegalStateException("temporary failure");
             }
@@ -186,7 +161,7 @@ class WriteQueueManagerTest {
         List<RequestType> operations = new ArrayList<>();
         AtomicInteger insertAttempts = new AtomicInteger();
 
-        try (WriteQueueManager queue = queue(10, 1, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(1, (actualSession, request) -> {
             operations.add(request.getRequestType());
             if (request.getRequestType() == RequestType.insert
                     && insertAttempts.getAndIncrement() == 0) {
@@ -220,7 +195,7 @@ class WriteQueueManagerTest {
         AtomicInteger secondSessionExecutions = new AtomicInteger();
         List<Class<?>> sources = new CopyOnWriteArrayList<>();
 
-        try (WriteQueueManager queue = queue(10, 0, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, (actualSession, request) -> {
             if (actualSession == firstSession) firstSessionExecutions.incrementAndGet();
             if (actualSession == secondSession) secondSessionExecutions.incrementAndGet();
             sources.add(request.getFromClass());
@@ -246,7 +221,7 @@ class WriteQueueManagerTest {
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maximum = new AtomicInteger();
 
-        try (WriteQueueManager queue = queue(10, 0, 4, 10_000, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, 4, 10_000, (actualSession, request) -> {
             int current = active.incrementAndGet();
             maximum.accumulateAndGet(current, Math::max);
             started.countDown();
@@ -271,7 +246,7 @@ class WriteQueueManagerTest {
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maximum = new AtomicInteger();
 
-        try (WriteQueueManager queue = queue(10, 0, 4, 10_000, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, 4, 10_000, (actualSession, request) -> {
             int current = active.incrementAndGet();
             maximum.accumulateAndGet(current, Math::max);
             try {
@@ -300,7 +275,7 @@ class WriteQueueManagerTest {
         AtomicInteger maximum = new AtomicInteger();
         AtomicInteger executions = new AtomicInteger();
 
-        try (WriteQueueManager queue = queue(10, 0, 2, 10_000, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, 2, 10_000, (actualSession, request) -> {
             executions.incrementAndGet();
             int current = active.incrementAndGet();
             maximum.accumulateAndGet(current, Math::max);
@@ -330,7 +305,7 @@ class WriteQueueManagerTest {
         AtomicInteger executions = new AtomicInteger();
         AtomicInteger nodes = new AtomicInteger();
 
-        try (WriteQueueManager queue = queue(20, 0, 4, 2, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, 4, 2, (actualSession, request) -> {
             executions.incrementAndGet();
             nodes.set(request.getWrappers().size());
             executed.countDown();
@@ -349,21 +324,23 @@ class WriteQueueManagerTest {
     }
 
     @Test
-    void flushSizeIsCountedPerGroup() throws Exception {
+    void flushSizeCountsAllActiveNodesAcrossDifferentGroups() throws Exception {
         EntitySession session = session();
         AtomicInteger executions = new AtomicInteger();
+        CountDownLatch executed = new CountDownLatch(2);
 
-        try (WriteQueueManager queue = queue(10, 0, 4, 2, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, 4, 2, (actualSession, request) -> {
             executions.incrementAndGet();
+            executed.countDown();
             return request.getWrappers().size();
         })) {
             queue.submit(session, ExecuteRequest.ofInsert(User.class).addRequest(node()));
             queue.submit(session, ExecuteRequest.ofUpdate(User.class).addRequest(node()));
 
-            Thread.sleep(100);
-            assertThat(executions).hasValue(0);
-            assertThat(queue.flush()).isEqualTo(2);
+            assertThat(executed.await(2, TimeUnit.SECONDS)).isTrue();
+            queue.flush(); // Wait for the threshold-triggered flush if it is still completing.
             assertThat(executions).hasValue(2);
+            assertThat(queue.pending()).isZero();
         }
     }
 
@@ -375,7 +352,7 @@ class WriteQueueManagerTest {
         CountDownLatch releaseFirst = new CountDownLatch(1);
         CountDownLatch secondExecuted = new CountDownLatch(1);
 
-        try (WriteQueueManager queue = queue(10, 0, 1, 1, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(0, 1, 1, (actualSession, request) -> {
             if (actualSession == first) {
                 firstStarted.countDown();
                 await(releaseFirst);
@@ -402,7 +379,7 @@ class WriteQueueManagerTest {
         AtomicInteger attempts = new AtomicInteger();
         CountDownLatch firstAttempt = new CountDownLatch(1);
 
-        try (WriteQueueManager queue = queue(10, 1, 1, 1, (actualSession, request) -> {
+        try (WriteQueueManager queue = queue(1, 1, 1, (actualSession, request) -> {
             int attempt = attempts.incrementAndGet();
             if (attempt == 1) {
                 firstAttempt.countDown();
@@ -422,15 +399,14 @@ class WriteQueueManagerTest {
         }
     }
 
-    private static WriteQueueManager queue(int capacity, int retryCount, WriteQueueManager.Executor executor) {
-        return queue(capacity, retryCount, 4, 10_000, executor);
+    private static WriteQueueManager queue(int retryCount, WriteQueueManager.Executor executor) {
+        return queue(retryCount, 4, 10_000, executor);
     }
 
-    private static WriteQueueManager queue(int capacity, int retryCount, int concurrency, int flushSize,
+    private static WriteQueueManager queue(int retryCount, int concurrency, int flushSize,
                                            WriteQueueManager.Executor executor) {
         DataProperties.QueueProperties properties = new DataProperties.QueueProperties();
         properties.setFlushInterval(Duration.ofDays(1));
-        properties.setCapacity(capacity);
         properties.setRetryCount(retryCount);
         properties.setConcurrency(concurrency);
         properties.setFlushSize(flushSize);

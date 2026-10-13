@@ -32,14 +32,11 @@ public class DataProperties {
 
         private Duration flushInterval = Duration.ofMinutes(1);
 
-        /** Maximum number of pending nodes, rather than the number of wrapper requests. */
-        private int capacity = 100_000;
-
         /** Maximum number of data-source sessions flushed concurrently. */
         private int concurrency = 4;
 
-        /** A group reaching this many nodes triggers an early flush; it does not split the transaction. */
-        private int flushSize = 10_000;
+        /** Total nodes in the active queue that trigger an immediate asynchronous flush. */
+        private int flushSize = 1_024;
 
         /** Number of later flush attempts after the first database execution fails. */
         private int retryCount = 3;
@@ -54,17 +51,6 @@ public class DataProperties {
                 throw new IllegalArgumentException("yulinlin.data.queue.flush-interval must be at least 1ms");
             }
             this.flushInterval = flushInterval;
-        }
-
-        public int getCapacity() {
-            return capacity;
-        }
-
-        public void setCapacity(int capacity) {
-            if (capacity <= 0) {
-                throw new IllegalArgumentException("yulinlin.data.queue.capacity must be positive");
-            }
-            this.capacity = capacity;
         }
 
         public int getRetryCount() {

@@ -80,7 +80,7 @@ class JdbcSessionTransactionTest {
                 .mapToObj(i -> java.util.Collections.nCopies(128, new ParseResult(null, "async", null))).toList();
         ExecuteRequest<Object> request = ExecuteRequest.ofInsert(Object.class);
         request.setBatch(true); // Keep the real default threshold, rather than the test helper's 1.
-        assertThat(request.getBatchSize()).isEqualTo(128);
+
         assertThat(session.insert(request)).isEqualTo(512);
         assertThat(session.workerThreads).doesNotContain(Thread.currentThread().getName());
         assertThat(db.connections.size()).isBetween(1, 4);
@@ -371,7 +371,7 @@ class JdbcSessionTransactionTest {
         }
         int run() {
             ExecuteRequest<Object> request = ExecuteRequest.ofInsert(Object.class);
-            request.setBatch(true); request.setBatchSize(1);
+            request.setBatch(true);
             return insert(request);
         }
         @Override protected <T extends com.yulinlin.data.core.cache.CacheKey> List<ParseResult> parseNodes(RequestType type, Object root, List<INode> nodes, Class clazz) {

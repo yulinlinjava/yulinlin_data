@@ -220,7 +220,7 @@ class JdbcBatchExecutionTest {
         }
         int run(boolean parallel) {
             ExecuteRequest<Object> request = ExecuteRequest.ofInsert(Object.class);
-            request.setBatch(parallel); request.setBatchSize(1);
+            request.setBatch(parallel);
             return insert(request);
         }
         @Override protected <T extends com.yulinlin.data.core.cache.CacheKey> List<ParseResult> parseNodes(RequestType type, Object root, List<INode> nodes, Class clazz) { return rows; }

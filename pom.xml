@@ -27,6 +27,7 @@
         <module>generate</module>
         <module>postgresql</module>
         <module>security</module>
+        <module>monitor</module>
     </modules>
 
     <groupId>com.yulinlin</groupId>

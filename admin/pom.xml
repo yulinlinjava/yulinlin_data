@@ -13,6 +13,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>monitor</artifactId>
+            <version>3.0</version>
+        </dependency>
+        <dependency>
             <groupId>com.alibaba</groupId>
             <artifactId>druid-spring-boot-3-starter</artifactId>
             <version>${druid.version}</version>

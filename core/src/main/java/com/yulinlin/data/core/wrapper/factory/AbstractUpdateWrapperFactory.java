@@ -5,10 +5,8 @@ import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.UpdateTypeEnum;
 import com.yulinlin.data.core.exception.NoticeException;
-import com.yulinlin.data.core.model.BaseModel;
 import com.yulinlin.data.core.util.MetaUtil;
 import com.yulinlin.data.core.wrapper.IConditionWrapper;
-import com.yulinlin.data.core.wrapper.IInsertWrapper;
 import com.yulinlin.data.core.wrapper.IUpdateWrapper;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
@@ -43,12 +41,11 @@ public abstract class AbstractUpdateWrapperFactory implements AbstractWrapperFac
 
         for (Field f : fs){
             JoinField joinField =   AnnotationUtil.findAnnotation(f,JoinField.class);// f.getAnnotation(JoinField.class);
-
-            if(joinField == null){
-
-            }else if( !joinField.exist() || !joinField.update()){
+            if(joinField != null && !joinField.exist()){
                 continue;
             }
+
+            JoinMeta joinMeta = AnnotationUtil.findAnnotation(f,JoinMeta.class);
 
             String columnName =  f.getName();
 
@@ -62,12 +59,16 @@ public abstract class AbstractUpdateWrapperFactory implements AbstractWrapperFac
                 continue;
             }
 
-            JoinMeta joinMeta =
-                    AnnotationUtil.findAnnotation(f,JoinMeta.class);
-
-            if(joinMeta != null){
-                wrapper.fields().meta(MetaUtil.toMap(joinMeta));
+            // A primary key is a WHERE condition, never an update assignment. update=false only controls SET.
+            if(joinMeta != null && joinMeta.primaryKey()){
+                ((IConditionWrapper) wrapper.where()).eq(columnName,value);
+                continue;
             }
+
+            if(joinField != null && !joinField.update()) continue;
+
+            if(joinMeta != null) wrapper.fields().meta(MetaUtil.toMap(joinMeta));
+
             if(joinField == null){
                 wrapper.fields().field(columnName,value);
             }else  if(joinField.version()){
@@ -76,19 +77,13 @@ public abstract class AbstractUpdateWrapperFactory implements AbstractWrapperFac
             }
 
             else {
-
-                if(joinMeta != null && joinMeta.primaryKey()){
-                    ((IConditionWrapper) wrapper.where()).eq(columnName,value);
-                } else {
-                    UpdateTypeEnum updateTypeEnum = joinField.updateType();
-                    if(updateTypeEnum == UpdateTypeEnum.set){
-                        wrapper.fields().field(columnName,value);
-                    }else if(updateTypeEnum == UpdateTypeEnum.inc){
-                        wrapper.fields().inc(columnName,(Number) value);
-                    }else if(updateTypeEnum == UpdateTypeEnum.dec){
-                        wrapper.fields().dec(columnName,(Number) value);
-                    }
-
+                UpdateTypeEnum updateTypeEnum = joinField.updateType();
+                if(updateTypeEnum == UpdateTypeEnum.set){
+                    wrapper.fields().field(columnName,value);
+                }else if(updateTypeEnum == UpdateTypeEnum.inc){
+                    wrapper.fields().inc(columnName,(Number) value);
+                }else if(updateTypeEnum == UpdateTypeEnum.dec){
+                    wrapper.fields().dec(columnName,(Number) value);
                 }
 
             }

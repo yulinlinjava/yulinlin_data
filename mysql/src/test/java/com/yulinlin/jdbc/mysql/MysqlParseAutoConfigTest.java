@@ -16,7 +16,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import javax.sql.DataSource;
-import java.time.Duration;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -32,9 +31,6 @@ class MysqlParseAutoConfigTest {
         runner().withUserConfiguration(PrimaryDataSource.class)
                 .withPropertyValues(
                         "yulinlin.mysql.log=true",
-                        "yulinlin.mysql.log-params=true",
-                        "yulinlin.mysql.max-param-length=96",
-                        "yulinlin.mysql.slow-sql-threshold=750ms",
                         "yulinlin.mysql.map-underscore-to-camel-case=false",
                         "yulinlin.mysql.parallel-connections=2",
                         "yulinlin.mysql.execute-batch-size=64")
@@ -46,9 +42,6 @@ class MysqlParseAutoConfigTest {
             assertThat(session.getParseManager()).isExactlyInstanceOf(MysqlParseManager.class);
             assertThat(session.group()).isEqualTo("mysql");
             assertThat(properties.isLog()).isTrue();
-            assertThat(properties.isLogParams()).isTrue();
-            assertThat(properties.getMaxParamLength()).isEqualTo(96);
-            assertThat(properties.getSlowSqlThreshold()).isEqualTo(Duration.ofMillis(750));
             assertThat(properties.isMapUnderscoreToCamelCase()).isFalse();
             assertThat(session.getProperties()).isSameAs(properties);
             assertThat(session.getParallelConnections()).isEqualTo(2);

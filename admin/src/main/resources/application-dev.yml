@@ -59,4 +59,8 @@ yulinlin:
     schema-packages:
       - "com.yulinlin.admin"
 
-
+  monitor:
+    username: admin
+    password: 123456
+    threshold: 10ms
+    max-records: 1000

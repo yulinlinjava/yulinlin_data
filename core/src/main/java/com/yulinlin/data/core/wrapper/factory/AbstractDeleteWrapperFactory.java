@@ -5,11 +5,9 @@ import com.yulinlin.data.core.anno.JoinMeta;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinWhere;
 import com.yulinlin.data.core.exception.NoticeException;
-import com.yulinlin.data.core.model.BaseModel;
 import com.yulinlin.data.core.util.MetaUtil;
 import com.yulinlin.data.core.wrapper.IConditionWrapper;
 import com.yulinlin.data.core.wrapper.IDeleteWrapper;
-import com.yulinlin.data.core.wrapper.IUpdateWrapper;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 
@@ -23,6 +21,8 @@ public abstract class AbstractDeleteWrapperFactory implements AbstractWrapperFac
         IConditionWrapper or =  where.or();
         IConditionWrapper and = where;
         for (Field f : fs) {
+            JoinField joinField = AnnotationUtil.findAnnotation(f, JoinField.class);
+            if (joinField != null && !joinField.exist()) continue;
 
             JoinMeta joinMeta =
                     AnnotationUtil.findAnnotation(f,JoinMeta.class);
@@ -64,6 +64,9 @@ public abstract class AbstractDeleteWrapperFactory implements AbstractWrapperFac
         IDeleteWrapper wrapper =  create();
 
         JoinTable table =AnnotationUtil.findAnnotation(obj.getClass(),JoinTable.class);
+        if (table == null) {
+            throw new NoticeException("缺少JoinTable注解: " + obj.getClass().getName());
+        }
         wrapper.table(table.value());
 
 

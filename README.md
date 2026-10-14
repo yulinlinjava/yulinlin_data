@@ -13,6 +13,7 @@
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
 - 最终一致的高频小写入可显式使用 `.queue()`，由进程内定时队列合并 `INode` 后复用现有 Session 和 JDBC batch。
 - 查询缓存是可选模块：可选 Caffeine 或 Ehcache，Key 包含数据源与查询元数据，标准写入提交后按表 namespace 失效。
+- 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描；只有 `autoSchema=true` 的完整实体才可创建缺失表、普通列和声明索引。
 
 ## 与 JPA、MyBatis 的选型对比
@@ -68,6 +69,7 @@
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。
 - 接口报文加密：security；当前提供显式注解启用的 AES-256-GCM JSON 加解密。
 - 查询缓存完全可选：不引入缓存模块时直接访问数据源；低延迟内存缓存引入 `cache-caffeine`，Heap + Disk 持久化缓存引入 `cache-ehcache`，两者不能同时引入。
+- 慢数据库监控：引入 `monitor`，访问 `/monitor/`；页面内置账号密码验证对话框，验证结果保存在当前 Session，不依赖安全框架。
 
 完整依赖和配置见第一专题。制品来源由团队提供，不假设已发布 Maven Central；业务不依赖 admin 示例模块。
 
@@ -76,5 +78,7 @@
 写入先确认主键/条件，框架不默认拦截全表操作。多库或多连接是本地事务协调，不是分布式原子提交。多会话组用显式 group 或 yulinlin.datasource.default-group；primary 不自动优先。
 
 每个专题按“入口与示例 → 常见场景 → API/配置 → 使用限制”组织。九份正文是唯一维护源，AI 单文件由使用专题派生，不再维护旧专题、存档或独立重复指南。
+
+框架维护默认只进行代码与文档修改、静态阅读检查，不主动执行编译、打包、测试、Spring YAML 属性绑定测试或 `git diff --check`；用户在当前任务中明确要求后才运行。完整约定见[扩展开发与维护](doc/05-扩展开发与维护.md#ai-使用约定)。
 
 本轮文档核对日期为 2026-10-10；已运行本地库 JMH、JDK 25 全模块测试编译、lang/缓存专项测试，以及启动扫描/MySQL 自动配置/SQLite/H2 Schema 定向测试。维护与验证方式见第五专题。许可证见 [LICENSE](LICENSE)。

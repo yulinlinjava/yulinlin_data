@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yulinlin 数据库监控</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.14.7/dist/index.css">
+    <style>
+        :root {
+            color-scheme: light;
+            --ink: #122033;
+            --muted: #64748b;
+            --line: rgba(148, 163, 184, .22);
+            --panel: rgba(255, 255, 255, .88);
+            --brand: #3157e7;
+            --brand-soft: #eef2ff;
+            --danger: #dc3c4f;
+        }
+        * { box-sizing: border-box; }
+        html, body, #app { min-height: 100%; margin: 0; }
+        body {
+            color: var(--ink);
+            font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+            background:
+                radial-gradient(circle at 8% 5%, rgba(91, 113, 245, .17), transparent 31rem),
+                radial-gradient(circle at 92% 20%, rgba(27, 190, 155, .10), transparent 27rem),
+                #f5f7fb;
+        }
+        [v-cloak] { display: none; }
+        .shell { width: min(1500px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 42px; }
+        .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
+        .eyebrow { color: var(--brand); font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+        h1 { margin: 7px 0 8px; font-size: clamp(28px, 4vw, 44px); line-height: 1.08; letter-spacing: -.035em; }
+        .subtitle { margin: 0; color: var(--muted); font-size: 14px; }
+        .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+        .live-pill { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid #c7f2df; border-radius: 999px; color: #087f5b; background: #edfff7; font-size: 12px; font-weight: 700; }
+        .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #18ad78; box-shadow: 0 0 0 5px rgba(24, 173, 120, .12); }
+        .metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 15px; margin-bottom: 18px; }
+        .metric-card { position: relative; overflow: hidden; padding: 20px 21px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 16px 42px rgba(26, 39, 72, .055); backdrop-filter: blur(12px); }
+        .metric-card::after { content: ""; position: absolute; right: -22px; top: -28px; width: 92px; height: 92px; border-radius: 50%; background: var(--brand-soft); }
+        .metric-card.danger::after { background: #fff0f2; }
+        .metric-label { position: relative; z-index: 1; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .05em; }
+        .metric-value { position: relative; z-index: 1; margin-top: 11px; font-size: 29px; font-weight: 800; letter-spacing: -.025em; }
+        .metric-note { position: relative; z-index: 1; margin-top: 7px; color: #8793a6; font-size: 12px; }
+        .panel { border: 1px solid var(--line); border-radius: 20px; background: var(--panel); box-shadow: 0 18px 48px rgba(26, 39, 72, .06); backdrop-filter: blur(12px); }
+        .toolbar { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; padding: 17px; border-bottom: 1px solid var(--line); }
+        .toolbar .keyword { width: min(330px, 100%); }
+        .toolbar-spacer { flex: 1; }
+        .refresh-info { color: var(--muted); font-size: 12px; white-space: nowrap; }
+        .table-wrap { padding: 0 17px 17px; }
+        .sql-cell { overflow: hidden; color: #334155; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+        .elapsed { font-variant-numeric: tabular-nums; font-weight: 800; }
+        .elapsed.hot { color: var(--danger); }
+        .detail-block { margin-bottom: 18px; }
+        .detail-label { margin-bottom: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
+        .detail-code { max-height: 280px; margin: 0; padding: 14px; overflow: auto; border-radius: 12px; color: #d8e2ff; background: #111827; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+        .detail-error { color: #a20d28; background: #fff1f3; }
+        .footer-note { margin-top: 18px; color: var(--muted); font-size: 12px; text-align: center; }
+        .el-table { --el-table-header-bg-color: #f7f8fc; --el-table-row-hover-bg-color: #f3f6ff; background: transparent; }
+        .el-table th.el-table__cell { color: #526177; font-size: 12px; font-weight: 750; }
+        .el-table tr, .el-table td.el-table__cell { background: transparent; }
+        @media (max-width: 980px) {
+            .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (max-width: 640px) {
+            .shell { width: min(100% - 24px, 1500px); padding-top: 22px; }
+            .topbar { display: block; }
+            .header-actions { justify-content: flex-start; margin-top: 17px; }
+            .metric-grid { grid-template-columns: 1fr; }
+            .toolbar > * { width: 100% !important; }
+            .toolbar-spacer { display: none; }
+        }
+    </style>
+</head>
+<body>
+<div id="app" v-cloak>
+    <main class="shell">
+        <header class="topbar">
+            <div>
+                <div class="eyebrow">Yulinlin Data · Database Health</div>
+                <h1>数据库优化监控</h1>
+                <p class="subtitle">按 SQL 模板聚合全部 JDBC 操作，慢操作明细不采集绑定参数。</p>
+            </div>
+            <div class="header-actions">
+                <span class="live-pill"><i class="live-dot"></i> {{ autoRefresh ? '自动刷新中' : '自动刷新已暂停' }}</span>
+                <el-switch v-model="autoRefresh" inline-prompt active-text="开" inactive-text="关"></el-switch>
+                <el-select v-model="refreshSeconds" style="width: 92px" :disabled="!autoRefresh">
+                    <el-option :value="5" label="5 秒"></el-option>
+                    <el-option :value="10" label="10 秒"></el-option>
+                    <el-option :value="30" label="30 秒"></el-option>
+                </el-select>
+                <el-button type="primary" :loading="loading" @click="load">立即刷新</el-button>
+                <el-button @click="logout">退出</el-button>
+            </div>
+        </header>
+
+        <section class="metric-grid">
+            <article class="metric-card">
+                <div class="metric-label">SQL 模板</div>
+                <div class="metric-value">{{ metrics.templates }}</div>
+                <div class="metric-note">按来源实体独立聚合</div>
+            </article>
+            <article class="metric-card">
+                <div class="metric-label">执行次数</div>
+                <div class="metric-value">{{ metrics.executions }}</div>
+                <div class="metric-note">当前进程统计</div>
+            </article>
+            <article class="metric-card">
+                <div class="metric-label">慢操作</div>
+                <div class="metric-value">{{ metrics.slow }}</div>
+                <div class="metric-note">阈值 ≥ {{ formatElapsed(snapshot.thresholdMs) }}</div>
+            </article>
+            <article class="metric-card danger">
+                <div class="metric-label">执行异常</div>
+                <div class="metric-value">{{ metrics.errors }}</div>
+                <div class="metric-note">异常不受慢操作阈值限制</div>
+            </article>
+            <article class="metric-card">
+                <div class="metric-label">平均耗时</div>
+                <div class="metric-value">{{ formatElapsed(metrics.average) }}</div>
+                <div class="metric-note">全部 JDBC 执行</div>
+            </article>
+            <article class="metric-card">
+                <div class="metric-label">最慢耗时</div>
+                <div class="metric-value">{{ formatElapsed(metrics.max) }}</div>
+                <div class="metric-note">当前进程统计</div>
+            </article>
+        </section>
+
+        <section class="panel">
+            <div class="toolbar">
+                <el-input v-model="filters.keyword" class="keyword" clearable placeholder="搜索 SQL、表、实体或 Session"></el-input>
+                <el-select v-model="filters.group" clearable placeholder="全部 Group" style="width: 150px">
+                    <el-option v-for="item in groups" :key="item" :label="item" :value="item"></el-option>
+                </el-select>
+                <el-select v-model="filters.operation" clearable placeholder="全部操作" style="width: 140px">
+                    <el-option v-for="item in operations" :key="item" :label="item.toUpperCase()" :value="item"></el-option>
+                </el-select>
+                <el-select v-model="filters.priority" clearable placeholder="全部优先级" style="width: 140px">
+                    <el-option v-for="item in priorities" :key="item" :value="item" :label="priorityLabel(item)"></el-option>
+                </el-select>
+                <span class="toolbar-spacer"></span>
+                <span class="refresh-info">最近更新：{{ lastUpdated || '尚未加载' }}</span>
+            </div>
+            <div class="table-wrap">
+                <el-table :data="filteredSummaries" stripe height="590" empty-text="暂无数据库操作" @row-click="showDetail">
+                    <el-table-column label="优先级" width="92" align="center">
+                        <template #default="scope">
+                            <el-tag size="small" :type="priorityTag(scope.row.priority)">{{ priorityLabel(scope.row.priority) }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="group" label="Group" width="115"></el-table-column>
+                    <el-table-column prop="entity" label="来源实体" min-width="150" show-overflow-tooltip></el-table-column>
+                    <el-table-column label="操作" width="98">
+                        <template #default="scope">
+                            <el-tag size="small" effect="plain" :type="operationTag(scope.row.operation)">{{ scope.row.operation.toUpperCase() }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="table" label="表" min-width="125" show-overflow-tooltip></el-table-column>
+                    <el-table-column prop="executionCount" label="执行次数" width="95" align="right"></el-table-column>
+                    <el-table-column label="慢查询率" width="105" align="right">
+                        <template #default="scope">{{ formatRate(scope.row.slowRate) }}</template>
+                    </el-table-column>
+                    <el-table-column label="平均耗时" width="105" align="right">
+                        <template #default="scope"><span class="elapsed">{{ formatElapsed(scope.row.averageElapsedMs) }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="最慢耗时" width="105" align="right">
+                        <template #default="scope"><span class="elapsed" :class="{hot: scope.row.priority !== 'NORMAL'}">{{ formatElapsed(scope.row.maxElapsedMs) }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="SQL" min-width="260">
+                        <template #default="scope"><div class="sql-cell" :title="scope.row.sql">{{ scope.row.sql }}</div></template>
+                    </el-table-column>
+                </el-table>
+            </div>
+        </section>
+
+        <p class="footer-note">该页面只读，账号密码仅用于当前监控页面验证。</p>
+    </main>
+
+    <el-dialog v-model="loginVisible" title="监控验证" width="min(420px, 92vw)"
+               :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
+        <el-form label-position="top" @submit.prevent="login">
+            <el-form-item label="账号">
+                <el-input v-model="loginForm.username" autocomplete="username" autofocus></el-input>
+            </el-form-item>
+            <el-form-item label="密码">
+                <el-input v-model="loginForm.password" type="password" show-password
+                          autocomplete="current-password" @keyup.enter="login"></el-input>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button type="primary" :loading="loginLoading" style="width: 100%" @click="login">验证并进入</el-button>
+        </template>
+    </el-dialog>
+
+    <el-dialog v-model="detailVisible" title="SQL 优化详情" width="min(900px, 94vw)">
+        <template v-if="selected">
+            <el-descriptions :column="2" border style="margin-bottom: 18px">
+                <el-descriptions-item label="优先级">{{ priorityLabel(selected.priority) }}</el-descriptions-item>
+                <el-descriptions-item label="最近执行">{{ formatTime(selected.lastExecutedAt) }}</el-descriptions-item>
+                <el-descriptions-item label="Group">{{ selected.group }}</el-descriptions-item>
+                <el-descriptions-item label="Session">{{ selected.session }}</el-descriptions-item>
+                <el-descriptions-item label="操作">{{ selected.operation.toUpperCase() }}</el-descriptions-item>
+                <el-descriptions-item label="执行次数">{{ selected.executionCount }}</el-descriptions-item>
+                <el-descriptions-item label="来源实体">{{ selected.entity }}</el-descriptions-item>
+                <el-descriptions-item label="完整类名">{{ selected.source }}</el-descriptions-item>
+                <el-descriptions-item label="表">{{ selected.table }}</el-descriptions-item>
+                <el-descriptions-item label="慢 / 异常">{{ selected.slowCount }} / {{ selected.errorCount }}</el-descriptions-item>
+                <el-descriptions-item label="慢查询率">{{ formatRate(selected.slowRate) }}</el-descriptions-item>
+                <el-descriptions-item label="平均 / 最慢">{{ formatElapsed(selected.averageElapsedMs) }} / {{ formatElapsed(selected.maxElapsedMs) }}</el-descriptions-item>
+                <el-descriptions-item label="最近耗时">{{ formatElapsed(selected.lastElapsedMs) }}</el-descriptions-item>
+            </el-descriptions>
+            <div class="detail-block">
+                <div class="detail-label">SQL 模板</div>
+                <pre class="detail-code">{{ selected.sql }}</pre>
+            </div>
+            <div class="detail-block">
+                <div class="detail-label">最近慢操作与异常</div>
+                <el-table :data="selectedRecords" size="small" max-height="260" empty-text="暂无保留明细">
+                    <el-table-column label="时间" width="170">
+                        <template #default="scope">{{ formatTime(scope.row.timestamp) }}</template>
+                    </el-table-column>
+                    <el-table-column label="耗时" width="100" align="right">
+                        <template #default="scope">{{ formatElapsed(scope.row.elapsedMs) }}</template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="80" align="center">
+                        <template #default="scope"><el-tag size="small" :type="scope.row.success ? 'warning' : 'danger'">{{ scope.row.success ? '慢' : '异常' }}</el-tag></template>
+                    </el-table-column>
+                    <el-table-column prop="error" label="异常信息" min-width="260" show-overflow-tooltip></el-table-column>
+                </el-table>
+            </div>
+        </template>
+    </el-dialog>
+</div>
+
+<noscript>该监控页面需要启用 JavaScript。</noscript>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.14.7/dist/index.full.min.js"></script>
+<script>
+    const { createApp, reactive, ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
+
+    createApp({
+        setup() {
+            const snapshot = reactive({ thresholdMs: 1000, maxRecords: 1000, retainedRecords: 0, summaries: [], records: [] });
+            const filters = reactive({ keyword: '', group: '', operation: '', priority: '' });
+            const loading = ref(false);
+            const autoRefresh = ref(true);
+            const refreshSeconds = ref(10);
+            const lastUpdated = ref('');
+            const detailVisible = ref(false);
+            const selected = ref(null);
+            const loginVisible = ref(false);
+            const loginLoading = ref(false);
+            const loginForm = reactive({ username: 'admin', password: '' });
+            const priorities = ['P0', 'P1', 'P2', 'P3', 'P4', 'NORMAL'];
+            let timer;
+
+            const groups = computed(() => [...new Set(snapshot.summaries.map(item => item.group))].sort());
+            const operations = computed(() => [...new Set(snapshot.summaries.map(item => item.operation))].sort());
+            const metrics = computed(() => {
+                let executions = 0, slow = 0, errors = 0, max = 0, weightedElapsed = 0;
+                snapshot.summaries.forEach(item => {
+                    executions += item.executionCount;
+                    slow += item.slowCount;
+                    errors += item.errorCount;
+                    max = Math.max(max, item.maxElapsedMs);
+                    weightedElapsed += item.averageElapsedMs * item.executionCount;
+                });
+                return { templates: snapshot.summaries.length, executions, slow, errors,
+                    average: executions ? Math.round(weightedElapsed / executions) : 0, max };
+            });
+            const filteredSummaries = computed(() => {
+                const keyword = filters.keyword.trim().toLowerCase();
+                return snapshot.summaries.filter(item => {
+                    if (filters.group && item.group !== filters.group) return false;
+                    if (filters.operation && item.operation !== filters.operation) return false;
+                    if (filters.priority && item.priority !== filters.priority) return false;
+                    if (!keyword) return true;
+                    return [item.sql, item.table, item.entity, item.source, item.session, item.group]
+                        .some(value => String(value || '').toLowerCase().includes(keyword));
+                });
+            });
+            const selectedRecords = computed(() => {
+                if (!selected.value) return [];
+                const summary = selected.value;
+                return snapshot.records.filter(item => item.group === summary.group
+                    && item.session === summary.session
+                    && item.operation === summary.operation
+                    && item.source === summary.source
+                    && item.sql === summary.sql).slice(0, 20);
+            });
+
+            async function load() {
+                if (loading.value) return;
+                loading.value = true;
+                try {
+                    const response = await fetch('api/snapshot?limit=500', { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+                    if (response.status === 401) {
+                        loginVisible.value = true;
+                        clearInterval(timer);
+                        return;
+                    }
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const data = await response.json();
+                    Object.assign(snapshot, data);
+                    lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+                } catch (error) {
+                    ElementPlus.ElMessage.error(`监控数据加载失败：${error.message}`);
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function login() {
+                if (loginLoading.value || !loginForm.username || !loginForm.password) return;
+                loginLoading.value = true;
+                try {
+                    const response = await fetch('api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        body: JSON.stringify(loginForm)
+                    });
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+                    loginVisible.value = false;
+                    loginForm.password = '';
+                    ElementPlus.ElMessage.success('验证成功');
+                    await load();
+                    schedule();
+                } catch (error) {
+                    ElementPlus.ElMessage.error(error.message);
+                } finally {
+                    loginLoading.value = false;
+                }
+            }
+
+            async function logout() {
+                try {
+                    await fetch('api/logout', { method: 'POST', headers: { 'Accept': 'application/json' } });
+                } finally {
+                    clearInterval(timer);
+                    loginVisible.value = true;
+                    loginForm.password = '';
+                    Object.assign(snapshot, { retainedRecords: 0, summaries: [], records: [] });
+                }
+            }
+
+            function schedule() {
+                clearInterval(timer);
+                if (autoRefresh.value) timer = setInterval(load, refreshSeconds.value * 1000);
+            }
+
+            function formatElapsed(value) {
+                if (value == null || value < 0) return '-';
+                if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)} s`;
+                return `${value} ms`;
+            }
+
+            function formatTime(value) {
+                if (!value) return '-';
+                return new Date(value).toLocaleString('zh-CN', { hour12: false });
+            }
+
+            function formatRate(value) {
+                if (value == null) return '-';
+                return `${Number(value).toFixed(value >= 10 ? 1 : 2)}%`;
+            }
+
+            function priorityLabel(priority) {
+                return ({ P0: 'P0 异常', P1: 'P1 严重', P2: 'P2 高', P3: 'P3 中',
+                    P4: 'P4 低', NORMAL: '正常' })[priority] || priority;
+            }
+
+            function priorityTag(priority) {
+                return ({ P0: 'danger', P1: 'danger', P2: 'warning', P3: 'primary',
+                    P4: 'info', NORMAL: 'success' })[priority] || 'info';
+            }
+
+            function operationTag(operation) {
+                return ({ select: 'primary', count: 'info', insert: 'success', update: 'warning', delete: 'danger' })[operation] || '';
+            }
+
+            function showDetail(row) {
+                selected.value = row;
+                detailVisible.value = true;
+            }
+
+            watch([autoRefresh, refreshSeconds], schedule);
+            onMounted(() => { load(); schedule(); });
+            onBeforeUnmount(() => clearInterval(timer));
+
+            return { snapshot, filters, loading, autoRefresh, refreshSeconds, lastUpdated, detailVisible,
+                loginVisible, loginLoading, loginForm,
+                selected, selectedRecords, groups, operations, priorities, metrics, filteredSummaries,
+                load, formatElapsed, formatTime, formatRate, priorityLabel, priorityTag,
+                operationTag, showDetail, login, logout };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

@@ -38,7 +38,7 @@ public @interface JoinField {
 	//数据库是否够存在该字段
 	boolean exist() default  true;
 
-	//是否允许字段更新
+	/** 是否允许字段进入 UPDATE SET；主键字段仍会用于 WHERE 条件。 */
 	boolean update() default  true;
 
 	//是否乐观锁

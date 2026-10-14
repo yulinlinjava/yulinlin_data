@@ -164,6 +164,8 @@ public class YulinlinCoreAutoConfig {
 
                 .proxyService(proxyService)
 
+                .clearOnWrite(queryCache.clearOnWrite())
+
                 .transactionListenerManager(listenerManager)
                 .build();
 

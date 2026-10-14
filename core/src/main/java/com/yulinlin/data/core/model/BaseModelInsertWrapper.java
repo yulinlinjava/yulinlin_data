@@ -84,31 +84,8 @@ public class BaseModelInsertWrapper<E,R extends BaseModelInsertWrapper<E,R>> {
 
     }
 
-    public R invalidate(){
-        request.invalidate();
-        return (R)this;
-    }
-
-    public R invalidate(String... resources){
-        request.invalidate(resources);
-        return (R)this;
-    }
-
-    public R invalidateAll(){
-        request.invalidateAll();
-        return (R)this;
-    }
-
-    /** @deprecated Use {@link #invalidate()} for writes. */
-    @Deprecated
-    public R cache(){
-        return invalidate();
-    }
-
-    /** @deprecated Use {@link #invalidate()} for writes. */
-    @Deprecated
-    public R cache(boolean cache){
-        request.setInvalidate(cache);
+    public R clearCache(boolean clearCache){
+        request.clearCache(clearCache);
         return (R)this;
     }
 

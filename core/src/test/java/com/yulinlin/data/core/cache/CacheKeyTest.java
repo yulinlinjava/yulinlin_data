@@ -1,8 +1,11 @@
 package com.yulinlin.data.core.cache;
 
 import com.yulinlin.data.core.node.CommandNode;
+import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.session.AbstractSession;
+import com.yulinlin.data.core.wrapper.impl.CountWrapper;
+import com.yulinlin.data.core.wrapper.impl.SelectWrapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -37,13 +40,45 @@ class CacheKeyTest {
         assertThat(one).isNotEqualTo(two).isNotEqualTo(textOne).isNotEqualTo(anotherGroup);
     }
 
+    @Test
+    void builtInCountWrapperAndItsSelectUseTheSameLogicalKey() {
+        SelectWrapper<UserRow> select = new SelectWrapper<>();
+        select.table("users").where().eq("status", 1);
+
+        assertThat(key("mysql", ParseType.count, select))
+                .isEqualTo(key("mysql", ParseType.count, new CountWrapper(select)));
+    }
+
+    @Test
+    void unknownWrapperSubtypeKeepsItsAdditionalCountState() {
+        TenantSelect first = new TenantSelect("tenant-a");
+        first.table("users").where().eq("status", 1);
+        TenantSelect second = new TenantSelect("tenant-b");
+        second.table("users").where().eq("status", 1);
+
+        assertThat(key("mysql", ParseType.count, first))
+                .isNotEqualTo(key("mysql", ParseType.count, second));
+    }
+
     private static CommandNode<String> command(Object id) {
         return new CommandNode<>("select * from user where id=#{id}", Map.of("id", id), ParseType.select);
     }
 
     private static CacheKey key(String group, CommandNode<?> node) {
+        return key(group, ParseType.select, node);
+    }
+
+    private static CacheKey key(String group, ParseType type, INode node) {
         return CacheKey.query(group, "master", AbstractSession.class,
-                UserRow.class, UserRow.class, ParseType.select, node);
+                UserRow.class, UserRow.class, type, node);
+    }
+
+    private static final class TenantSelect extends SelectWrapper<UserRow> {
+        private final String tenant;
+
+        private TenantSelect(String tenant) {
+            this.tenant = tenant;
+        }
     }
 
     private record UserRow(long id, String name) {

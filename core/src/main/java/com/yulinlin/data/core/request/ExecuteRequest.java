@@ -21,10 +21,8 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
 
     private boolean batch;
 
-    /** Writes invalidate related query-cache namespaces after a successful commit by default. */
-    private boolean invalidate = true;
-
-    private boolean invalidateAll;
+    /** Null inherits {@code yulinlin.cache.clear-on-write}; non-null is a per-request override. */
+    private Boolean clearCache;
 
     /** Delays this write until the framework write queue is flushed. */
     private boolean queued;
@@ -45,38 +43,21 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
         return batch;
     }
 
-    public boolean isInvalidate() {
-        return invalidate;
+    public Boolean getClearCache() {
+        return clearCache;
     }
 
-    public boolean isInvalidateAll() {
-        return invalidateAll;
-    }
-
-    public ExecuteRequest<E> invalidate() {
-        this.invalidate = true;
+    public ExecuteRequest<E> clearCache(boolean clearCache) {
+        this.clearCache = clearCache;
         return this;
     }
 
-    public ExecuteRequest<E> invalidate(String... resources) {
-        this.invalidate = true;
-        addCacheNamespaces(resources);
-        return this;
+    public void setClearCache(Boolean clearCache) {
+        this.clearCache = clearCache;
     }
 
-    public ExecuteRequest<E> invalidateAll() {
-        this.invalidate = true;
-        this.invalidateAll = true;
-        return this;
-    }
-
-    public void setInvalidate(boolean invalidate) {
-        this.invalidate = invalidate;
-    }
-
-    public void setInvalidateAll(boolean invalidateAll) {
-        this.invalidateAll = invalidateAll;
-        if (invalidateAll) this.invalidate = true;
+    public boolean shouldClearCache(boolean defaultValue) {
+        return clearCache == null ? defaultValue : clearCache;
     }
 
     public ExecuteRequest<E> queue() {
@@ -132,17 +113,22 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
         wrappers.addAll(other.wrappers);
         // Execution tuning is not part of the queue grouping key. Use parallel execution when any request asks for it.
         batch |= other.batch;
-        invalidate |= other.invalidate;
-        invalidateAll |= other.invalidateAll;
+        clearCache = mergeClearCache(clearCache, other.clearCache);
         addCacheNamespaces(other.getCacheNamespaces().toArray(String[]::new));
+    }
+
+    private static Boolean mergeClearCache(Boolean first, Boolean second) {
+        if (Boolean.TRUE.equals(first) || Boolean.TRUE.equals(second)) return true;
+        if (first == null || second == null) return null;
+        return false;
     }
 
     /** Preserves caller options when a request filter replaces the write request. */
     public void inheritExecutionOptions(ExecuteRequest<?> source) {
         if (source == null || source == this) return;
         batch = source.batch;
-        invalidate = source.invalidate;
-        invalidateAll = source.invalidateAll;
+        // A caller override wins; otherwise keep a replacement filter's explicit policy.
+        if (source.clearCache != null) clearCache = source.clearCache;
         queued = source.queued;
         addCacheNamespaces(source.getCacheNamespaces().toArray(String[]::new));
         if (getSession() == null || getSession().isBlank()) setSession(source.getSession());
@@ -155,8 +141,7 @@ public class ExecuteRequest<E> extends BaseRequest<E> {
         copy.setSession(getSession());
         copy.setCluster(getCluster());
         copy.batch = batch;
-        copy.invalidate = invalidate;
-        copy.invalidateAll = invalidateAll;
+        copy.clearCache = clearCache;
         copy.queued = queued;
         copy.addCacheNamespaces(getCacheNamespaces().toArray(String[]::new));
     }

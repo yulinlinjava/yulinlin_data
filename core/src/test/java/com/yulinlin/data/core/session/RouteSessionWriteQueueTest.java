@@ -64,7 +64,7 @@ class RouteSessionWriteQueueTest {
         try (WriteQueueManager queue = queue()) {
             RouteSession route = route(session, new RecordingCache(), filters, queue);
             ExecuteRequest<User> request = ExecuteRequest.ofDelete(User.class);
-            request.addRequest(new TestNode("delete")).queue();
+            request.addRequest(new TestNode("delete")).clearCache(false).queue();
             assertThat(route.delete(request)).isZero();
             queue.flush();
 
@@ -72,6 +72,7 @@ class RouteSessionWriteQueueTest {
             assertThat(recording.deletes).isZero();
             assertThat(recording.lastRequest.getRequestType()).isEqualTo(RequestType.update);
             assertThat(recording.lastRequest.getWrappers()).hasSize(1);
+            assertThat(recording.lastRequest.getClearCache()).isFalse();
         }
     }
 

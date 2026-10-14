@@ -7,13 +7,16 @@ import com.github.benmanes.caffeine.cache.Scheduler;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheNamespace;
+import com.yulinlin.data.core.cache.CachePartition;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCacheProperties;
 
 import java.time.Duration;
 import java.lang.reflect.Type;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -22,10 +25,13 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Fast in-process query cache. */
 public final class CaffeineQueryCache implements QueryCache {
 
+    private static final int MAX_PARTITION_VALUES = 4096;
+
     private final Cache<CacheKey, Entry> cache;
     private final QueryCacheProperties common;
     private final AtomicLong globalVersion = new AtomicLong();
     private final ConcurrentMap<CacheNamespace, AtomicLong> namespaceVersions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<CacheNamespace, PartitionState> partitionStates = new ConcurrentHashMap<>();
     private final AtomicLong applicationGlobalVersion = new AtomicLong();
     private final ConcurrentMap<String, AtomicLong> applicationNamespaceVersions = new ConcurrentHashMap<>();
 
@@ -59,6 +65,11 @@ public final class CaffeineQueryCache implements QueryCache {
     }
 
     @Override
+    public boolean clearOnWrite() {
+        return common.isClearOnWrite();
+    }
+
+    @Override
     public CacheKey scope(CacheKey key, Set<CacheNamespace> namespaces) {
         return scope(key, namespaces, null);
     }
@@ -69,6 +80,26 @@ public final class CaffeineQueryCache implements QueryCache {
         namespaces.stream().sorted().forEach(namespace -> versions.put(namespace,
                 namespaceVersions.computeIfAbsent(namespace, ignored -> new AtomicLong()).get()));
         return key.scoped(globalVersion.get(), versions, common.resolveKeyTtl(ttl));
+    }
+
+    @Override
+    public CacheKey scopePartition(CacheKey key, CachePartition partition, Duration ttl) {
+        PartitionState state = partitionStates.computeIfAbsent(partition.namespace(), ignored -> new PartitionState());
+        synchronized (state) {
+            if (state.mode == PartitionMode.TABLE) {
+                return scope(key, Set.of(partition.namespace()), ttl);
+            }
+            if (state.mode == PartitionMode.UNSEEN) {
+                state.mode = PartitionMode.SINGLE;
+                state.field = partition.field();
+            } else if (!state.field.equals(partition.field())) {
+                state.upgradeToTable();
+                return scope(key, Set.of(partition.namespace()), ttl);
+            }
+            long partitionVersion = state.version(partition.valueKey());
+            return key.scopedPartition(globalVersion.get(), state.tableVersion,
+                    partitionVersion, common.resolveKeyTtl(ttl));
+        }
     }
 
     @Override
@@ -90,8 +121,36 @@ public final class CaffeineQueryCache implements QueryCache {
     }
 
     @Override
+    public void invalidatePartitions(Set<CachePartition> partitions) {
+        for (CachePartition partition : partitions) {
+            PartitionState state = partitionStates.get(partition.namespace());
+            if (state == null) continue;
+            synchronized (state) {
+                if (state.mode == PartitionMode.UNSEEN || state.mode == PartitionMode.TABLE) continue;
+                if (state.field.equals(partition.field())) {
+                    state.increment(partition.valueKey());
+                } else {
+                    state.upgradeToTable();
+                }
+            }
+        }
+    }
+
+    @Override
+    public void invalidatePartitionTables(Set<CacheNamespace> namespaces) {
+        for (CacheNamespace namespace : namespaces) {
+            PartitionState state = partitionStates.get(namespace);
+            if (state == null) continue;
+            synchronized (state) {
+                if (state.mode == PartitionMode.SINGLE) state.invalidateTable();
+            }
+        }
+    }
+
+    @Override
     public void invalidateAll() {
         globalVersion.incrementAndGet();
+        partitionStates.clear();
     }
 
     @Override
@@ -153,5 +212,43 @@ public final class CaffeineQueryCache implements QueryCache {
     }
 
     private record Entry(Object value, long ttlNanos) {
+    }
+
+    private enum PartitionMode {
+        UNSEEN,
+        SINGLE,
+        TABLE
+    }
+
+    /** Mutable state is deliberately guarded by the state instance; transitions and versions stay atomic. */
+    private static final class PartitionState {
+        private PartitionMode mode = PartitionMode.UNSEEN;
+        private String field;
+        private long tableVersion;
+        private final Map<String, Long> valueVersions = new HashMap<>();
+
+        private long version(String valueKey) {
+            Long version = valueVersions.get(valueKey);
+            if (version != null) return version;
+            if (valueVersions.size() >= MAX_PARTITION_VALUES) invalidateTable();
+            valueVersions.put(valueKey, 0L);
+            return 0L;
+        }
+
+        private void increment(String valueKey) {
+            valueVersions.computeIfPresent(valueKey, (ignored, version) -> version + 1);
+        }
+
+        private void upgradeToTable() {
+            mode = PartitionMode.TABLE;
+            field = null;
+            tableVersion++;
+            valueVersions.clear();
+        }
+
+        private void invalidateTable() {
+            tableVersion++;
+            valueVersions.clear();
+        }
     }
 }

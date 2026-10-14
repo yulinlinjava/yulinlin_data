@@ -1,9 +1,13 @@
 package com.yulinlin.data.core.session;
 
+import com.yulinlin.data.core.alias.AliasContent;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.cache.CacheMissException;
 import com.yulinlin.data.core.cache.CacheMode;
+import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
+import com.yulinlin.data.core.cache.CachePartition;
+import com.yulinlin.data.core.cache.CachePartitionResolver;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.NoOpQueryCache;
@@ -23,14 +27,17 @@ import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.wrapper.ICountWrapper;
 import com.yulinlin.data.core.wrapper.impl.CountWrapper;
+import com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper;
 import com.yulinlin.data.lang.util.Page;
 import com.yulinlin.data.lang.util.SegmentLock;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import lombok.SneakyThrows;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -152,6 +159,15 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     public EntitySessionProperties getSessionProperties() {
         return sessionProperties;
+    }
+
+    /** Cache partition metadata must follow the same entity mapping and coder path as SQL parameters. */
+    String cacheColumn(Class<?> sourceClass, String field) {
+        return AliasContent.newInstance(sourceClass, isMapUnderscoreToCamelCase()).toColumn(field);
+    }
+
+    Object cachePartitionValue(Object value) {
+        return coderManager.createEncoderBuffer().encode(value);
     }
 
     public static int batchSize = 5*512*1024;
@@ -352,12 +368,36 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         CacheMode mode = request.getCacheMode();
         if (mode == CacheMode.NONE) return callable.get();
 
+        boolean lockQuery = result.getType() == ParseType.select
+                && request.getWrapper() instanceof AbstractSelectWrapper<?, ?, ?, ?> select
+                && select.isLock();
+        boolean transactionActive = isOpenTransaction()
+                || TransactionSynchronizationManager.isActualTransactionActive();
+        if (lockQuery || transactionActive) {
+            if (mode == CacheMode.CACHE_ONLY) {
+                throw new CacheMissException(lockQuery
+                        ? "行锁查询不能从缓存获取，CACHE_ONLY 无法执行"
+                        : "事务内查询不会访问全局缓存，CACHE_ONLY 无法执行");
+            }
+            return callable.get();
+        }
+
         CacheKey cacheKey = CacheKey.query(
                 group(), cluster(), getClass(), request.getEntityClass(),
                 request.getFromClass(), result.getType(), request.getWrapper());
-        cacheKey = cacheManager.scope(cacheKey, CacheNamespaceResolver.resolve(
+        Set<CacheNamespace> namespaces = CacheNamespaceResolver.resolve(
                 getClass(), group(), request.getFromClass(), request.getWrapper(),
-                request.getCacheNamespaces()), request.getCacheTtl());
+                request.getCacheNamespaces());
+        CachePartition partition = null;
+        if (result.getType() == ParseType.select && namespaces.size() == 1) {
+            CacheNamespace namespace = namespaces.iterator().next();
+            partition = CachePartitionResolver.query(namespace, request.getWrapper(),
+                    field -> cacheColumn(request.getFromClass(), field),
+                    this::cachePartitionValue).orElse(null);
+        }
+        cacheKey = partition == null
+                ? cacheManager.scope(cacheKey, namespaces, request.getCacheTtl())
+                : cacheManager.scopePartition(cacheKey, partition, request.getCacheTtl());
         CacheValueType valueType = result.getType() == ParseType.count
                 ? CacheValueType.scalar(Integer.class)
                 : CacheValueType.listOf(request.getEntityClass());

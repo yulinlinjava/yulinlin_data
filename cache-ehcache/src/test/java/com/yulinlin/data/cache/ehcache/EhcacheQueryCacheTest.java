@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheNamespace;
+import com.yulinlin.data.core.cache.CachePartition;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.CacheClient;
 import com.yulinlin.data.core.cache.DefaultCacheClient;
@@ -81,6 +82,127 @@ class EhcacheQueryCacheTest {
     }
 
     @Test
+    void invalidatesOnlyTheMatchingEqualityValue() {
+        CacheNamespace namespace = CacheNamespace.of(EhcacheQueryCacheTest.class, "master", "users");
+        CachePartition admin = partition(namespace, "username", "admin");
+        CachePartition guest = partition(namespace, "username", "guest");
+        CacheKey adminQuery = key("username", "admin");
+        CacheKey guestQuery = key("username", "guest");
+
+        try (EhcacheQueryCache cache = new EhcacheQueryCache(
+                new QueryCacheProperties(), properties(), new ObjectMapper())) {
+            CacheKey adminBefore = cache.scopePartition(adminQuery, admin);
+            CacheKey guestBefore = cache.scopePartition(guestQuery, guest);
+
+            cache.invalidatePartitions(Set.of(admin));
+
+            assertThat(cache.scopePartition(adminQuery, admin)).isNotEqualTo(adminBefore);
+            assertThat(cache.scopePartition(guestQuery, guest)).isEqualTo(guestBefore);
+        }
+    }
+
+    @Test
+    void tableInvalidationRotatesAllValuesButKeepsTheLearnedField() {
+        CacheNamespace namespace = CacheNamespace.of(EhcacheQueryCacheTest.class, "master", "users");
+        CachePartition admin = partition(namespace, "username", "admin");
+        CachePartition guest = partition(namespace, "username", "guest");
+        CacheKey adminQuery = key("username", "admin");
+        CacheKey guestQuery = key("username", "guest");
+
+        try (EhcacheQueryCache cache = new EhcacheQueryCache(
+                new QueryCacheProperties(), properties(), new ObjectMapper())) {
+            CacheKey adminBefore = cache.scopePartition(adminQuery, admin);
+            CacheKey guestBefore = cache.scopePartition(guestQuery, guest);
+            cache.invalidatePartitionTables(Set.of(namespace));
+            CacheKey adminAfterTableWrite = cache.scopePartition(adminQuery, admin);
+            CacheKey guestAfterTableWrite = cache.scopePartition(guestQuery, guest);
+
+            assertThat(adminAfterTableWrite).isNotEqualTo(adminBefore);
+            assertThat(guestAfterTableWrite).isNotEqualTo(guestBefore);
+
+            cache.invalidatePartitions(Set.of(admin));
+            assertThat(cache.scopePartition(adminQuery, admin)).isNotEqualTo(adminAfterTableWrite);
+            assertThat(cache.scopePartition(guestQuery, guest)).isEqualTo(guestAfterTableWrite);
+        }
+    }
+
+    @Test
+    void secondConditionFieldPermanentlyFallsBackToTableScoping() {
+        CacheNamespace namespace = CacheNamespace.of(EhcacheQueryCacheTest.class, "master", "users");
+        CachePartition username = partition(namespace, "username", "admin");
+        CachePartition email = partition(namespace, "email", "admin@example.com");
+        CacheKey usernameQuery = key("username", "admin");
+        CacheKey emailQuery = key("email", "admin@example.com");
+
+        try (EhcacheQueryCache cache = new EhcacheQueryCache(
+                new QueryCacheProperties(), properties(), new ObjectMapper())) {
+            CacheKey partitionKey = cache.scopePartition(usernameQuery, username);
+            assertThat(partitionKey).isNotEqualTo(cache.scope(usernameQuery, Set.of(namespace)));
+
+            assertThat(cache.scopePartition(emailQuery, email))
+                    .isEqualTo(cache.scope(emailQuery, Set.of(namespace)));
+            assertThat(cache.scopePartition(usernameQuery, username))
+                    .isEqualTo(cache.scope(usernameQuery, Set.of(namespace)));
+        }
+    }
+
+    @Test
+    void onlyAConflictingWriteAfterTheFirstReadUpgradesToTableScoping() {
+        CacheNamespace namespace = CacheNamespace.of(EhcacheQueryCacheTest.class, "master", "users");
+        CachePartition username = partition(namespace, "username", "admin");
+        CachePartition email = partition(namespace, "email", "admin@example.com");
+        CacheKey usernameQuery = key("username", "admin");
+
+        try (EhcacheQueryCache cache = new EhcacheQueryCache(
+                new QueryCacheProperties(), properties(), new ObjectMapper())) {
+            cache.invalidatePartitions(Set.of(email));
+            assertThat(cache.scopePartition(usernameQuery, username))
+                    .isNotEqualTo(cache.scope(usernameQuery, Set.of(namespace)));
+
+            cache.invalidatePartitions(Set.of(email));
+            assertThat(cache.scopePartition(usernameQuery, username))
+                    .isEqualTo(cache.scope(usernameQuery, Set.of(namespace)));
+        }
+    }
+
+    @Test
+    void rotatesTheTableTokenWhenTrackedValuesReachTheInternalLimit() {
+        CacheNamespace namespace = CacheNamespace.of(EhcacheQueryCacheTest.class, "master", "users");
+        CachePartition first = partition(namespace, "id", 0);
+        CacheKey firstQuery = key("id", 0);
+
+        try (EhcacheQueryCache cache = new EhcacheQueryCache(
+                new QueryCacheProperties(), properties(), new ObjectMapper())) {
+            CacheKey before = cache.scopePartition(firstQuery, first);
+            for (int value = 1; value < 4096; value++) {
+                cache.scopePartition(key("id", value), partition(namespace, "id", value));
+            }
+            assertThat(cache.scopePartition(firstQuery, first)).isEqualTo(before);
+
+            cache.scopePartition(key("id", 4096), partition(namespace, "id", 4096));
+            assertThat(cache.scopePartition(firstQuery, first)).isNotEqualTo(before);
+        }
+    }
+
+    @Test
+    void persistentPartitionEntriesAreNotRevivedAfterRestart() {
+        QueryCacheProperties common = new QueryCacheProperties();
+        EhcacheProperties properties = properties();
+        CacheNamespace namespace = CacheNamespace.of(EhcacheQueryCacheTest.class, "master", "users");
+        CachePartition partition = partition(namespace, "username", "admin");
+        CacheKey logical = key("username", "admin");
+        CacheValueType type = CacheValueType.scalar(UserRow.class);
+
+        try (EhcacheQueryCache first = new EhcacheQueryCache(common, properties, new ObjectMapper())) {
+            first.put(first.scopePartition(logical, partition), type, new UserRow(7, "admin"));
+        }
+
+        try (EhcacheQueryCache second = new EhcacheQueryCache(common, properties, new ObjectMapper())) {
+            assertThat(second.get(second.scopePartition(logical, partition), type).hit()).isFalse();
+        }
+    }
+
+    @Test
     void ttlParticipationInKeyFollowsTheCommonSetting() {
         QueryCacheProperties common = new QueryCacheProperties();
         CacheKey logical = key();
@@ -138,7 +260,8 @@ class EhcacheQueryCacheTest {
                         "yulinlin.cache.ehcache.expiration-policy=after-access",
                         "yulinlin.cache.ehcache.disk-threads=1",
                         "yulinlin.cache.ehcache.maximum-entry-size-mb=2",
-                        "yulinlin.cache.ehcache.record-statistics=false")
+                        "yulinlin.cache.ehcache.record-statistics=false",
+                        "yulinlin.cache.clear-on-write=false")
                 .run(context -> {
                     assertThat(context).hasSingleBean(EhcacheQueryCache.class);
                     EhcacheProperties properties = context.getBean(EhcacheProperties.class);
@@ -151,6 +274,9 @@ class EhcacheQueryCacheTest {
                     assertThat(properties.getDiskThreads()).isEqualTo(1);
                     assertThat(properties.getMaximumEntrySizeMb()).isEqualTo(2);
                     assertThat(properties.isRecordStatistics()).isFalse();
+                    QueryCacheProperties common = context.getBean(QueryCacheProperties.class);
+                    assertThat(common.isClearOnWrite()).isFalse();
+                    assertThat(context.getBean(EhcacheQueryCache.class).clearOnWrite()).isFalse();
                 });
     }
 
@@ -203,9 +329,18 @@ class EhcacheQueryCacheTest {
     }
 
     private static CacheKey key() {
+        return key("id", 7);
+    }
+
+    private static CacheKey key(String field, Object value) {
         return CacheKey.query("mysql", "master", EhcacheQueryCacheTest.class,
                 UserRow.class, UserRow.class, ParseType.select,
-                new CommandNode<>("select * from user where id=#{id}", Map.of("id", 7), ParseType.select));
+                new CommandNode<>("select * from user where " + field + "=#{value}",
+                        Map.of("value", value), ParseType.select));
+    }
+
+    private static CachePartition partition(CacheNamespace namespace, String field, Object value) {
+        return CachePartition.of(namespace, field, value).orElseThrow();
     }
 
     record UserRow(long id, String name) {

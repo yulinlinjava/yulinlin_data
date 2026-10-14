@@ -14,6 +14,9 @@ public class QueryCacheProperties {
     /** Whether the resolved query TTL contributes to the physical cache key. */
     private boolean ttlInKey = false;
 
+    /** Whether successful writes clear related ORM query-cache namespaces by default. */
+    private boolean clearOnWrite = true;
+
     public Duration getTtl() {
         return ttl;
     }
@@ -29,6 +32,14 @@ public class QueryCacheProperties {
 
     public void setTtlInKey(boolean ttlInKey) {
         this.ttlInKey = ttlInKey;
+    }
+
+    public boolean isClearOnWrite() {
+        return clearOnWrite;
+    }
+
+    public void setClearOnWrite(boolean clearOnWrite) {
+        this.clearOnWrite = clearOnWrite;
     }
 
     public Duration resolveTtl(Duration requested) {

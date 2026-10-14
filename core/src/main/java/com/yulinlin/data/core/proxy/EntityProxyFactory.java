@@ -306,7 +306,6 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
             for (var group : groups.entrySet()) {
                 ExecuteRequest request = ExecuteRequest.ofUpdate(group.getKey().type());
                 request.setSession(group.getKey().source());
-                request.invalidate();
                 List<EntityProxy> updated = new ArrayList<>();
                 for (EntityProxy proxy : group.getValue()) {
                     IUpdateWrapper wrapper = changes.route.getWrapperFactory().createUpdateWrapper(

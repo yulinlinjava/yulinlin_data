@@ -38,7 +38,8 @@ public final class CacheKey {
         CacheKeyMetadata.write(hasher, entityClass);
         CacheKeyMetadata.write(hasher, fromClass);
         CacheKeyMetadata.write(hasher, parseType);
-        CacheKeyMetadata.write(hasher, node);
+        CacheKeyMetadata.write(hasher,
+                parseType == ParseType.count ? CountCacheKeyMaterial.from(node) : node);
         Murmur3Hash128.Result hash = hasher.finish();
         return new CacheKey(hash.first(), hash.second());
     }
@@ -81,6 +82,33 @@ public final class CacheKey {
                     CacheKeyMetadata.write(hasher, entry.getKey().value());
                     hasher.putLong(entry.getValue());
                 });
+        Murmur3Hash128.Result hash = hasher.finish();
+        return new CacheKey(hash.first(), hash.second());
+    }
+
+    /** Derives a physical key for one equality-condition partition. */
+    public CacheKey scopedPartition(long globalVersion, long tableVersion, long partitionVersion) {
+        return scopedPartition(globalVersion, tableVersion, partitionVersion, null);
+    }
+
+    /** Derives a physical partition key, optionally isolating entries by resolved TTL. */
+    public CacheKey scopedPartition(long globalVersion,
+                                    long tableVersion,
+                                    long partitionVersion,
+                                    Duration ttl) {
+        Murmur3Hash128 hasher = new Murmur3Hash128();
+        hasher.putLong(high);
+        hasher.putLong(low);
+        CacheKeyMetadata.write(hasher, "partition-scope-v1");
+        hasher.putLong(globalVersion);
+        hasher.putLong(tableVersion);
+        hasher.putLong(partitionVersion);
+        if (ttl == null) {
+            hasher.putLong(Long.MIN_VALUE);
+        } else {
+            hasher.putLong(ttl.getSeconds());
+            hasher.putLong(ttl.getNano());
+        }
         Murmur3Hash128.Result hash = hasher.finish();
         return new CacheKey(hash.first(), hash.second());
     }

@@ -4,6 +4,8 @@ import com.yulinlin.data.core.anno.JoinCluster;
 import com.yulinlin.data.core.anno.JoinSession;
 import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
+import com.yulinlin.data.core.cache.CachePartition;
+import com.yulinlin.data.core.cache.CachePartitionResolver;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -46,6 +48,10 @@ public class RouteSession  extends  RegisterSession{
 
     private WriteQueueManager writeQueueManager;
 
+    /** Selected cache provider's write-clear policy; individual requests may override it. */
+    @Builder.Default
+    private boolean clearOnWrite = true;
+
     private final ThreadLocal<PendingInvalidation> pendingInvalidation =
             ThreadLocal.withInitial(PendingInvalidation::new);
     private final ThreadLocal<Integer> annotatedSessionDepth = ThreadLocal.withInitial(() -> 0);
@@ -54,10 +60,29 @@ public class RouteSession  extends  RegisterSession{
     private static final class PendingInvalidation {
         boolean all;
         final Set<CacheNamespace> namespaces = new LinkedHashSet<>();
+        final Set<CachePartition> partitions = new LinkedHashSet<>();
+        final Set<CacheNamespace> partitionTables = new LinkedHashSet<>();
+
+        void addPartition(CachePartition partition) {
+            if (!partitionTables.contains(partition.namespace())) partitions.add(partition);
+        }
+
+        void addPartitionTable(CacheNamespace namespace) {
+            partitionTables.add(namespace);
+            partitions.removeIf(partition -> partition.namespace().equals(namespace));
+        }
+
         void merge(PendingInvalidation other) {
             all |= other.all;
-            if (!all) namespaces.addAll(other.namespaces);
-            else namespaces.clear();
+            if (all) {
+                namespaces.clear();
+                partitions.clear();
+                partitionTables.clear();
+                return;
+            }
+            namespaces.addAll(other.namespaces);
+            other.partitionTables.forEach(this::addPartitionTable);
+            other.partitions.forEach(this::addPartition);
         }
         boolean empty() { return !all && namespaces.isEmpty(); }
     }
@@ -207,18 +232,34 @@ public class RouteSession  extends  RegisterSession{
         if (writeQueueManager != null) writeQueueManager.setExecutor(this::executeQueued);
     }
 
+    public void setClearOnWrite(boolean clearOnWrite) {
+        this.clearOnWrite = clearOnWrite;
+    }
+
     private PendingInvalidation resolveInvalidation(EntitySession session, ExecuteRequest<?> request) {
-        if (!request.isInvalidate()) return null;
+        if (!queryCache().available() || !request.shouldClearCache(clearOnWrite)) return null;
         PendingInvalidation pending = new PendingInvalidation();
-        pending.all = request.isInvalidateAll();
-        if (!pending.all) {
-            pending.namespaces.addAll(CacheNamespaceResolver.resolve(
-                    session.getClass(), session.group(), request.getFromClass(),
-                    request.getWrappers(), request.getCacheNamespaces()));
-            if (pending.namespaces.isEmpty()) {
-                pending.all = true;
-                log.warn("无法识别写操作的缓存命名空间，提交成功后将失效全部查询缓存；"
-                        + "自定义SQL建议调用 invalidate(\"表名\") 缩小范围");
+        pending.namespaces.addAll(CacheNamespaceResolver.resolve(
+                session.getClass(), session.group(), request.getFromClass(),
+                request.getWrappers(), request.getCacheNamespaces()));
+        if (pending.namespaces.isEmpty()) {
+            pending.all = true;
+            log.warn("无法识别写操作的缓存命名空间，提交成功后将清理全部查询缓存");
+        } else if (pending.namespaces.size() != 1 || request.getWrappers().isEmpty()) {
+            pending.namespaces.forEach(pending::addPartitionTable);
+        } else {
+            CacheNamespace namespace = pending.namespaces.iterator().next();
+            for (com.yulinlin.data.core.node.INode wrapper : request.getWrappers()) {
+                CachePartition partition = session instanceof AbstractSession abstractSession
+                        ? CachePartitionResolver.write(namespace, wrapper,
+                                field -> abstractSession.cacheColumn(request.getFromClass(), field),
+                                abstractSession::cachePartitionValue).orElse(null)
+                        : CachePartitionResolver.write(namespace, wrapper).orElse(null);
+                if (partition == null) {
+                    pending.addPartitionTable(namespace);
+                    break;
+                }
+                pending.addPartition(partition);
             }
         }
         return pending;
@@ -262,7 +303,11 @@ public class RouteSession  extends  RegisterSession{
     private void applyInvalidation(PendingInvalidation invalidation) {
         if (invalidation == null || invalidation.empty()) return;
         if (invalidation.all) queryCache().invalidateAll();
-        else queryCache().invalidate(Set.copyOf(invalidation.namespaces));
+        else {
+            queryCache().invalidate(Set.copyOf(invalidation.namespaces));
+            queryCache().invalidatePartitionTables(Set.copyOf(invalidation.partitionTables));
+            queryCache().invalidatePartitions(Set.copyOf(invalidation.partitions));
+        }
     }
 
 
@@ -456,7 +501,16 @@ public class RouteSession  extends  RegisterSession{
                 try { super.rollbackTransaction(); }
                 catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
             }
-            if (!dataFinished) discardPendingInvalidation();
+            if (!dataFinished) {
+                // A participant may already have committed before another one failed.  We cannot
+                // prove that nothing changed, so a harmless cache miss is safer than stale data.
+                try {
+                    if (commitRequested) applyPendingInvalidation();
+                    else discardPendingInvalidation();
+                } catch (Throwable cleanup) {
+                    if (failure != cleanup) failure.addSuppressed(cleanup);
+                }
+            }
         } finally {
             try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
             catch (Throwable cleanup) {

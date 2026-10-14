@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheNamespace;
+import com.yulinlin.data.core.cache.CachePartition;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCacheProperties;
@@ -25,8 +26,11 @@ import java.io.Serial;
 import java.io.Serializable;
 import java.time.Duration;
 import java.lang.reflect.Type;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.LongAdder;
 
 /** Ehcache heap + persistent disk query cache. */
@@ -39,6 +43,7 @@ public final class EhcacheQueryCache implements QueryCache {
     private static final String APPLICATION_GLOBAL_VERSION = "@application:global";
     private static final String APPLICATION_NAMESPACE_PREFIX = "@application:namespace:";
     private static final String DISK_POOL_ALIAS = "yulinlin-cache-disk";
+    private static final int MAX_PARTITION_VALUES_PER_TABLE = 4096;
 
     private final ObjectMapper objectMapper;
     private final QueryCacheProperties common;
@@ -46,6 +51,8 @@ public final class EhcacheQueryCache implements QueryCache {
     private final Cache<String, PersistentEntry> cache;
     private final Cache<String, Long> versions;
     private final Object versionLock = new Object();
+    private final Map<CacheNamespace, PartitionState> partitionStates = new HashMap<>();
+    private long partitionRuntimeToken = newRuntimeToken();
     private final long maximumEntryBytes;
     private final boolean recordStatistics;
     private final LongAdder hits = new LongAdder();
@@ -90,6 +97,11 @@ public final class EhcacheQueryCache implements QueryCache {
     }
 
     @Override
+    public boolean clearOnWrite() {
+        return common.isClearOnWrite();
+    }
+
+    @Override
     public CacheKey scope(CacheKey key, Set<CacheNamespace> namespaces) {
         return scope(key, namespaces, null);
     }
@@ -97,10 +109,26 @@ public final class EhcacheQueryCache implements QueryCache {
     @Override
     public CacheKey scope(CacheKey key, Set<CacheNamespace> namespaces, Duration ttl) {
         synchronized (versionLock) {
-            LinkedHashMap<CacheNamespace, Long> snapshot = new LinkedHashMap<>();
-            namespaces.stream().sorted().forEach(namespace ->
-                    snapshot.put(namespace, version(namespace.value())));
-            return key.scoped(version(GLOBAL_VERSION), snapshot, common.resolveKeyTtl(ttl));
+            return scopeLocked(key, namespaces, ttl);
+        }
+    }
+
+    @Override
+    public CacheKey scopePartition(CacheKey key, CachePartition partition, Duration ttl) {
+        synchronized (versionLock) {
+            PartitionState state = partitionStates.computeIfAbsent(
+                    partition.namespace(), ignored -> new PartitionState());
+            if (state.table) {
+                return scopeLocked(key, Set.of(partition.namespace()), ttl);
+            }
+            if (state.field == null) {
+                state.field = partition.field();
+            } else if (!state.field.equals(partition.field())) {
+                state.upgradeToTable();
+                return scopeLocked(key, Set.of(partition.namespace()), ttl);
+            }
+            return key.scopedPartition(partitionRuntimeToken, state.tableVersion,
+                    state.partitionVersion(partition.valueKey()), common.resolveKeyTtl(ttl));
         }
     }
 
@@ -140,9 +168,38 @@ public final class EhcacheQueryCache implements QueryCache {
     }
 
     @Override
+    public void invalidatePartitions(Set<CachePartition> partitions) {
+        synchronized (versionLock) {
+            for (CachePartition partition : partitions) {
+                PartitionState state = partitionStates.get(partition.namespace());
+                // A write must not choose the table's cache field before the first cached query does.
+                if (state == null || state.table) continue;
+                if (!state.field.equals(partition.field())) {
+                    state.upgradeToTable();
+                    continue;
+                }
+                state.increment(partition.valueKey());
+            }
+        }
+    }
+
+    @Override
+    public void invalidatePartitionTables(Set<CacheNamespace> namespaces) {
+        synchronized (versionLock) {
+            for (CacheNamespace namespace : namespaces) {
+                PartitionState state = partitionStates.get(namespace);
+                // With no partition reads yet there is nothing to invalidate or disable.
+                if (state != null && !state.table) state.rotateTable();
+            }
+        }
+    }
+
+    @Override
     public void invalidateAll() {
         synchronized (versionLock) {
             increment(GLOBAL_VERSION);
+            partitionRuntimeToken = newRuntimeToken();
+            partitionStates.clear();
         }
     }
 
@@ -239,6 +296,13 @@ public final class EhcacheQueryCache implements QueryCache {
         }
     }
 
+    private CacheKey scopeLocked(CacheKey key, Set<CacheNamespace> namespaces, Duration ttl) {
+        LinkedHashMap<CacheNamespace, Long> snapshot = new LinkedHashMap<>();
+        namespaces.stream().sorted().forEach(namespace ->
+                snapshot.put(namespace, version(namespace.value())));
+        return key.scoped(version(GLOBAL_VERSION), snapshot, common.resolveKeyTtl(ttl));
+    }
+
     @Override
     public void close() {
         manager.close();
@@ -251,6 +315,11 @@ public final class EhcacheQueryCache implements QueryCache {
 
     private void increment(String namespace) {
         versions.put(namespace, version(namespace) + 1L);
+    }
+
+    private static long newRuntimeToken() {
+        UUID value = UUID.randomUUID();
+        return value.getMostSignificantBits() ^ value.getLeastSignificantBits();
     }
 
     private void record(LongAdder counter) {
@@ -267,6 +336,36 @@ public final class EhcacheQueryCache implements QueryCache {
 
     public record Stats(long hits, long misses, long puts,
                         long oversizedEntries, long serializationFailures) {
+    }
+
+    private static final class PartitionState {
+        private final Map<String, Long> versions = new HashMap<>();
+        private String field;
+        private boolean table;
+        private long tableVersion;
+
+        private long partitionVersion(String valueKey) {
+            Long version = versions.get(valueKey);
+            if (version != null) return version;
+            if (versions.size() >= MAX_PARTITION_VALUES_PER_TABLE) rotateTable();
+            versions.put(valueKey, 0L);
+            return 0L;
+        }
+
+        private void increment(String valueKey) {
+            versions.computeIfPresent(valueKey, (ignored, version) -> version + 1L);
+        }
+
+        private void upgradeToTable() {
+            table = true;
+            field = null;
+            rotateTable();
+        }
+
+        private void rotateTable() {
+            tableVersion++;
+            versions.clear();
+        }
     }
 
     private record PersistentEntry(byte[] value, Duration ttl) implements Serializable {

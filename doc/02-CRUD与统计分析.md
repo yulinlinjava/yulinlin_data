@@ -244,6 +244,26 @@ int affected = ModelDeleteWrapper.newInstance("mysql", List.of(first, second)).e
 
 框架不默认拦截全表写入。`ModelDeleteWrapper.newInstance("mysql", DemoUser.class).execute()` 没有 WHERE，带 SET 但没有 WHERE 的更新也可能影响整表；业务入口必须先校验主键、集合和条件。execute 返回影响行数，单条更新/删除通常应检查是否为 1。
 
+### 写操作与查询缓存
+
+新增、更新和删除在数据库提交成功后，默认清理本次写入涉及的查询缓存 namespace。全局默认值如下：
+
+```yaml
+yulinlin:
+  cache:
+    clear-on-write: true
+```
+
+单次写操作可以覆盖全局配置；`clearCache`只控制 ORM 查询缓存，不会删除通过 `CacheClient` 保存的业务缓存：
+
+```java
+int affected = ModelUpdateWrapper.newInstance("mysql", patch)
+        .clearCache(false) // 本次写入不清理查询缓存；未调用时继承全局配置
+        .execute();
+```
+
+写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine` 或 `cache-ehcache` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
+
 ## 查询条件与结果组织
 
 以下为业务方法体片段，所用 DemoUser 已在上文定义：
@@ -446,7 +466,7 @@ Integer affected = update.execute();
 
 此入口走通用 update 执行路径，命令 ParseType 同为 update；不根据 SQL 首词猜测 INSERT/DELETE 类型。适用于后端支持的写语句，不作为返回查询结果的入口。DDL、驱动批量改写、受影响行数等行为仍由目标数据库/驱动决定。
 
-Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数；缓存只按 TTL 失效，写 SQL 不主动清理查询缓存。
+Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数。引入缓存 Provider 后，自定义写 SQL 默认继承 `yulinlin.cache.clear-on-write`；开启时因为无法可靠推导目标表，会在提交成功后清理全部 ORM 查询缓存，也可调用 `update.clearCache(false)` 关闭本次清理。未引入 Provider 时没有查询缓存，因此也不执行这项全量失效判定。
 
 ### 占位符与安全
 
@@ -607,7 +627,7 @@ yulinlin:
 
 `flush-size` 按当前活动队列的 Node 总数计算，不按 Wrapper 调用次数，也不按单个分组计算。总数达到阈值时会立即异步刷新当前整个队列快照，不必等待 `flush-interval`；例如多个分组各有数百个 Node，合计达到默认的 `1024` 也会立即刷新。刷新快照再按实际 `EntitySession` 实例、请求类型和 `fromClass` 统一分组；该阈值不拆分请求，也不改变事务边界。
 
-不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才执行查询缓存失效。
+不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才按 `clearCache` 规则清理查询缓存。队列合并同组请求时，任一请求显式 `clearCache(true)` 就清理；全部显式为 `false` 才不清理；其余组合继续继承全局配置。
 
 这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。队列没有硬容量上限；如果持续生产速度高于数据库写入速度，待执行和待重试 Node 会继续占用内存，应在业务入口限流并监控积压。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
 
@@ -772,13 +792,13 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 方法级注解是完整替换而不是逐项合并：上例 `REFRESH` 方法不会继承接口的 10 分钟 TTL。`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。
 
-接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；insert/update/delete 继续在事务提交成功后按解析出的表自动失效查询缓存。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
+接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；已引入缓存 Provider 时，Repository 的 insert/update/delete 按 `yulinlin.cache.clear-on-write` 决定是否在提交成功后清理解析出的表缓存。需要单次覆盖时使用写 Wrapper 或 `ExecuteRequest.clearCache(boolean)`。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
 
 ## 使用边界与排障
 
 - 更新通常跳过 null；普通 copyProperties 或自动更新代理的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
-- 查询缓存保存查询结果；标准写操作在事务提交成功后自动失效相关表命名空间，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
+- 查询缓存保存查询结果；标准写操作默认在事务提交成功后清理相关表命名空间，`clearCache(false)` 会关闭单次清理，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
 - 日期范围为空先核对列类型、格式、时区与条件，不默认归咎于数据库驱动。
 - 表达式、JOIN、JSON 路径、行锁按目标库核对；没有跨库 SQL 自动翻译器。

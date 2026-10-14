@@ -1,6 +1,8 @@
 package com.yulinlin.data.core.cache;
 
+import com.yulinlin.data.core.YulinlinCoreAutoConfig;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 import java.time.Duration;
 import java.util.List;
@@ -12,7 +14,19 @@ class QueryCachesTest {
 
     @Test
     void noProviderFallsBackToNoOpCache() {
-        assertThat(QueryCaches.single(List.of())).isSameAs(NoOpQueryCache.INSTANCE);
+        QueryCache cache = QueryCaches.single(List.of());
+
+        assertThat(cache).isSameAs(NoOpQueryCache.INSTANCE);
+        assertThat(cache.available()).isFalse();
+        assertThat(cache.clearOnWrite()).isFalse();
+    }
+
+    @Test
+    void coreDoesNotEnableProviderOnlyCacheProperties() {
+        EnableConfigurationProperties annotation = YulinlinCoreAutoConfig.class
+                .getAnnotation(EnableConfigurationProperties.class);
+
+        assertThat(annotation.value()).doesNotContain(QueryCacheProperties.class);
     }
 
     @Test

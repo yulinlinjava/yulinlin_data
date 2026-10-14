@@ -811,6 +811,26 @@ int affected = ModelDeleteWrapper.newInstance("mysql", List.of(first, second)).e
 
 框架不默认拦截全表写入。`ModelDeleteWrapper.newInstance("mysql", DemoUser.class).execute()` 没有 WHERE，带 SET 但没有 WHERE 的更新也可能影响整表；业务入口必须先校验主键、集合和条件。execute 返回影响行数，单条更新/删除通常应检查是否为 1。
 
+#### 写操作与查询缓存
+
+新增、更新和删除在数据库提交成功后，默认清理本次写入涉及的查询缓存 namespace。全局默认值如下：
+
+```yaml
+yulinlin:
+  cache:
+    clear-on-write: true
+```
+
+单次写操作可以覆盖全局配置；`clearCache`只控制 ORM 查询缓存，不会删除通过 `CacheClient` 保存的业务缓存：
+
+```java
+int affected = ModelUpdateWrapper.newInstance("mysql", patch)
+        .clearCache(false) // 本次写入不清理查询缓存；未调用时继承全局配置
+        .execute();
+```
+
+写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine` 或 `cache-ehcache` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
+
 ### 查询条件与结果组织
 
 以下为业务方法体片段，所用 DemoUser 已在上文定义：
@@ -1013,7 +1033,7 @@ Integer affected = update.execute();
 
 此入口走通用 update 执行路径，命令 ParseType 同为 update；不根据 SQL 首词猜测 INSERT/DELETE 类型。适用于后端支持的写语句，不作为返回查询结果的入口。DDL、驱动批量改写、受影响行数等行为仍由目标数据库/驱动决定。
 
-Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数；缓存只按 TTL 失效，写 SQL 不主动清理查询缓存。
+Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数。引入缓存 Provider 后，自定义写 SQL 默认继承 `yulinlin.cache.clear-on-write`；开启时因为无法可靠推导目标表，会在提交成功后清理全部 ORM 查询缓存，也可调用 `update.clearCache(false)` 关闭本次清理。未引入 Provider 时没有查询缓存，因此也不执行这项全量失效判定。
 
 #### 占位符与安全
 
@@ -1174,7 +1194,7 @@ yulinlin:
 
 `flush-size` 按当前活动队列的 Node 总数计算，不按 Wrapper 调用次数，也不按单个分组计算。总数达到阈值时会立即异步刷新当前整个队列快照，不必等待 `flush-interval`；例如多个分组各有数百个 Node，合计达到默认的 `1024` 也会立即刷新。刷新快照再按实际 `EntitySession` 实例、请求类型和 `fromClass` 统一分组；该阈值不拆分请求，也不改变事务边界。
 
-不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才执行查询缓存失效。
+不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才按 `clearCache` 规则清理查询缓存。队列合并同组请求时，任一请求显式 `clearCache(true)` 就清理；全部显式为 `false` 才不清理；其余组合继续继承全局配置。
 
 这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。队列没有硬容量上限；如果持续生产速度高于数据库写入速度，待执行和待重试 Node 会继续占用内存，应在业务入口限流并监控积压。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
 
@@ -1339,13 +1359,13 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 方法级注解是完整替换而不是逐项合并：上例 `REFRESH` 方法不会继承接口的 10 分钟 TTL。`ttl = -1`是默认值，表示使用 `yulinlin.cache.ttl`；显式 TTL 必须为正数。默认 `yulinlin.cache.ttl-in-key=false`，不同 TTL 的相同查询会复用 Key；设为 `true`才按 TTL 隔离。`CACHE_ONLY`只读已有缓存，未命中抛出 `CacheMissException`。未引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`安全退化为查询数据源但不保存，`CACHE_ONLY`仍然报未命中。
 
-接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；insert/update/delete 继续在事务提交成功后按解析出的表自动失效查询缓存。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
+接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；已引入缓存 Provider 时，Repository 的 insert/update/delete 按 `yulinlin.cache.clear-on-write` 决定是否在提交成功后清理解析出的表缓存。需要单次覆盖时使用写 Wrapper 或 `ExecuteRequest.clearCache(boolean)`。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
 
 ### 使用边界与排障
 
 - 更新通常跳过 null；普通 copyProperties 或自动更新代理的 null 跳过不等于数据库清列。
 - insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
-- 查询缓存保存查询结果；标准写操作在事务提交成功后自动失效相关表命名空间，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
+- 查询缓存保存查询结果；标准写操作默认在事务提交成功后清理相关表命名空间，`clearCache(false)` 会关闭单次清理，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
 - selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
 - 日期范围为空先核对列类型、格式、时区与条件，不默认归咎于数据库驱动。
 - 表达式、JOIN、JSON 路径、行锁按目标库核对；没有跨库 SQL 自动翻译器。
@@ -2590,12 +2610,16 @@ yulinlin:
   cache:
     ttl: 10m
     ttl-in-key: false
+    clear-on-write: true
 ```
 
 | 配置 | 默认值 | 作用 |
 | --- | --- | --- |
 | `ttl` | `10m` | 查询缓存默认有效期 |
 | `ttl-in-key` | `false` | TTL 是否参与 ORM 查询缓存 Key；不影响 `CacheClient` 业务缓存 |
+| `clear-on-write` | `true` | 成功写入后是否默认清理相关 ORM 查询缓存 |
+
+`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存。`QueryCacheProperties` 只由 `cache-caffeine` 或 `cache-ehcache` 的自动配置启用；未引入 Provider 时不存在查询缓存，该配置不会生效，写路径也不执行 namespace 解析和失效处理。
 
 默认关闭时，只要查询条件、数据源和 namespace 版本相同，不同 TTL 的查询就会复用同一个缓存条目。已有条目被命中时不会修改其过期时间；`REFRESH`或未命中重新写入时，才使用本次请求的 TTL。这样可以减少重复数据并提高缓存复用率。
 
@@ -2694,15 +2718,15 @@ yulinlin:
 | --- | --- | --- |
 | `directory` | `data/cache` | 磁盘缓存目录，同一时间只能由一个 CacheManager 占用 |
 | `heap-entries` | `10000` | JVM 堆内热点条目数，ORM 查询与 `CacheClient` 共用 |
-| `offheap-size-mb` | `0` | 可选堆外中间层；`0` 表示关闭，适合降低大量缓存对象对 GC 的影响 |
-| `disk-size-mb` | `1024` | 磁盘层容量上限 |
+| `offheap-size-mb` | `0` | JVM 直接内存中的可选中间层；`0` 表示关闭。可降低大缓存对 GC 的影响，速度通常快于磁盘，但会增加序列化、内存复制和进程总内存占用 |
+| `disk-size-mb` | `1024` | 整个 Ehcache 磁盘层的容量上限，不是单条缓存上限；空间满后淘汰旧条目。Ehcache 磁盘资源池要求设置有限容量，不提供无限增长模式 |
 | `persistent` | `true` | 是否在正常关闭并重启后保留磁盘缓存 |
 | `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
 | `disk-threads` | `2` | Ehcache 磁盘层固定工作线程数；本地 SSD 通常使用 `2` 到 `4` |
 | `maximum-entry-size-mb` | `16` | 单条 JSON 序列化结果上限，超出后记录并跳过，防止一个大列表挤占缓存 |
 | `record-statistics` | `false` | 是否记录框架层命中、未命中、写入、超大条目和序列化失败计数；需要观测时显式开启 |
 
-正常关闭时框架调用 `close()`。即使 `persistent: true`，缓存仍应被视为可丢失数据；缓存损坏或反序列化失败会删除对应项并回源查询。启用堆外层会增加一次序列化/复制成本，只在缓存较大或 GC 压力明显时开启。
+正常关闭时框架调用 `close()`。即使 `persistent: true`，缓存仍应被视为可丢失数据；缓存损坏或反序列化失败会删除对应项并回源查询。缓存量不大时保持 `offheap-size-mb: 0` 即可；只有缓存较大或 GC 压力明显时才建议从 `256` 或 `512` MB 开始启用。容器内存预算必须同时包含 Heap、Off-Heap、线程栈和 JVM 自身开销。
 
 需要监控时先配置 `record-statistics: true`，再直接注入具体实现读取和重置统计：
 
@@ -2838,11 +2862,13 @@ MurmurHash3-x64-128(
 
 `CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
 
+分页内部的 `count` 使用独立的逻辑 Key：普通查询只保留 `from/join + where`，因此不同页码、页大小、排序、返回字段、高亮和行锁会复用同一个总数；聚合查询还会保留 `aggregations + metrics + having`，避免不同分组统计误命中。普通列表 Key 仍然包含分页和排序。未知的第三方 Wrapper 不做字段裁剪，继续使用完整节点生成 Key，以正确性优先。
+
 数据源 group 必须进入 Key。同一个实体和条件在 `mysql`、`pgsql` 或其他 group 中不会串缓存；同一个逻辑 group 下的负载均衡节点可以共享逻辑 Key。
 
 ### 失效和一致性
 
-缓存始终受 TTL 约束。标准 `insert/update/delete` 默认在提交成功后自动失效相关查询缓存，无需调用 `invalidate()`：
+缓存始终受 TTL 约束。引入缓存 Provider 后，标准 `insert/update/delete` 未指定策略时继承 `yulinlin.cache.clear-on-write`，默认在提交成功后清理相关查询缓存：
 
 ```java
 int affected = ModelUpdateWrapper
@@ -2852,19 +2878,19 @@ int affected = ModelUpdateWrapper
 int deleted = ModelDeleteWrapper
         .newInstance("mysql", SysUser.class)
         .eq("status", 0)
-        .invalidate("sys_user", "sys_user_role") // 显式补充依赖表
+        .clearCache(false) // 明确接受 TTL 窗口内的旧结果时，关闭本次清理
         .execute();
 ```
 
-需要补充依赖或扩大范围时使用：
+写操作只提供一个请求级 API：
 
 | API | 行为 |
 | --- | --- |
-| 默认行为 / `invalidate()` | 从 `INode`、`From/Join/Store`、`@JoinTable`、`@JoinTableList` 自动提取本次写入涉及的表并失效 |
-| `invalidate("table", ...)` | 自动提取之外，再显式加入表名；自定义写 SQL 应使用它 |
-| `invalidateAll()` | 失效当前缓存 Provider 中的全部查询 |
+| 不调用 `clearCache(...)` | 继承 Provider 配置 `yulinlin.cache.clear-on-write` |
+| `clearCache(true)` | 本次写入提交成功后清理相关查询缓存，覆盖全局 `false` |
+| `clearCache(false)` | 本次写入不清理查询缓存，覆盖全局 `true` |
 
-自定义 SQL 没有实体或节点表信息时，框架无法可靠猜测 SQL 涉及的表，默认退化为全部查询缓存失效并输出警告。显式提供表名可以缩小范围：
+实体写入会从 `INode`、From/Join/Store、`@JoinTable` 和 `@JoinTableList` 提取相关表。自定义 SQL 没有实体或节点表信息时，框架无法可靠猜测涉及的表；启用清理时会退化为清理全部 ORM 查询缓存并输出警告：
 
 ```java
 ExecuteRequest<Object> write = ExecuteRequest.newInstance(
@@ -2872,18 +2898,20 @@ ExecuteRequest<Object> write = ExecuteRequest.newInstance(
         Map.of("status", 1, "id", 7)
 );
 write.setSession("mysql");
-int affected = write.invalidate("sys_user").execute();
+int affected = write.clearCache(true).execute();
 ```
 
 自定义查询若没有带 `@JoinTable` 的 `fromClass`，可用 `cacheNamespaces("sys_user", "sys_role")` 声明依赖表。这样任一表失效时，该复杂 SQL、JOIN 或聚合结果都会同时失效。
+
+延迟写队列在真正写入成功后才清理，不在入队时清理。相同 `Session + 操作类型 + fromClass` 的请求合并时使用三态规则：任一请求显式 `true`，合并组就是 `true`；全部显式 `false`，合并组才是 `false`；包含未指定且没有 `true` 时保持未指定，执行时继承全局配置。
 
 失效采用“命名空间版本号”，不会遍历百万级 Key：查询 Key 会携带 `Session 类型 + group + 表名` 的版本快照，写入成功后只递增相关版本。旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 会持久化版本号，应用重启后仍不会重新命中已经失效的旧数据。
 
 事务规则：
 
-- 普通单次写入在底层 Session 提交成功后失效。
-- `RouteSession` 多数据源事务会合并重复表名，只在最外层提交成功后统一失效。
-- Spring 事务在 `afterCommit` 阶段失效；回滚或提交失败不失效。
+- 普通单次写入在底层 Session 提交成功后按 `clearCache` 策略清理。
+- `RouteSession` 多数据源事务会合并重复表名，只在最外层提交成功后统一清理。
+- Spring 事务在 `afterCommit` 阶段清理；回滚或提交失败不清理。
 - 查询回源期间若并发发生更新，旧查询只能写入旧版本 Key，不能重新污染新版本缓存。
 
 即使有主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
@@ -2902,6 +2930,8 @@ Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化
 | 只引入 `cache-caffeine` | 启用内存缓存 |
 | 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
 | 同时引入两个实现 | 启动失败并报告多个缓存 Provider |
+
+第一种情况下不会创建 `QueryCacheProperties`，也不会因 `clearCache(true)` 解析表 namespace。这不是“空缓存执行一遍失效”，而是写路径直接跳过整套缓存失效逻辑。
 
 手动注册新的 Session 时，`RouteSession.registerSession` 会把当前缓存 Provider 注入 Session。第三方数据源继承 `AbstractSession` 即可获得相同行为；直接实现 `EntitySession` 时，需要实现 `setQueryCache` 才能接入查询缓存。
 
@@ -3179,10 +3209,11 @@ UserEntity findByUsernameEq(String username);
 ```
 
 - 只缓存价值明确、读多写少且可接受 TTL 窗口的查询。不是每个 Repository 方法都应该加缓存。
-- 标准 insert/update/delete 在事务提交成功后按表 namespace 使缓存失效；回滚不发布失效。
-- 自定义 SQL 或跨表投影无法完整推导依赖时，通过 `namespaces` 补充表命名空间。
+- 引入缓存 Provider 后，`yulinlin.cache.clear-on-write`默认 `true`；标准 insert/update/delete 在事务提交成功后按表 namespace 清理缓存，回滚不清理。
+- 写 Wrapper 和 `ExecuteRequest` 只使用 `clearCache(boolean)` 覆盖单次行为。一般保持默认；只有明确接受 TTL 窗口内旧结果时才使用 `clearCache(false)`。
+- 自定义查询或跨表投影无法完整推导依赖时，通过 `@JoinCache.namespaces` 或查询请求的 `cacheNamespaces(...)` 补充表命名空间；自定义写 SQL 开启清理时会退化为清理全部 ORM 查询缓存。
 - 事务内必须读到最新数据的查询使用 `CacheMode.NONE`；强制回源并重写缓存使用 `CacheMode.REFRESH`。
-- 未引入缓存 Provider 时，普通查询安全回源数据库。一个应用只选 Caffeine 或 Ehcache 之一，不要同时引入。
+- 未引入缓存 Provider 时，普通查询安全回源数据库，`QueryCacheProperties` 不会启用，写路径也不解析 namespace 或执行失效。一个应用只选 Caffeine 或 Ehcache 之一，不要同时引入。
 - 默认 TTL 放在 `yulinlin.cache.ttl`，默认不让 TTL 参与 Key。监控统计默认关闭，只在确实需要观测时开启。
 
 ### 多数据源规范
@@ -3243,7 +3274,8 @@ public int importUsers(List<UserEntity> users) {
 | Controller 直接调 Wrapper | 协议层与数据层耦合，无法统一事务 | Controller 只调 Service |
 | 在 Repository 方法开事务，返回后再 setter | Repository 返回时事务可能已结束 | Service 上组合 `@Transactional + @JoinSync` |
 | 全局开启自动更新，却大量无事务查询 | 需要代理的查询会明确报“请开启事务” | 默认关闭，在写业务方法显式 `@JoinSync` |
-| 将 `@JoinCache` 加到写方法 | 缓存注解是查询策略，不是写入失效开关 | 依赖标准写入的提交后 namespace 失效 |
+| 将 `@JoinCache` 加到写方法 | 缓存注解是查询策略，不是写入清理开关 | 保留全局 `clear-on-write`，或在写 Wrapper 上调用 `clearCache(boolean)` |
+| 在写 Wrapper 上调用旧 `cache/invalidate` API | 写入不缓存结果，旧命名容易混淆查询策略 | 统一使用 `clearCache(boolean)` |
 | 多 group 不配默认值，也不显式路由 | 框架无法判断业务数据库 | 配置 `default-group` 或使用 group/`@JoinSession` |
 | 在事务中启动 `CompletableFuture` 修改同一实体 | ThreadLocal、连接和代理不自动跨线程 | 同一事务同步完成；异步任务自建业务边界 |
 | 用 null 期望清空数据库列 | 普通更新和自动更新都跳过 null | 参数化自定义 SQL |
@@ -3256,7 +3288,7 @@ public int importUsers(List<UserEntity> users) {
 - [ ] 使用 `@JoinSync` 的查询、setter 和提交处在同一线程与事务。
 - [ ] 实体具有无参构造、完整主键映射和可预期的列名；非列字段明确 `exist=false`。
 - [ ] 更新和删除校验主键/条件及影响行数，已考虑 null 跳过语义。
-- [ ] 缓存仅用于查询，TTL、namespace 和一致性要求已明确，应用未同时引入两个 Provider。
+- [ ] 缓存仅用于查询，TTL、namespace、`clear-on-write` 默认值和单次覆盖策略已明确，应用未同时引入两个 Provider。
 - [ ] 多数据源项目设置了默认 group 或显式路由，原始 SQL 已按目标方言审查。
 - [ ] 多连接批处理已在真实驱动、连接池和数据库上压测；SQLite 未强行并发写入。
 - [ ] 每张自动表只有一个 Schema 拥有者，生产字段改名和类型变更都有可回滚迁移脚本。

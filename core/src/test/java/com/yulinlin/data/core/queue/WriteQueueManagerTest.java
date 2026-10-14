@@ -11,7 +11,9 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
@@ -117,6 +119,35 @@ class WriteQueueManagerTest {
             assertThat(queue.flush()).isEqualTo(2);
             assertThat(operations).containsExactly(RequestType.insert, RequestType.update);
             assertThat(queue.pending()).isZero();
+        }
+    }
+
+    @Test
+    void mergedGroupsCombineClearCacheOverridesWithoutLosingTheGlobalDefault() {
+        EntitySession session = session();
+        Map<RequestType, Boolean> clearCacheByOperation = new EnumMap<>(RequestType.class);
+
+        try (WriteQueueManager queue = queue(0, (actualSession, request) -> {
+            clearCacheByOperation.put(request.getRequestType(), request.getClearCache());
+            return request.getWrappers().size();
+        })) {
+            // Explicit false from every request keeps the whole group disabled.
+            queue.submit(session, ExecuteRequest.ofInsert(User.class).addRequest(node()).clearCache(false));
+            queue.submit(session, ExecuteRequest.ofInsert(User.class).addRequest(node()).clearCache(false));
+
+            // A null request keeps the merged group on the global setting instead of forcing false.
+            queue.submit(session, ExecuteRequest.ofUpdate(User.class).addRequest(node()));
+            queue.submit(session, ExecuteRequest.ofUpdate(User.class).addRequest(node()).clearCache(false));
+
+            // Any explicit true makes the merged group clear its related cache.
+            queue.submit(session, ExecuteRequest.ofDelete(User.class).addRequest(node()).clearCache(false));
+            queue.submit(session, ExecuteRequest.ofDelete(User.class).addRequest(node()).clearCache(true));
+
+            assertThat(queue.flush()).isEqualTo(6);
+            assertThat(clearCacheByOperation)
+                    .containsEntry(RequestType.insert, false)
+                    .containsEntry(RequestType.update, null)
+                    .containsEntry(RequestType.delete, true);
         }
     }
 

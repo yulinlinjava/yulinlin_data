@@ -2,6 +2,7 @@ package com.yulinlin.data.cache.caffeine;
 
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.cache.CacheNamespace;
+import com.yulinlin.data.core.cache.CachePartition;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.CacheClient;
 import com.yulinlin.data.core.cache.DefaultCacheClient;
@@ -116,6 +117,114 @@ class CaffeineQueryCacheTest {
     }
 
     @Test
+    void invalidatesOnlyOneValueOfALearnedEqualityField() {
+        CaffeineQueryCache cache = new CaffeineQueryCache(
+                new QueryCacheProperties(), new CaffeineCacheProperties());
+        CacheNamespace users = CacheNamespace.of(CaffeineQueryCacheTest.class, "mysql", "users");
+        CachePartition alice = partition(users, "username", "alice");
+        CachePartition bob = partition(users, "username", "bob");
+        CacheValueType type = CacheValueType.scalar(String.class);
+        CacheKey aliceLogical = key("username", "alice");
+        CacheKey bobLogical = key("username", "bob");
+
+        cache.put(cache.scopePartition(aliceLogical, alice), type, "Alice");
+        cache.put(cache.scopePartition(bobLogical, bob), type, "Bob");
+
+        // A write still expires ordinary list/count caches, but only Alice's equality bucket.
+        cache.invalidate(Set.of(users));
+        cache.invalidatePartitions(Set.of(alice));
+
+        assertThat(cache.get(cache.scopePartition(aliceLogical, alice), type).hit()).isFalse();
+        assertThat(cache.get(cache.scopePartition(bobLogical, bob), type).value()).isEqualTo("Bob");
+    }
+
+    @Test
+    void secondEqualityFieldPermanentlyFallsBackToTableScoping() {
+        CaffeineQueryCache cache = new CaffeineQueryCache(
+                new QueryCacheProperties(), new CaffeineCacheProperties());
+        CacheNamespace users = CacheNamespace.of(CaffeineQueryCacheTest.class, "mysql", "users");
+        CachePartition username = partition(users, "username", "alice");
+        CachePartition email = partition(users, "email", "alice@example.com");
+        CacheValueType type = CacheValueType.scalar(String.class);
+        CacheKey usernameLogical = key("username", "alice");
+        CacheKey firstUsernameKey = cache.scopePartition(usernameLogical, username);
+        cache.put(firstUsernameKey, type, "partitioned");
+
+        cache.scopePartition(key("email", "alice@example.com"), email);
+        CacheKey tableScopedUsername = cache.scopePartition(usernameLogical, username);
+
+        assertThat(tableScopedUsername).isNotEqualTo(firstUsernameKey);
+        assertThat(cache.get(tableScopedUsername, type).hit()).isFalse();
+        cache.put(tableScopedUsername, type, "table");
+        cache.invalidate(Set.of(users));
+        assertThat(cache.get(cache.scopePartition(usernameLogical, username), type).hit()).isFalse();
+    }
+
+    @Test
+    void writesDoNotLearnAFieldButAMismatchedWriteUpgradesALearnedField() {
+        CaffeineQueryCache cache = new CaffeineQueryCache(
+                new QueryCacheProperties(), new CaffeineCacheProperties());
+        CacheNamespace users = CacheNamespace.of(CaffeineQueryCacheTest.class, "mysql", "users");
+        CachePartition username = partition(users, "username", "alice");
+        CachePartition email = partition(users, "email", "alice@example.com");
+        CacheValueType type = CacheValueType.scalar(String.class);
+        CacheKey usernameLogical = key("username", "alice");
+
+        cache.invalidatePartitions(Set.of(email));
+        CacheKey learnedUsernameKey = cache.scopePartition(usernameLogical, username);
+        cache.put(learnedUsernameKey, type, "Alice");
+
+        cache.invalidatePartitions(Set.of(email));
+
+        CacheKey tableScopedUsername = cache.scopePartition(usernameLogical, username);
+        assertThat(tableScopedUsername).isNotEqualTo(learnedUsernameKey);
+        assertThat(cache.get(tableScopedUsername, type).hit()).isFalse();
+    }
+
+    @Test
+    void tablePartitionInvalidationKeepsTheLearnedSingleField() {
+        CaffeineQueryCache cache = new CaffeineQueryCache(
+                new QueryCacheProperties(), new CaffeineCacheProperties());
+        CacheNamespace users = CacheNamespace.of(CaffeineQueryCacheTest.class, "mysql", "users");
+        CachePartition alice = partition(users, "username", "alice");
+        CachePartition bob = partition(users, "username", "bob");
+        CacheValueType type = CacheValueType.scalar(String.class);
+        CacheKey aliceLogical = key("username", "alice");
+        CacheKey bobLogical = key("username", "bob");
+        cache.put(cache.scopePartition(aliceLogical, alice), type, "Alice");
+        cache.put(cache.scopePartition(bobLogical, bob), type, "Bob");
+
+        cache.invalidatePartitionTables(Set.of(users));
+
+        assertThat(cache.get(cache.scopePartition(aliceLogical, alice), type).hit()).isFalse();
+        assertThat(cache.get(cache.scopePartition(bobLogical, bob), type).hit()).isFalse();
+
+        cache.put(cache.scopePartition(aliceLogical, alice), type, "Alice2");
+        cache.put(cache.scopePartition(bobLogical, bob), type, "Bob2");
+        cache.invalidatePartitions(Set.of(alice));
+        assertThat(cache.get(cache.scopePartition(aliceLogical, alice), type).hit()).isFalse();
+        assertThat(cache.get(cache.scopePartition(bobLogical, bob), type).value()).isEqualTo("Bob2");
+    }
+
+    @Test
+    void excessiveDistinctValuesRotateTheTablePartitionVersion() {
+        CaffeineQueryCache cache = new CaffeineQueryCache(
+                new QueryCacheProperties(), new CaffeineCacheProperties());
+        CacheNamespace users = CacheNamespace.of(CaffeineQueryCacheTest.class, "mysql", "users");
+        CacheValueType type = CacheValueType.scalar(String.class);
+        CachePartition first = partition(users, "username", "user-0");
+        CacheKey firstLogical = key("username", "user-0");
+        cache.put(cache.scopePartition(firstLogical, first), type, "first");
+
+        for (int index = 1; index <= 4096; index++) {
+            CachePartition next = partition(users, "username", "user-" + index);
+            cache.scopePartition(key("username", "user-" + index), next);
+        }
+
+        assertThat(cache.get(cache.scopePartition(firstLogical, first), type).hit()).isFalse();
+    }
+
+    @Test
     void publicCacheApiIsIndependentFromQueryInvalidation() {
         QueryCacheProperties common = new QueryCacheProperties();
         CaffeineQueryCache provider = new CaffeineQueryCache(common, new CaffeineCacheProperties());
@@ -142,7 +251,8 @@ class CaffeineQueryCacheTest {
                         "yulinlin.cache.caffeine.use-system-scheduler=true",
                         "yulinlin.cache.caffeine.executor=direct",
                         "yulinlin.cache.caffeine.record-stats=false",
-                        "yulinlin.cache.ttl-in-key=true")
+                        "yulinlin.cache.ttl-in-key=true",
+                        "yulinlin.cache.clear-on-write=false")
                 .run(context -> {
                     assertThat(context).hasSingleBean(CaffeineQueryCache.class);
                     CaffeineCacheProperties properties = context.getBean(CaffeineCacheProperties.class);
@@ -154,7 +264,10 @@ class CaffeineQueryCacheTest {
                     assertThat(properties.getExecutor())
                             .isEqualTo(CaffeineCacheProperties.ExecutorMode.DIRECT);
                     assertThat(properties.isRecordStats()).isFalse();
-                    assertThat(context.getBean(QueryCacheProperties.class).isTtlInKey()).isTrue();
+                    QueryCacheProperties common = context.getBean(QueryCacheProperties.class);
+                    assertThat(common.isTtlInKey()).isTrue();
+                    assertThat(common.isClearOnWrite()).isFalse();
+                    assertThat(context.getBean(CaffeineQueryCache.class).clearOnWrite()).isFalse();
                 });
     }
 
@@ -199,5 +312,16 @@ class CaffeineQueryCacheTest {
         return CacheKey.query("mysql", "master", CaffeineQueryCacheTest.class,
                 String.class, String.class, ParseType.select,
                 new CommandNode<>("select #{id}", Map.of("id", 1), ParseType.select));
+    }
+
+    private static CacheKey key(String field, Object value) {
+        return CacheKey.query("mysql", "master", CaffeineQueryCacheTest.class,
+                String.class, String.class, ParseType.select,
+                new CommandNode<>("select * from users where " + field + " = #{value}",
+                        Map.of("value", value), ParseType.select));
+    }
+
+    private static CachePartition partition(CacheNamespace namespace, String field, Object value) {
+        return CachePartition.of(namespace, field, value).orElseThrow();
     }
 }

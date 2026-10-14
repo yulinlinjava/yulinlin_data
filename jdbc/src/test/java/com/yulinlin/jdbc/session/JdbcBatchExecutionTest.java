@@ -16,6 +16,7 @@ import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -182,8 +183,16 @@ class JdbcBatchExecutionTest {
     }
 
     @Test void invalidConfigurationAndActiveTransactionReconfigurationAreRejected() throws Exception {
-        assertThat(new JdbcSessionProperties().getExecuteBatchSize()).isEqualTo(256);
-        assertThatThrownBy(() -> new JdbcSessionProperties().setExecuteBatchSize(0)).isInstanceOf(IllegalArgumentException.class);
+        JdbcSessionProperties defaults = new JdbcSessionProperties();
+        assertThat(defaults.getExecuteBatchSize()).isEqualTo(256);
+        assertThat(defaults.isLogParams()).isFalse();
+        assertThat(defaults.getMaxParamLength()).isEqualTo(256);
+        assertThat(defaults.getSlowSqlThreshold()).isEqualTo(Duration.ZERO);
+        assertThatThrownBy(() -> defaults.setExecuteBatchSize(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> defaults.setMaxParamLength(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> defaults.setSlowSqlThreshold(Duration.ofMillis(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> defaults.setSlowSqlThreshold(null)).isInstanceOf(IllegalArgumentException.class);
         Database db = new Database(); RecordingSession session = session(db, 0);
         assertThatThrownBy(() -> session.setExecuteBatchSize(-1)).isInstanceOf(IllegalArgumentException.class);
         JdbcSessionProperties properties = new JdbcSessionProperties(); properties.setExecuteBatchSize(64); properties.setParallelConnections(2);

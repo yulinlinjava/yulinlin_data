@@ -58,6 +58,49 @@ class WriteQueueManagerTest {
     }
 
     @Test
+    void scheduledFlushStillExecutesPendingNodes() throws Exception {
+        EntitySession session = session();
+        CountDownLatch executed = new CountDownLatch(1);
+
+        DataProperties.QueueProperties properties = new DataProperties.QueueProperties();
+        properties.setFlushInterval(Duration.ofMillis(20));
+        properties.setRetryCount(0);
+        properties.setConcurrency(1);
+        properties.setFlushSize(10_000);
+        try (WriteQueueManager queue = new WriteQueueManager(properties)) {
+            queue.setExecutor((actualSession, request) -> {
+                executed.countDown();
+                return request.getWrappers().size();
+            });
+            queue.submit(session, ExecuteRequest.ofInsert(User.class).addRequest(node()));
+
+            assertThat(executed.await(2, TimeUnit.SECONDS)).isTrue();
+            queue.flush(); // Wait for the timer-triggered flush if the executor has not returned yet.
+            assertThat(queue.pending()).isZero();
+        }
+    }
+
+    @Test
+    void closeStillFlushesTheLastPendingSnapshot() {
+        EntitySession session = session();
+        AtomicInteger executions = new AtomicInteger();
+        WriteQueueManager queue = queue(0, (actualSession, request) -> {
+            executions.incrementAndGet();
+            return request.getWrappers().size();
+        });
+        try {
+            queue.submit(session, ExecuteRequest.ofInsert(User.class).addRequest(node()));
+
+            queue.close();
+
+            assertThat(executions).hasValue(1);
+            assertThat(queue.pending()).isZero();
+        } finally {
+            queue.close();
+        }
+    }
+
+    @Test
     void flushGloballyGroupsBySessionOperationAndFromClass() {
         EntitySession session = session();
         INode first = node();

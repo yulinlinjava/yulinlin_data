@@ -32,6 +32,8 @@ import com.yulinlin.data.lang.util.Page;
 import com.yulinlin.data.lang.util.SegmentLock;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import lombok.SneakyThrows;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
@@ -45,6 +47,8 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public abstract class AbstractSession extends LoadBalanceSession implements EntitySession {
+
+    private static final Logger CACHE_LOG = LoggerFactory.getLogger("com.yulinlin.data.cache.QueryCache");
 
     private EntitySessionProperties sessionProperties = new EntitySessionProperties();
 
@@ -214,15 +218,15 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     @SneakyThrows
     protected <E> E transaction(Callable<E> callable,ParseResult result){
-        long x = System.currentTimeMillis();
+        long started = System.nanoTime();
 
         try {
             E val =  transaction(callable);
 
-            logManager.success(System.currentTimeMillis() - x, result, this);
+            if (logManager != null) logManager.success(elapsedMillis(started), result, this);
             return  val;
         }catch (Exception e){
-            logManager.error(e, result, this);
+            if (logManager != null) logManager.error(elapsedMillis(started), e, result, this);
             throw e;
         }
 
@@ -314,17 +318,19 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             try {
                 for (List<ParseResult> results : lists) {
                     if (results.isEmpty()) continue;
-                    long started = System.currentTimeMillis();
+                    long started = System.nanoTime();
                     if (parallel && isOpenAsync(request, results)) {
                         CompletableFuture<Integer> future = executeUpdateAsync(results, requestType)
-                                .whenComplete((count, error) -> logBatch(results, started, error));
+                                .whenComplete((count, error) -> logBatch(
+                                        results, started, count == null ? 0 : count, unwrapCompletion(error)));
                         futures.add(future);
                     } else {
                         try {
-                            total += executeUpdate(results, requestType);
-                            logBatch(results, started, null);
+                            int affected = executeUpdate(results, requestType);
+                            total += affected;
+                            logBatch(results, started, affected, null);
                         } catch (Throwable error) {
-                            logBatch(results, started, error);
+                            logBatch(results, started, 0, error);
                             throw error;
                         }
                     }
@@ -379,6 +385,15 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                         ? "行锁查询不能从缓存获取，CACHE_ONLY 无法执行"
                         : "事务内查询不会访问全局缓存，CACHE_ONLY 无法执行");
             }
+            cacheBypassDebug(result, lockQuery ? "lock-query" : "transaction");
+            return callable.get();
+        }
+
+        if (!cacheManager.available()) {
+            if (mode == CacheMode.CACHE_ONLY) {
+                throw new CacheMissException("未配置查询缓存提供者，CACHE_ONLY 无法执行");
+            }
+            cacheBypassDebug(result, "no-provider");
             return callable.get();
         }
 
@@ -405,11 +420,16 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         if (mode == CacheMode.REFRESH) {
             E value = callable.get();
             cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
+            cacheDebug("REFRESH", cacheKey, result);
             return value;
         }
 
         CacheLookup lookup = cacheManager.get(cacheKey, valueType);
-        if (lookup.hit()) return (E) lookup.value();
+        if (lookup.hit()) {
+            cacheDebug("HIT", cacheKey, result);
+            return (E) lookup.value();
+        }
+        cacheDebug("MISS", cacheKey, result);
         if (mode == CacheMode.CACHE_ONLY) {
             throw new CacheMissException("缓存未命中，CACHE_ONLY 不允许访问数据源: " + cacheKey.value());
         }
@@ -418,9 +438,13 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         cacheLock.lock();
         try {
             lookup = cacheManager.get(cacheKey, valueType);
-            if (lookup.hit()) return (E) lookup.value();
+            if (lookup.hit()) {
+                cacheDebug("HIT_AFTER_WAIT", cacheKey, result);
+                return (E) lookup.value();
+            }
             E value = callable.get();
             cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
+            cacheDebug("PUT", cacheKey, result);
             return value;
         } finally {
             cacheLock.unlock();
@@ -528,13 +552,44 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     @Override public void setRollbackOnly() { transactions.setRollbackOnly(); }
     @Override public boolean isRollbackOnly() { return transactions.isRollbackOnly(); }
 
-    private void logBatch(List<ParseResult> results, long started, Throwable error) {
+    private void logBatch(List<ParseResult> results, long started, int affected, Throwable error) {
         if (logManager == null) return;
-        long time = (System.currentTimeMillis() - started) / results.size();
-        for (ParseResult result : results) {
-            if (error == null) logManager.success(time, result, this);
-            else logManager.error(error, result, this);
+        long elapsedMs = elapsedMillis(started);
+        if (error == null) logManager.successBatch(elapsedMs, results, affected, this);
+        else logManager.errorBatch(elapsedMs, error, results, this);
+    }
+
+    private void cacheDebug(String event, CacheKey key, ParseResult result) {
+        try {
+            if (CACHE_LOG.isDebugEnabled()) {
+                CACHE_LOG.debug("CACHE {} group={} type={} key={}", event, group(),
+                        result == null ? "unknown" : result.getType(), key == null ? "unknown" : key.value());
+            }
+        } catch (RuntimeException ignored) {
+            // Cache observability must never change a query's result.
         }
+    }
+
+    private void cacheBypassDebug(ParseResult result, String reason) {
+        try {
+            if (CACHE_LOG.isDebugEnabled()) {
+                CACHE_LOG.debug("CACHE BYPASS group={} type={} reason={}", group(),
+                        result == null ? "unknown" : result.getType(), reason);
+            }
+        } catch (RuntimeException ignored) {
+            // Cache observability must never change a query's result.
+        }
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
+    }
+
+    private static Throwable unwrapCompletion(Throwable error) {
+        if (error instanceof CompletionException completion && completion.getCause() != null) {
+            return completion.getCause();
+        }
+        return error;
     }
 
     public void setCoderManager(ICoderManager coderManager) {

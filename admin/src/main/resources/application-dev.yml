@@ -52,6 +52,9 @@ yulinlin:
     default-group: mysql
   mysql:
     log: true
+    log-params: true
+    max-param-length: 256
+    slow-sql-threshold: 1s
     schema-mode: CREATE
     schema-packages:
       - "com.yulinlin.admin"

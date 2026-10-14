@@ -77,7 +77,7 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public LogManager logManager(List<LogPrint> list) {
+    public LogManager logManager(List<LogPrint<?>> list) {
         return new LogManager().register(list);
     }
 

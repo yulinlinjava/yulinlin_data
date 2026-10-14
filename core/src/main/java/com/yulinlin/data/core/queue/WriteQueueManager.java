@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,6 +27,19 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Slf4j
 public final class WriteQueueManager implements AutoCloseable {
+
+    private enum FlushTrigger {
+        TIMER("timer"),
+        THRESHOLD("threshold"),
+        MANUAL("manual"),
+        CLOSE("close");
+
+        private final String label;
+
+        FlushTrigger(String label) {
+            this.label = label;
+        }
+    }
 
     @FunctionalInterface
     public interface Executor {
@@ -119,7 +133,8 @@ public final class WriteQueueManager implements AutoCloseable {
         retryCount = properties.getRetryCount();
         flushSize = properties.getFlushSize();
         concurrency = properties.getConcurrency();
-        schedule = ThreadUtil.scheduleVirtual(this::flush, properties.getFlushInterval().toMillis());
+        schedule = ThreadUtil.scheduleVirtual(
+                () -> flush(FlushTrigger.TIMER), properties.getFlushInterval().toMillis());
     }
 
     public void setExecutor(Executor value) {
@@ -165,7 +180,11 @@ public final class WriteQueueManager implements AutoCloseable {
     }
 
     /** Flushes one atomic queue snapshot. New submissions are left for the next flush. */
-    public synchronized int flush() {
+    public int flush() {
+        return flush(FlushTrigger.MANUAL);
+    }
+
+    private synchronized int flush(FlushTrigger trigger) {
         ConcurrentLinkedQueue<QueuedWrite> snapshot;
         synchronized (queueLock) {
             snapshot = active.getAndSet(new ConcurrentLinkedQueue<>());
@@ -179,7 +198,27 @@ public final class WriteQueueManager implements AutoCloseable {
             throw new IllegalStateException("Write queue executor is not configured");
         }
 
-        return executeLanes(target, sessionLanes(groupedBatches(snapshot)));
+        long started = System.nanoTime();
+        List<Batch> batches = groupedBatches(snapshot);
+        int nodes = 0;
+        for (Batch batch : batches) nodes += batch.size();
+        List<SessionLane> lanes = sessionLanes(batches);
+        int affected = executeLanes(target, lanes);
+        logFlushSummary(trigger, lanes.size(), batches.size(), nodes, affected,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), pending.get());
+        return affected;
+    }
+
+    private void logFlushSummary(FlushTrigger trigger, int sessions, int groups, int nodes,
+                                 int affected, long elapsedMs, int remaining) {
+        try {
+            if (log.isDebugEnabled()) {
+                log.debug("QUEUE FLUSH trigger={} sessions={} groups={} nodes={} affected={} elapsedMs={} pending={}",
+                        trigger.label, sessions, groups, nodes, affected, elapsedMs, remaining);
+            }
+        } catch (RuntimeException ignored) {
+            // Observability must never change delayed-write execution semantics.
+        }
     }
 
     /** Globally groups one flush snapshot; queued writes intentionally provide no cross-group ordering guarantee. */
@@ -352,7 +391,7 @@ public final class WriteQueueManager implements AutoCloseable {
                 try {
                     while (!closed.get() && immediateFlushRequested.getAndSet(false)) {
                         try {
-                            flush();
+                            flush(FlushTrigger.THRESHOLD);
                         } catch (Throwable error) {
                             log.error("Immediate delayed-write flush failed", error);
                         }
@@ -372,7 +411,7 @@ public final class WriteQueueManager implements AutoCloseable {
     public void close() {
         if (!closed.compareAndSet(false, true)) return;
         schedule.cancel(false);
-        flush();
+        flush(FlushTrigger.CLOSE);
         if (pending.get() > 0) {
             log.error("Write queue closed with {} node(s) that could not be flushed", pending.get());
         }

@@ -71,6 +71,9 @@ spring:
 yulinlin:
   mysql:
     log: true
+    log-params: false
+    max-param-length: 256
+    slow-sql-threshold: 1s
     map-underscore-to-camel-case: true
     parallel-connections: 4
     execute-batch-size: 256
@@ -515,6 +518,9 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | --- | --- | --- |
 | yulinlin.datasource.default-group | 未设置 | 单组自动；多组指定默认 |
 | yulinlin.`<module>`.log | false | 当前模块 SQL 成功日志；module 为 mysql、postgresql、sqlite 或 h2 |
+| yulinlin.`<module>`.log-params | false | 是否输出 JDBC 绑定参数；生产环境建议保持关闭 |
+| yulinlin.`<module>`.max-param-length | 256 | 单个日志参数的最大展示字符数 |
+| yulinlin.`<module>`.slow-sql-threshold | 0 | 应用侧慢 SQL 阈值；0 关闭，达到阈值以 WARN 输出 |
 | yulinlin.`<module>`.map-underscore-to-camel-case | true | 当前模块下划线与驼峰映射 |
 | yulinlin.`<module>`.parallel-connections | 4 | 当前模块每框架事务连接上限；SQLite 最终固定为 1 |
 | yulinlin.`<module>`.execute-batch-size | 256 | 当前模块一次 executeBatch 的行数，不是 commit |

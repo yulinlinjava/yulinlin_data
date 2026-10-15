@@ -2374,11 +2374,11 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 <!-- source: doc/06-接口安全.md -->
 ## 接口安全
 
-security 模块为 Spring MVC JSON 接口提供显式启用的请求解密和响应加密。默认使用 `AES/CBC/PKCS5Padding`，密钥和固定 IV 默认都按 UTF-8 字符串读取；需要更强安全性时也支持 AES-GCM。IP、浏览器行为和爬虫风控将在后续能力中实现。
+`security` 模块为 Spring MVC JSON 接口提供请求体解密和响应体加密。默认协议是 `AES/CBC/PKCS5Padding + UTF-8 key + UTF-8 IV + 标准 Base64`；每种设备可以使用独立密钥，也可以单独切换为 AES-GCM。
 
-### 接入
+阅读顺序：[完整配置](#完整主配置) · [配置规则](#配置项与默认值) · [接口注解](#接口注解) · [CBC 前端对接](#默认-cbc-前端对接) · [排除路径](#明文排除路径) · [GCM](#可选-aes-gcm) · [手动 API](#手动使用) · [安全边界](#安全边界与限制)
 
-加入独立模块，不要求引入 ORM、数据库驱动或 Spring Security：
+### 引入模块
 
 ```xml
 <dependency>
@@ -2388,140 +2388,260 @@ security 模块为 Spring MVC JSON 接口提供显式启用的请求解密和响
 </dependency>
 ```
 
-推荐按设备类型分别配置密钥和 IV。默认 CBC 模式下，16 个 ASCII 字符正好是 16 字节；真实值应由外部安全配置提供，不能提交到源码仓库：
+模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；缺少默认设备、密钥或 IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
+
+### 完整主配置
+
+正式项目推荐使用多设备配置。下面完整展示设备请求头、默认设备、明文路径、请求大小以及 Web、Android、iOS 独立密钥：
 
 ```yaml
 yulinlin:
   security:
     crypto:
+      # 客户端通过该请求头选择设备密钥
       device-header: Device-Type
+
+      # 未携带 Device-Type 时使用；必须存在于 devices 中
       default-device: web
+
+      # 请求和响应都跳过加解密
+      # 自定义该列表会替换默认值，因此需要保留 /monitor/**
       exclude-paths:
         - /monitor/**
+        - /actuator/health
+        - /public/**
+        - /upload/**
+        - /download/**
+
+      # 同时限制收到的密文和解密后的 JSON
+      max-request-size: 1MB
+
       devices:
         web:
+          algorithm: AES/CBC/PKCS5Padding
           key: ${YULINLIN_SECURITY_WEB_KEY}
           iv: ${YULINLIN_SECURITY_WEB_IV}
+
         android:
+          algorithm: AES/CBC/PKCS5Padding
           key: ${YULINLIN_SECURITY_ANDROID_KEY}
           iv: ${YULINLIN_SECURITY_ANDROID_IV}
+
         ios:
+          algorithm: AES/CBC/PKCS5Padding
           key: ${YULINLIN_SECURITY_IOS_KEY}
           iv: ${YULINLIN_SECURITY_IOS_IV}
-      max-request-size: 1MB
 ```
 
-客户端通过 `Device-Type` 传递 `web`、`android`、`ios` 等设备类型，服务端选择对应密钥；没有该请求头时使用 `default-device`。设备名会去除首尾空白并转为小写，只允许小写字母、数字、下划线和短横线，最长 32 个字符。GCM 模式下，规范化后的设备名还参与 AAD，客户端加密时也必须使用该值。未知设备会返回 400。响应会回写实际使用的 `Device-Type`，客户端据此选择响应解密密钥。
+环境变量示例：
 
-security 模块引入后自动注册加解密组件；默认设备未配置、缺少密钥/IV 或长度错误时启动失败，不生成临时值，也不会静默退化成明文。默认 CBC 接受 16、24 或 32 字节 AES 密钥，IV 必须是 16 字节；`key-encoding` 和 `iv-encoding` 默认都是 `UTF8`。
+```properties
+YULINLIN_SECURITY_WEB_KEY=MIGfMA0GCSqGSIb3
+YULINLIN_SECURITY_WEB_IV=5efd3f6060e20765
 
-只有一个设备的旧项目可以继续使用单密钥配置。该密钥归属于 `default-device`，不能与 `devices` 同时配置：
+YULINLIN_SECURITY_ANDROID_KEY=1234567890abcdef
+YULINLIN_SECURITY_ANDROID_IV=abcdef1234567890
 
-```yaml
-yulinlin:
-  security:
-    crypto:
-      key: ${YULINLIN_SECURITY_KEY}
-      iv: ${YULINLIN_SECURITY_IV}
-      default-device: web
+YULINLIN_SECURITY_IOS_KEY=fedcba0987654321
+YULINLIN_SECURITY_IOS_IV=0123456789abcdef
 ```
 
-#### 默认 AES-CBC 配置
+示例值仅用于说明长度。生产密钥必须由环境变量或密钥管理系统提供，不能提交到仓库。
 
-`algorithm`、`key-encoding` 和 `iv-encoding` 都不填写时，就是 `AES/CBC/PKCS5Padding + UTF8 key + UTF8 IV`：
+### 配置项与默认值
 
-```yaml
-yulinlin:
-  security:
-    crypto:
-      key: MIGfMA0GCSqGSIb3
-      iv: 5efd3f6060e20765
-      default-device: web
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
+| `default-device` | `web` | 请求未传设备头时使用的设备 |
+| `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的 Spring 路径模式 |
+| `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
+| `devices.<name>.algorithm` | `AES/CBC/PKCS5Padding` | 当前设备的 AES 算法 |
+| `devices.<name>.key` | 无 | 必填；CBC 接受 16、24 或 32 字节 |
+| `devices.<name>.iv` | 无 | CBC 必填且必须是 16 字节 |
+| `devices.<name>.key-encoding` | `UTF8` | 默认字符密钥不需要填写；GCM 示例使用 `BASE64` |
+| `devices.<name>.iv-encoding` | `UTF8` | 默认字符 IV 不需要填写 |
+
+设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。`default-device` 必须能在 `devices` 中找到；未知 `Device-Type` 返回 400。
+
+CBC 参数必须满足：
+
+```text
+algorithm = AES/CBC/PKCS5Padding
+key       = 16、24 或 32 字节
+iv        = 16 字节
+encoding  = UTF-8
+cipher    = 标准 Base64
+padding   = PKCS5/PKCS7
 ```
 
-客户端保持 CBC、PKCS7/PKCS5 填充、UTF-8 密钥与 IV、标准 Base64 一致即可。Java 的 `PKCS5Padding` 与常见 JavaScript AES 库的 `Pkcs7` 在 AES 分组下兼容。
+建议 key 和 IV 使用 ASCII 字符，避免中文 UTF-8 字符占多个字节。Java 的 `PKCS5Padding` 与常见 JavaScript AES 实现的 `Pkcs7` 在 AES 分组下兼容。
 
-#### 为特定设备切换算法
+### 接口注解
 
-CBC 和 GCM 可以按设备独立选择。GCM 由框架为每次加密随机生成 IV，因此不能配置固定 `iv`：
+需要加密的业务接口使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置：
 
-```yaml
-yulinlin:
-  security:
-    crypto:
-      default-device: web
-      devices:
-        web:
-          key: MIGfMA0GCSqGSIb3
-          iv: 5efd3f6060e20765
-        android:
-          algorithm: AES/GCM/NoPadding
-          key-encoding: BASE64
-          key: ${YULINLIN_SECURITY_ANDROID_KEY}
-```
+| 写法 | 请求 | 响应 |
+| --- | --- | --- |
+| `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
+| `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 保持明文 |
+| 没有注解 | security 完全不处理 | 保持明文 |
 
-CBC 不具备 GCM 的篡改认证能力；需要更强安全性时显式配置 `AES/GCM/NoPadding`。
-
-### 标记接口
-
-`@ApiCrypto` 可以放在 Controller 类或具体方法上。方法配置优先于类配置：
-
-需要请求加解密的业务 JSON 接口统一使用 `@PostMapping + @RequestBody`。查询、详情和删除也把参数组成 JSON body；不要使用 query 参数或 path 变量传递期望被加密的内容，因为请求 Advice 只处理消息体。监控页面、静态资源、健康检查和文件/媒体流等非业务 JSON 入口可以继续使用适合它们的 HTTP 方法，并且不使用本协议。
+业务 JSON 接口推荐统一使用 `@PostMapping + @RequestBody`。请求 Advice 只处理 body，不加密 query 参数和 path 变量。
 
 ```java
 package demo.api;
 
 import com.yulinlin.security.annotation.ApiCrypto;
+import com.yulinlin.starter.domain.R;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-public class OrderController {
+public class UserController {
 
     @ApiCrypto
-    @PostMapping("/orders")
-    public OrderResult create(@RequestBody CreateOrder request) {
-        return new OrderResult(request.productId(), true);
-    }
-}
-```
-
-Controller 收到的仍然是正常 DTO，返回值也按普通 Java 对象编写。框架在 Jackson 反序列化前解密请求。普通返回对象会整体加密；返回 `R` 或其废弃兼容子类 `ResponseVo` 时，只加密 `data`，保留 code、msg、ok 和 timestamp，并把 crypt 设置为 true。`data`为 null 时不生成无意义密文，响应保持 crypt=false。
-
-注解只有一个开关。方法级设置可以覆盖类级设置：
-
-| 写法 | 请求 | 响应 |
-| --- | --- | --- |
-| `@ApiCrypto` 或 `@ApiCrypto(true)` | 必须传整个 JSON 加密后的密文，否则返回 400 | 加密 |
-| `@ApiCrypto(false)` | 可传普通 JSON；传整个请求体密文时仍自动解密 | 不加密 |
-| 没有注解 | security 不读取、不识别请求 | 不加密 |
-
-```java
-@ApiCrypto
-@RestController
-public class OrderController {
-
-    @PostMapping("/orders") // 请求和响应都加密。
-    public OrderResult create(@RequestBody CreateOrder request) {
-        return service.create(request);
+    @PostMapping("/api/user/detail")
+    public R<UserVO> detail(@RequestBody UserDetailPo request) {
+        return R.ok(userService.detail(request.getId()));
     }
 
     @ApiCrypto(false)
-    @PostMapping("/orders/public") // 请求可明文也可加密，响应保持明文。
-    public OrderResult publicQuery(@RequestBody OrderQuery query) {
-        return service.query(query);
+    @PostMapping("/api/user/public-detail")
+    public R<UserVO> publicDetail(@RequestBody UserDetailPo request) {
+        return R.ok(userService.detail(request.getId()));
     }
 }
 ```
 
-`@ApiCrypto(false)` 是兼容模式，不是完全关闭请求处理。框架把整个 body 转成 UTF-8 字符串并去掉首尾空白：以 `{` 或 `[` 开头时按明文 JSON 原样交给 Spring/Jackson，且不会读取或校验设备类型；其他内容全部作为 Base64 密文，并按请求设备选择密钥解密。不会为了判断明文而预解析 JSON，因此每个明文请求只反序列化一次。密文格式错误或设备未知会返回 400，不会再次降级成明文；只有 GCM 能可靠拒绝错误密钥和被篡改内容，CBC 主要提供协议兼容。解密结果的 JSON 合法性继续由原消息转换器校验。
+`@ApiCrypto(false)` 是兼容模式，不是完全关闭请求处理。框架把 body 转成 UTF-8 字符串并去除首尾空白：以 `{` 或 `[` 开头时直接交给 Jackson；其他内容按当前设备的 Base64 密文解密。它不会为了判断明文而预解析 JSON，因此明文请求只反序列化一次。错误 Base64、未知设备或解密失败返回 400，不会再次降级为明文。
 
-没有 `@ApiCrypto` 的接口保持原行为。不提供“只加密响应”的独立开关，也不存在调试请求头或其他由客户端控制的明文绕过开关。
+#### 响应加密规则
+
+- 普通 Java 对象：整个对象序列化后加密，响应 JSON 是一个 Base64 字符串。
+- `R<E>`：只加密非 null 的 `data`，保留 `code`、`msg`、`ok` 和 `timestamp`，并设置 `crypt=true`。
+- `R.data == null`：不生成无意义密文，`crypt` 保持 `false`。
+- `ResponseVo<E>`：仅保留废弃兼容，行为与 `R<E>` 相同。
+
+`R<E>` 加密响应示例：
+
+```json
+{
+  "code": 200,
+  "msg": "操作成功",
+  "ok": true,
+  "crypt": true,
+  "data": "mFbzvANmZJZQj/3nB4zKpA==",
+  "timestamp": 1792070400000
+}
+```
+
+### 默认 CBC 前端对接
+
+请求仍使用 `Content-Type: application/json`，但 body 是未经 JSON 双引号包裹的标准 Base64 密文：
+
+```http
+POST /api/user/detail HTTP/1.1
+Content-Type: application/json
+Device-Type: web
+
+N4H0Qf4H0m4YqQPG4Q3XWg==
+```
+
+服务端加密响应会返回实际设备和算法：
+
+```http
+Device-Type: web
+X-Yulinlin-Crypto: AES/CBC/PKCS5Padding
+```
+
+下面使用浏览器原生 Web Crypto API，与默认 CBC、UTF-8 key/IV 和标准 Base64 对齐。Web Crypto 的 AES-CBC 使用 PKCS7 填充，与服务端 `PKCS5Padding` 兼容：
+
+```javascript
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (const value of new Uint8Array(bytes)) binary += String.fromCharCode(value);
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  return Uint8Array.from(atob(value), char => char.charCodeAt(0));
+}
+
+async function importCbcKey(keyText) {
+  const bytes = encoder.encode(keyText);
+  if (![16, 24, 32].includes(bytes.length)) throw new Error("AES key length is invalid");
+  return crypto.subtle.importKey("raw", bytes, {name: "AES-CBC"}, false,
+      ["encrypt", "decrypt"]);
+}
+
+function cbcIv(ivText) {
+  const bytes = encoder.encode(ivText);
+  if (bytes.length !== 16) throw new Error("AES-CBC IV must contain 16 bytes");
+  return bytes;
+}
+
+async function encryptJson(value, keyText, ivText) {
+  const key = await importCbcKey(keyText);
+  const encrypted = await crypto.subtle.encrypt(
+      {name: "AES-CBC", iv: cbcIv(ivText)},
+      key,
+      encoder.encode(JSON.stringify(value)));
+  return bytesToBase64(encrypted);
+}
+
+async function decryptJson(ciphertext, keyText, ivText) {
+  const key = await importCbcKey(keyText);
+  const plaintext = await crypto.subtle.decrypt(
+      {name: "AES-CBC", iv: cbcIv(ivText)},
+      key,
+      base64ToBytes(ciphertext.trim()));
+  return JSON.parse(decoder.decode(plaintext));
+}
+
+const deviceType = "web";
+const key = "MIGfMA0GCSqGSIb3";
+const iv = "5efd3f6060e20765";
+const body = await encryptJson({id: "U1001"}, key, iv);
+
+const response = await fetch("/api/user/detail", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Device-Type": deviceType
+  },
+  body
+});
+
+const responseBody = await response.json();
+const result = responseBody?.crypt === true
+    ? {...responseBody, data: await decryptJson(responseBody.data, key, iv)}
+    : typeof responseBody === "string"
+        ? await decryptJson(responseBody, key, iv)
+        : responseBody;
+```
+
+跨域调用时，业务 CORS 配置必须允许请求头 `Device-Type`，并暴露响应头 `Device-Type` 和 `X-Yulinlin-Crypto`。密钥不得直接硬编码在公开源码中；上述浏览器代码只用于说明协议对接。
+
+### 多设备选择
+
+请求头决定当前使用哪组设备密钥：
+
+```http
+Device-Type: web
+Device-Type: android
+Device-Type: ios
+```
+
+没有请求头时使用 `default-device`。响应回写解析后的设备类型，客户端应优先读取响应 `Device-Type`，再选择对应密钥解密。设备请求头只负责选密钥，不是身份认证信息，不能仅凭该值判断调用方可信。
 
 ### 明文排除路径
 
-`exclude-paths` 是服务端控制的完整加解密排除列表，支持 Spring 路径模式。默认值包含 `/monitor/**`，保证同时引入 `security` 和 `monitor` 时，内置页面的登录、退出、监控数据和静态页面不会被加密：
+`exclude-paths` 是服务端控制的完整排除列表，支持 Spring 路径模式。命中后，即使接口存在 `@ApiCrypto(true)`，请求体也不解密，响应体也不加密：
 
 ```yaml
 yulinlin:
@@ -2530,98 +2650,62 @@ yulinlin:
       exclude-paths:
         - /monitor/**
         - /actuator/health
+        - /public/**
 ```
 
-排除规则优先于 `@ApiCrypto`：命中路径后，请求体不读取、不解密，响应体也不加密。配置新列表会替换默认列表；如果仍需使用监控页面，应继续保留 `/monitor/**`。该能力只接受服务端 YAML 配置，不提供跳过加密的请求头，避免客户端绕过业务接口的加密要求。
+默认列表只有 `/monitor/**`。配置新列表会替换默认列表，因此使用监控模块时必须继续保留它。不要提供由客户端控制的“跳过加密”请求头，否则业务接口可能被绕过。
 
-### 报文格式
+文件上传、文件下载、视频流、SSE、WebSocket、静态资源和健康检查不适合 JSON 加密 Advice，应保持无 `@ApiCrypto`，必要时加入排除路径。
 
-自动请求和响应使用一段非 JSON 的 Base64 密文：
+### 可选 AES-GCM
+
+支付、订单等需要密文完整性校验的设备可以显式切换到 GCM：
+
+```yaml
+yulinlin:
+  security:
+    crypto:
+      default-device: web
+      devices:
+        web:
+          key: ${YULINLIN_SECURITY_WEB_KEY}
+          iv: ${YULINLIN_SECURITY_WEB_IV}
+        ios:
+          algorithm: AES/GCM/NoPadding
+          key-encoding: BASE64
+          key: ${YULINLIN_SECURITY_IOS_KEY}
+```
+
+GCM 要求 Base64 解码后恰好为 32 字节的密钥，不允许配置固定 `iv`。框架每次生成 12 字节随机 IV，Base64 解码后的报文结构为：
 
 ```text
-BoV8CsObM8Q3qgfMDKfQZi4m9z0p7D+ZV7cNwX9u0J0=
+12字节随机IV + 密文 + 16字节认证标签
 ```
 
-- GCM 模式解码后的格式为 `12 字节随机 IV + 密文 + 16 字节 GCM 认证标签`。
-- CBC 模式只传输密文字节；解密使用 YAML 中配置的固定 16 字节 IV。
-- 使用标准 Base64，可能包含 `+`、`/` 和末尾的 `=`。
-- GCM 每次加密生成新的随机 IV，同一明文不会产生固定密文。
-- GCM 同时校验机密性和完整性；密文、IV 或协议元数据被修改后解密失败。CBC 不具备这项保证。
-- GCM 将版本、设备类型和算法以 `version + "\n" + deviceType + "\n" + algorithm` 的 UTF-8 字节作为附加认证数据（AAD）。浏览器实现必须使用相同规则；CBC 不使用 AAD。
-- 密文本身不携带设备类型，自动接口通过 `Device-Type` 选择密钥；未传时使用默认设备。GCM 的设备类型或密钥不匹配会导致认证失败；CBC 通常只能依靠填充或后续 JSON 解析发现错误，不具备可靠的篡改检测。
+GCM 使用以下 UTF-8 内容作为 AAD，客户端必须完全一致：
 
-请求必须继续使用 `Content-Type: application/json`，但密文 body 本身不能使用 JSON 双引号包裹。无效 Base64 返回 400；GCM 的错误密钥或被篡改密文也会返回 400。超过 `max-request-size` 返回 413，限制同时应用于密文和解密后的 JSON。加密响应通过 `X-Yulinlin-Crypto` 返回实际算法。兼容模式只把 `{`、`[` 开头的对象和数组视为明文，因此不支持顶层字符串、数字、布尔值或 null 作为明文请求体。
+```text
+1\n<规范化设备类型>\nA256GCM
+```
 
-#### 浏览器 AES-GCM Web Crypto 示例
+例如 web 设备的 AAD 是 `1\nweb\nA256GCM`。密文、设备名、IV、认证标签或密钥不匹配都会导致解密失败；这是 GCM 相比默认固定 IV CBC 的主要安全优势。
 
-下面代码与服务端 Base64 密文和 AAD 规则一致。`base64Key` 是配置中的同一密钥；实际项目不能把它当成浏览器无法读取的秘密：
+### 单设备配置
 
-```javascript
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+只有一种设备时，可以不写 `devices`。根级 `key`/`iv` 与 `devices` 不能同时配置：
 
-function base64Bytes(value) {
-  return Uint8Array.from(atob(value), char => char.charCodeAt(0));
-}
-
-function bytesBase64(bytes) {
-  let binary = "";
-  for (const value of new Uint8Array(bytes)) binary += String.fromCharCode(value);
-  return btoa(binary);
-}
-
-async function importAesKey(base64Key) {
-  return crypto.subtle.importKey("raw", base64Bytes(base64Key), "AES-GCM", false,
-      ["encrypt", "decrypt"]);
-}
-
-async function encryptJson(value, base64Key, deviceType = "web") {
-  deviceType = deviceType.trim().toLowerCase();
-  const key = await importAesKey(base64Key);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const aad = textEncoder.encode(`1\n${deviceType}\nA256GCM`);
-  const data = await crypto.subtle.encrypt(
-      {name: "AES-GCM", iv, additionalData: aad, tagLength: 128},
-      key,
-      textEncoder.encode(JSON.stringify(value)));
-  const encrypted = new Uint8Array(iv.length + data.byteLength);
-  encrypted.set(iv, 0);
-  encrypted.set(new Uint8Array(data), iv.length);
-  return bytesBase64(encrypted);
-}
-
-async function decryptJson(ciphertext, base64Key, deviceType = "web") {
-  deviceType = deviceType.trim().toLowerCase();
-  const encrypted = base64Bytes(ciphertext.trim());
-  if (encrypted.length < 28) throw new Error("Invalid ciphertext");
-  const iv = encrypted.slice(0, 12);
-  const data = encrypted.slice(12);
-  const key = await importAesKey(base64Key);
-  const aad = textEncoder.encode(`1\n${deviceType}\nA256GCM`);
-  const plaintext = await crypto.subtle.decrypt(
-      {name: "AES-GCM", iv, additionalData: aad, tagLength: 128},
-      key,
-      data);
-  return JSON.parse(textDecoder.decode(plaintext));
-}
-
-const deviceType = "web";
-const encrypted = await encryptJson({productId: "P1001"}, base64Key, deviceType);
-const response = await fetch("/orders", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Device-Type": deviceType
-  },
-  body: encrypted
-});
-const responseBody = await response.json();
-const responseDevice = response.headers.get("Device-Type") ?? deviceType;
-const result = responseBody?.crypt === true
-    ? {...responseBody, data: await decryptJson(responseBody.data, base64Key, responseDevice)}
-    : typeof responseBody === "string"
-        ? await decryptJson(responseBody, base64Key, responseDevice)
-        : responseBody;
+```yaml
+yulinlin:
+  security:
+    crypto:
+      device-header: Device-Type
+      default-device: web
+      algorithm: AES/CBC/PKCS5Padding
+      key: ${YULINLIN_SECURITY_KEY}
+      iv: ${YULINLIN_SECURITY_IV}
+      exclude-paths:
+        - /monitor/**
+      max-request-size: 1MB
 ```
 
 ### 手动使用
@@ -2648,25 +2732,27 @@ public class SecureValueService {
 }
 ```
 
-自动配置还提供 `AesCrypto` Bean，它固定使用默认设备配置。也可以通过 `new AesGcmCrypto(keyBytes, deviceType)` 或 `new AesCbcCrypto(keyBytes, ivBytes)` 脱离 Spring 使用。实现每次操作创建独立 Cipher，可被多个请求线程共享。
+自动配置还提供一个使用默认设备的 `AesCrypto` Bean。脱离 Spring 时可以直接创建：
 
-### 浏览器边界
+```java
+AesCrypto cbc = new AesCbcCrypto(keyBytes, ivBytes);
+AesCrypto gcm = new AesGcmCrypto(keyBytes, "web");
+```
 
-这是基础共享密钥方案。浏览器若要自行加解密，就必须获得同一 AES 密钥；网页脚本、浏览器扩展和自动化浏览器最终也能读取它。因此该功能可以避免普通明文调用并提高简单采集脚本的成本，但不能把浏览器中的密钥当作秘密，也不能单独承担防爬虫职责。
+实现每次操作创建独立 `Cipher`，可以被多个请求线程共享。
 
-生产环境仍必须使用 HTTPS。真正的爬虫治理需要后续的会话令牌、多维限流、行为评分和挑战机制；请求公钥加密及短期会话密钥也应作为独立协议演进，不能在不升级 version 的情况下改变当前信封含义。
-
-### 使用限制
+### 安全边界与限制
 
 - 当前只支持 Spring MVC，不支持 WebFlux。
-- 设备请求头用于选择密钥，不是身份认证信息；不能仅凭 `Device-Type` 判断调用方可信。
-- 自动 Advice 只用于 JSON 或字符串响应；不要标记文件下载、流式响应、SSE、WebSocket 或 multipart 接口。
-- 普通返回对象整体加密为 Base64 密文字符串。`R` 和废弃兼容类型 `ResponseVo` 只加密非 null 的 data，其他响应字段保持明文；加密后 crypt 为 true、data 中存放 Base64 密文字符串，data 为 null 时 crypt 保持 false。
-- 应用日志不得记录密钥、解密后的敏感正文或完整密文。
-- AES 不是密码哈希，用户密码仍应使用专用密码哈希方案保存。
-- 当前未实现时间戳、nonce 防重放和密钥轮换；这些属于下一阶段，不应在文档或业务中假设已经具备。
+- 生产环境仍必须使用 HTTPS；接口加密不能替代 TLS。
+- CBC 使用固定 IV，不能可靠发现密文篡改；高敏感业务选择 GCM。
+- 浏览器必须持有共享 AES 密钥，因此网页脚本、浏览器扩展和自动化浏览器最终都能读取它。该能力只能提高普通采集脚本的成本，不能单独承担防爬虫职责。
+- AES 不是密码哈希，用户密码必须使用专用密码哈希算法保存。
+- 自动 Advice 只适合 JSON 请求和 JSON/字符串响应，不适合 multipart、文件流、视频流、SSE 或 WebSocket。
+- 日志不得记录密钥、IV、解密后的敏感正文或完整密文。
+- 当前没有实现时间戳、nonce 防重放和密钥轮换，业务不能假设已经具备这些能力。
 
-本专题于 2026-10-06 按源码编写。本轮未运行测试、编译或打包，使用前应在业务工程中验证浏览器协议和异常响应约定。
+本专题于 2026-10-15 按当前源码重写。本轮未运行测试、编译或打包；接入时应使用真实客户端验证密钥编码、Padding、Base64、CORS 和异常响应约定。
 
 ---
 

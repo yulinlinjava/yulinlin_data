@@ -2388,11 +2388,11 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 </dependency>
 ```
 
-模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；缺少默认设备、密钥或 IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
+模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；多设备模式缺少 `unknown`、密钥或 CBC IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
 
 ### 完整主配置
 
-正式项目推荐使用多设备配置。下面完整展示设备请求头、默认设备、明文路径、请求大小以及 Web、Android、iOS 独立密钥：
+正式项目推荐使用多设备配置。下面完整展示设备请求头、未知设备兜底、明文路径、请求大小以及 Web、Android、iOS 独立密钥：
 
 ```yaml
 yulinlin:
@@ -2403,9 +2403,6 @@ yulinlin:
 
       # 客户端通过该请求头选择设备密钥
       device-header: Device-Type
-
-      # 未携带 Device-Type 时使用；必须存在于 devices 中
-      default-device: web
 
       # 请求和响应都跳过加解密
       # 自定义该列表会替换默认值，因此需要保留 /monitor/**
@@ -2434,6 +2431,12 @@ yulinlin:
           algorithm: AES/CBC/PKCS5Padding
           key: ${YULINLIN_SECURITY_IOS_KEY}
           iv: ${YULINLIN_SECURITY_IOS_IV}
+
+        # 固定保留名：请求头缺失、为空或未匹配任何设备时统一使用
+        unknown:
+          algorithm: AES/CBC/PKCS5Padding
+          key: ${YULINLIN_SECURITY_UNKNOWN_KEY}
+          iv: ${YULINLIN_SECURITY_UNKNOWN_IV}
 ```
 
 环境变量示例：
@@ -2447,6 +2450,9 @@ YULINLIN_SECURITY_ANDROID_IV=abcdef1234567890
 
 YULINLIN_SECURITY_IOS_KEY=fedcba0987654321
 YULINLIN_SECURITY_IOS_IV=0123456789abcdef
+
+YULINLIN_SECURITY_UNKNOWN_KEY=abcdef1234567890
+YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 ```
 
 示例值仅用于说明长度。生产密钥必须由环境变量或密钥管理系统提供，不能提交到仓库。
@@ -2457,7 +2463,6 @@ YULINLIN_SECURITY_IOS_IV=0123456789abcdef
 | --- | --- | --- |
 | `enabled` | `true` | 是否启用严格加密；关闭后注解接口接受明文或密文，响应统一明文 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
-| `default-device` | `web` | 请求未传设备头时使用的设备 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的 Spring 路径模式 |
 | `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
 | `devices.<name>.algorithm` | `AES/CBC/PKCS5Padding` | 当前设备的 AES 算法 |
@@ -2466,7 +2471,7 @@ YULINLIN_SECURITY_IOS_IV=0123456789abcdef
 | `devices.<name>.key-encoding` | `UTF8` | 默认字符密钥不需要填写；GCM 示例使用 `BASE64` |
 | `devices.<name>.iv-encoding` | `UTF8` | 默认字符 IV 不需要填写 |
 
-设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。`default-device` 必须能在 `devices` 中找到；未知 `Device-Type` 返回 400。
+配置中的设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。HTTP 请求未携带设备头、设备头为空、格式异常或设备名未配置时，统一使用保留设备 `devices.unknown`。`devices` 和 `devices.unknown` 都是必填项；框架不支持外层 `algorithm`、`key`、`iv`，也不需要 `default-device` 或额外的 fallback 属性。框架不自动暴露单设备 `AesCrypto` Bean，手动操作统一使用 `DeviceCryptoManager`。
 
 CBC 参数必须满足：
 
@@ -2523,7 +2528,7 @@ public class UserController {
 }
 ```
 
-`@ApiCrypto(false)` 是兼容模式，不是完全关闭请求处理。框架把 body 转成 UTF-8 字符串并去除首尾空白：以 `{` 或 `[` 开头时直接交给 Jackson；其他内容按当前设备的 Base64 密文解密。它不会为了判断明文而预解析 JSON，因此明文请求只反序列化一次。错误 Base64、未知设备或解密失败返回 400，不会再次降级为明文。
+`@ApiCrypto(false)` 是兼容模式，不是完全关闭请求处理。框架把 body 转成 UTF-8 字符串：忽略首尾空白判断后，以 `{` 或 `[` 开头时直接交给 Jackson；其他内容按当前设备的 Base64 密文解密。它不会为了判断明文而预解析 JSON，因此明文请求只反序列化一次。错误 Base64 或解密失败返回 400，不会再次降级为明文。
 
 #### 响应加密规则
 
@@ -2547,7 +2552,7 @@ public class UserController {
 
 ### 默认 CBC 前端对接
 
-请求仍使用 `Content-Type: application/json`。推荐 body 直接发送未经 JSON 双引号包裹的标准 Base64 密文；为兼容 Axios 的默认 JSON 转换，服务端也接受只包裹一层 JSON 双引号的 Base64 字符串：
+请求仍使用 `Content-Type: application/json`。推荐 body 直接发送未经 JSON 双引号包裹的标准 Base64 密文；为兼容浏览器请求链路，服务端也接受 Axios 添加一层 JSON 双引号、`+` 被表单处理转换为空格，以及密文中混入回车、换行或制表符的情况：
 
 ```http
 POST /api/user/detail HTTP/1.1
@@ -2651,7 +2656,14 @@ Device-Type: android
 Device-Type: ios
 ```
 
-没有请求头时使用 `default-device`。响应回写解析后的设备类型，客户端应优先读取响应 `Device-Type`，再选择对应密钥解密。设备请求头只负责选密钥，不是身份认证信息，不能仅凭该值判断调用方可信。
+| 请求头 | 最终设备 |
+| --- | --- |
+| 缺失或空值 | `unknown` |
+| `web`、`android` 等已配置名称 | 对应设备 |
+| 未配置的名称 | `unknown` |
+| 不符合设备名格式的值 | `unknown` |
+
+设备名匹配不区分大小写并忽略首尾空白。响应回写实际解析后的设备类型，客户端应优先读取响应 `Device-Type`，再选择对应密钥解密。设备请求头只负责选密钥，不是身份认证信息，不能仅凭该值判断调用方可信。
 
 ### 明文排除路径
 
@@ -2679,7 +2691,6 @@ yulinlin:
 yulinlin:
   security:
     crypto:
-      default-device: web
       devices:
         web:
           key: ${YULINLIN_SECURITY_WEB_KEY}
@@ -2688,6 +2699,9 @@ yulinlin:
           algorithm: AES/GCM/NoPadding
           key-encoding: BASE64
           key: ${YULINLIN_SECURITY_IOS_KEY}
+        unknown:
+          key: ${YULINLIN_SECURITY_UNKNOWN_KEY}
+          iv: ${YULINLIN_SECURITY_UNKNOWN_IV}
 ```
 
 GCM 要求 Base64 解码后恰好为 32 字节的密钥，不允许配置固定 `iv`。框架每次生成 12 字节随机 IV，Base64 解码后的报文结构为：
@@ -2703,25 +2717,6 @@ GCM 使用以下 UTF-8 内容作为 AAD，客户端必须完全一致：
 ```
 
 例如 web 设备的 AAD 是 `1\nweb\nA256GCM`。密文、设备名、IV、认证标签或密钥不匹配都会导致解密失败；这是 GCM 相比默认固定 IV CBC 的主要安全优势。
-
-### 单设备配置
-
-只有一种设备时，可以不写 `devices`。根级 `key`/`iv` 与 `devices` 不能同时配置：
-
-```yaml
-yulinlin:
-  security:
-    crypto:
-      enabled: true
-      device-header: Device-Type
-      default-device: web
-      algorithm: AES/CBC/PKCS5Padding
-      key: ${YULINLIN_SECURITY_KEY}
-      iv: ${YULINLIN_SECURITY_IV}
-      exclude-paths:
-        - /monitor/**
-      max-request-size: 1MB
-```
 
 ### 手动使用
 
@@ -2747,7 +2742,7 @@ public class SecureValueService {
 }
 ```
 
-自动配置还提供一个使用默认设备的 `AesCrypto` Bean。脱离 Spring 时可以直接创建：
+框架不会自动注入单设备 `AesCrypto`，避免多设备项目误用固定密钥。脱离 Spring、明确只处理一种密钥时，仍可以直接创建底层实现：
 
 ```java
 AesCrypto cbc = new AesCbcCrypto(keyBytes, ivBytes);

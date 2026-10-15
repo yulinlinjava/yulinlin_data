@@ -13,78 +13,52 @@ import java.util.regex.Pattern;
 public final class DeviceCryptoManager {
 
     private static final Pattern DEVICE_NAME = Pattern.compile("[a-z0-9_-]{1,32}");
+    private static final String UNKNOWN_DEVICE = "unknown";
 
     private final Map<String, AesCrypto> devices;
-    private final String defaultDevice;
 
     public DeviceCryptoManager(SecurityCryptoProperties properties) {
-        this.defaultDevice = normalizeRequired(properties.getDefaultDevice(), "default-device");
         Map<String, SecurityCryptoProperties.Device> configured = properties.getDevices();
-        boolean hasDevices = configured != null && !configured.isEmpty();
-        boolean hasLegacyKey = properties.getKey() != null && !properties.getKey().isBlank();
-        if (hasDevices && hasLegacyKey) {
+        if (configured == null || configured.isEmpty()) {
             throw new IllegalArgumentException(
-                    "Configure either yulinlin.security.crypto.key or yulinlin.security.crypto.devices, not both");
+                    "Configure yulinlin.security.crypto.devices including the reserved unknown device");
         }
 
         Map<String, AesCrypto> registered = new LinkedHashMap<>();
-        if (hasDevices) {
-            for (Map.Entry<String, SecurityCryptoProperties.Device> entry : configured.entrySet()) {
-                String device = normalizeRequired(entry.getKey(), "device name");
-                SecurityCryptoProperties.Device configuration = entry.getValue();
-                if (configuration == null) {
-                    throw new IllegalArgumentException("Missing encryption configuration for device: " + device);
-                }
-                if (registered.containsKey(device)) {
-                    throw new IllegalArgumentException("Duplicate normalized device name: " + device);
-                }
-                registered.put(device, createCrypto(
-                        configuration.getAlgorithm(),
-                        configuration.getKey(),
-                        configuration.getKeyEncoding(),
-                        configuration.getIv(),
-                        configuration.getIvEncoding(),
-                        device));
+        for (Map.Entry<String, SecurityCryptoProperties.Device> entry : configured.entrySet()) {
+            String device = normalizeRequired(entry.getKey(), "device name");
+            SecurityCryptoProperties.Device configuration = entry.getValue();
+            if (configuration == null) {
+                throw new IllegalArgumentException("Missing encryption configuration for device: " + device);
             }
-        } else {
-            if (!hasLegacyKey) {
-                throw new IllegalArgumentException(
-                        "Configure yulinlin.security.crypto.devices or yulinlin.security.crypto.key");
+            if (registered.containsKey(device)) {
+                throw new IllegalArgumentException("Duplicate normalized device name: " + device);
             }
-            registered.put(defaultDevice, createCrypto(
-                    properties.getAlgorithm(),
-                    properties.getKey(),
-                    properties.getKeyEncoding(),
-                    properties.getIv(),
-                    properties.getIvEncoding(),
-                    defaultDevice));
+            registered.put(device, createCrypto(
+                    configuration.getAlgorithm(),
+                    configuration.getKey(),
+                    configuration.getKeyEncoding(),
+                    configuration.getIv(),
+                    configuration.getIvEncoding(),
+                    device));
         }
-        if (!registered.containsKey(defaultDevice)) {
-            throw new IllegalArgumentException("Default crypto device is not configured: " + defaultDevice);
+        if (!registered.containsKey(UNKNOWN_DEVICE)) {
+            throw new IllegalArgumentException(
+                    "Fallback crypto device is not configured: yulinlin.security.crypto.devices.unknown");
         }
         this.devices = Map.copyOf(registered);
     }
 
     public String resolveDevice(String device) {
-        String resolved = device == null || device.isBlank()
-                ? defaultDevice
-                : normalizeRequired(device, "device header");
-        if (!devices.containsKey(resolved)) {
-            throw new IllegalArgumentException("Unknown crypto device: " + resolved);
-        }
-        return resolved;
+        if (device == null || device.isBlank()) return UNKNOWN_DEVICE;
+        String resolved = device.trim().toLowerCase(Locale.ROOT);
+        if (!DEVICE_NAME.matcher(resolved).matches()) return UNKNOWN_DEVICE;
+        if (devices.containsKey(resolved)) return resolved;
+        return UNKNOWN_DEVICE;
     }
 
     public AesCrypto getRequired(String device) {
         return devices.get(resolveDevice(device));
-    }
-
-    public String getDefaultDevice() {
-        return defaultDevice;
-    }
-
-    public AesCrypto getDefaultCrypto() {
-        return devices.get(defaultDevice);
     }
 
     private static AesCrypto createCrypto(

@@ -14,26 +14,8 @@ public class SecurityCryptoProperties {
     /** Enables strict encrypted requests and encrypted responses on @ApiCrypto(true) endpoints. */
     private boolean enabled = true;
 
-    /** Single-device algorithm. Ignored when devices are configured. */
-    private String algorithm = "AES/CBC/PKCS5Padding";
-
-    /** Single-device key encoding. Ignored when devices are configured. */
-    private Encoding keyEncoding = Encoding.UTF8;
-
-    /** Single-device CBC IV. Ignored when devices are configured. */
-    private String iv;
-
-    /** Single-device CBC IV encoding. Ignored when devices are configured. */
-    private Encoding ivEncoding = Encoding.UTF8;
-
-    /** Optional single-device key, decoded according to keyEncoding. */
-    private String key;
-
     /** Request header used to select the device key. */
     private String deviceHeader = "Device-Type";
-
-    /** Device used when the request header is absent. */
-    private String defaultDevice = "web";
 
     /** Independent encryption configuration for every device type. */
     private Map<String, Device> devices = new LinkedHashMap<>();
@@ -52,60 +34,12 @@ public class SecurityCryptoProperties {
         this.enabled = enabled;
     }
 
-    public String getAlgorithm() {
-        return algorithm;
-    }
-
-    public void setAlgorithm(String algorithm) {
-        this.algorithm = algorithm;
-    }
-
-    public Encoding getKeyEncoding() {
-        return keyEncoding;
-    }
-
-    public void setKeyEncoding(Encoding keyEncoding) {
-        this.keyEncoding = keyEncoding;
-    }
-
-    public String getIv() {
-        return iv;
-    }
-
-    public void setIv(String iv) {
-        this.iv = iv;
-    }
-
-    public Encoding getIvEncoding() {
-        return ivEncoding;
-    }
-
-    public void setIvEncoding(Encoding ivEncoding) {
-        this.ivEncoding = ivEncoding;
-    }
-
-    public String getKey() {
-        return key;
-    }
-
-    public void setKey(String key) {
-        this.key = key;
-    }
-
     public String getDeviceHeader() {
         return deviceHeader;
     }
 
     public void setDeviceHeader(String deviceHeader) {
         this.deviceHeader = deviceHeader;
-    }
-
-    public String getDefaultDevice() {
-        return defaultDevice;
-    }
-
-    public void setDefaultDevice(String defaultDevice) {
-        this.defaultDevice = defaultDevice;
     }
 
     public Map<String, Device> getDevices() {

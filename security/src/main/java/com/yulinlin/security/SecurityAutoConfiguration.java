@@ -1,7 +1,6 @@
 package com.yulinlin.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.yulinlin.security.crypto.AesCrypto;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
 import com.yulinlin.security.web.CryptoRequestBodyAdvice;
 import com.yulinlin.security.web.CryptoResponseBodyAdvice;
@@ -34,13 +33,6 @@ public class SecurityAutoConfiguration {
     @ConditionalOnMissingBean
     public DeviceTypeResolver deviceTypeResolver(SecurityCryptoProperties properties) {
         return new HeaderDeviceTypeResolver(properties);
-    }
-
-    /** Exposes the configured default device cipher for simple single-device use. */
-    @Bean
-    @ConditionalOnMissingBean
-    public AesCrypto aesCrypto(DeviceCryptoManager cryptoManager) {
-        return cryptoManager.getDefaultCrypto();
     }
 
     @Bean

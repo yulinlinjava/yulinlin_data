@@ -72,8 +72,9 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         ApiCrypto annotation = CryptoAnnotations.find(parameter);
         boolean encryptionRequired = enabled && annotation != null && annotation.value();
 
-        String content = new String(requestBody, StandardCharsets.UTF_8).trim();
-        boolean json = content.startsWith("{") || content.startsWith("[");
+        String content = new String(requestBody, StandardCharsets.UTF_8);
+        String inspectedContent = content.strip();
+        boolean json = inspectedContent.startsWith("{") || inspectedContent.startsWith("[");
         if (json) {
             if (encryptionRequired) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Encrypted request is required");
@@ -82,7 +83,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         }
 
         try {
-            String ciphertext = unwrapJsonString(content);
+            String ciphertext = normalizeCiphertext(content);
             String device = deviceTypeResolver.resolve(inputMessage.getHeaders());
             AesCrypto crypto = cryptoManager.getRequired(device);
             byte[] plaintext = crypto.decryptBase64(ciphertext);
@@ -95,18 +96,28 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         }
     }
 
-    /** Axios may serialize a Base64 string once more because the content type is application/json. */
-    private String unwrapJsonString(String content) {
-        if (content.length() >= 2 && content.charAt(0) == '"'
-                && content.charAt(content.length() - 1) == '"') {
-            String ciphertext = content.substring(1, content.length() - 1);
+    /**
+     * Accepts raw Base64, Axios JSON-string Base64, and form-decoded Base64 where '+' became a space.
+     * Only the transport-specific ASCII space is repaired; every other invalid character is rejected
+     * later by the strict Base64 decoder.
+     */
+    private String normalizeCiphertext(String content) {
+        String trimmed = content.strip();
+        String ciphertext = content;
+        if (trimmed.length() >= 2 && trimmed.charAt(0) == '"'
+                && trimmed.charAt(trimmed.length() - 1) == '"') {
+            ciphertext = trimmed.substring(1, trimmed.length() - 1);
             // Standard Base64 never needs JSON escaping. Reject other JSON strings instead of guessing.
             if (ciphertext.indexOf('\\') >= 0 || ciphertext.indexOf('"') >= 0) {
                 throw new IllegalArgumentException("Encrypted JSON string contains escapes");
             }
-            return ciphertext;
         }
-        return content;
+        // application/x-www-form-urlencoded decoders commonly turn Base64 '+' into an ASCII space.
+        return ciphertext
+                .replace("\r", "")
+                .replace("\n", "")
+                .replace("\t", "")
+                .replace(' ', '+');
     }
 
     private ResponseStatusException invalidEncryptedRequest(Throwable cause) {

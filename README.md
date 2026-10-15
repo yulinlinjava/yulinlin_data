@@ -109,7 +109,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 - PostgreSQL 可用 `@JoinField(fullText=true)`、`match()` 和 `highlight()` 接入 pg_jieba 中文分词、GIN 索引与原字段高亮；其他 SQL 数据源保持 LIKE/原字段兼容语义。
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。
-- 接口报文加密：security；当前提供显式注解启用的 AES-256-GCM JSON 加解密。
+- 接口报文加密：security；当前提供显式注解启用的 AES-ECB（默认）、AES-GCM 和 AES-CBC JSON 加解密。
 - 查询缓存完全可选：`cache-core` 只承载缓存 SPI、`CacheClient` 和 Key/TTL/失效模型，并由 ORM core 或 Provider 传递引入；不引入具体 Provider 时直接访问数据源。低延迟内存缓存引入 `cache-caffeine`，Heap + Disk 持久化缓存引入 `cache-ehcache`，Redis 共享缓存引入 `cache-redis`。三个 Provider 只能选择一个；`cache-redis` 已内置可关闭的 Caffeine L1，不要再引入 `cache-caffeine`。
 - 慢数据库监控：引入 `monitor`，访问 `/monitor/`；可通过 `yulinlin.monitor.enabled=false` 完全关闭采集与页面，页面内置账号密码验证对话框，验证结果保存在当前 Session，不依赖安全框架。
 

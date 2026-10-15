@@ -12,7 +12,7 @@ import java.util.Map;
 public class SecurityCryptoProperties {
 
     /** Single-device algorithm. Ignored when devices are configured. */
-    private String algorithm = "AES/GCM/NoPadding";
+    private String algorithm = "AES/ECB/PKCS5Padding";
 
     /** Single-device key encoding. Ignored when devices are configured. */
     private Encoding keyEncoding = Encoding.BASE64;
@@ -128,7 +128,7 @@ public class SecurityCryptoProperties {
 
     public static class Device {
 
-        private String algorithm = "AES/GCM/NoPadding";
+        private String algorithm = "AES/ECB/PKCS5Padding";
         private Encoding keyEncoding = Encoding.BASE64;
         private String key;
         private String iv;

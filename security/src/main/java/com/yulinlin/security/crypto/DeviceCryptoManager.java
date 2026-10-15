@@ -100,6 +100,12 @@ public final class DeviceCryptoManager {
             if (algorithm == null || algorithm.isBlank()) {
                 throw new IllegalArgumentException("algorithm must not be blank");
             }
+            if (AesEcbCrypto.ALGORITHM.equalsIgnoreCase(algorithm)) {
+                if (iv != null && !iv.isBlank()) {
+                    throw new IllegalArgumentException("AES-ECB does not accept a configured IV");
+                }
+                return new AesEcbCrypto(keyBytes);
+            }
             if (AesGcmCrypto.ALGORITHM.equalsIgnoreCase(algorithm)
                     || "AES/GCM/NoPadding".equalsIgnoreCase(algorithm)) {
                 if (iv != null && !iv.isBlank()) {

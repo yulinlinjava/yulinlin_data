@@ -8,8 +8,7 @@ import com.yulinlin.starter.domain.R;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.PostMapping;
 
 import java.util.List;
 
@@ -21,7 +20,7 @@ public abstract class TreeController<E extends TreeEntity<E>, Q extends PagePo> 
 
 
     @Operation(summary = "获取树")
-    @RequestMapping(value = "getTree",method = RequestMethod.POST)
+    @PostMapping("getTree")
     public R<PageVo<E>> getTree(@RequestBody E po) {
         List<E> tree =  service.getTree(po);
         return R.ok(PageVo.newInstance(tree));

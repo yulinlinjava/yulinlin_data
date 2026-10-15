@@ -11,8 +11,7 @@ import com.yulinlin.data.lang.reflection.GenericUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.PostMapping;
 
 import java.util.List;
 
@@ -25,7 +24,7 @@ public class SuperController<E extends AbstractModel<E>, Q extends PagePo>  {
 
 
     @Operation(summary = "根据id查询数据")
-    @RequestMapping(value = "getById",method = RequestMethod.POST)
+    @PostMapping("getById")
     public R<E> getById(@RequestBody IdPo po) {
 
         E obj = service.findById(po.getId());
@@ -36,7 +35,7 @@ public class SuperController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "删除数据")
-    @RequestMapping(value = "deleteByIdIn",method = RequestMethod.POST)
+    @PostMapping("deleteByIdIn")
     public R<Integer> deleteByIdIn(@RequestBody List<String> coll) {
 
        int total =  service.deleteByIdIn(coll);
@@ -45,7 +44,7 @@ public class SuperController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "保存数据")
-    @RequestMapping(value = "saveOne",method = RequestMethod.POST)
+    @PostMapping("saveOne")
     public R<Integer> saveOne(@RequestBody E obj) {
 
         int total = service.save(obj);
@@ -55,7 +54,7 @@ public class SuperController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "批量保存")
-    @RequestMapping(value = "saveList",method = RequestMethod.POST)
+    @PostMapping("saveList")
     public R<Integer> saveList(@RequestBody List<E> obj) {
 
         int total = service.saveList(obj);
@@ -65,7 +64,7 @@ public class SuperController<E extends AbstractModel<E>, Q extends PagePo>  {
 
 
     @Operation(summary = "分页查询")
-    @RequestMapping(value = "page",method = RequestMethod.POST)
+    @PostMapping("page")
     public R<Page<E>> page(@RequestBody Q pagePo) {
 
         Page<E> vo =  service.page(pagePo);

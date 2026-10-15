@@ -12,8 +12,7 @@ import com.yulinlin.data.lang.reflection.GenericUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.PostMapping;
 
 import java.util.List;
 
@@ -26,7 +25,7 @@ public class RESTfulController<E extends AbstractModel<E>, Q extends PagePo>  {
 
 
     @Operation(summary = "根据id查询数据")
-    @RequestMapping(value = "get",method = RequestMethod.POST)
+    @PostMapping("get")
     public R<E> get(@RequestBody IdPo po) {
         E obj = null;
         if(StringUtil.isNull(po.getId())){
@@ -42,7 +41,7 @@ public class RESTfulController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "分页查询")
-    @RequestMapping(value = "gets",method = RequestMethod.POST)
+    @PostMapping("gets")
     public R<Page<E>> gets(@RequestBody Q pagePo) {
 
         Page<E> vo =  service.page(pagePo);
@@ -50,7 +49,7 @@ public class RESTfulController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "删除数据")
-    @RequestMapping(value = "delete",method = RequestMethod.POST)
+    @PostMapping("delete")
     public R<Integer> delete(@RequestBody IdPo po) {
         int total =  service.deleteById(po.getId());
         if (total != 1) throw new ApiException("操作失败", 500);
@@ -58,7 +57,7 @@ public class RESTfulController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "批量删除数据")
-    @RequestMapping(value = "deletes",method = RequestMethod.POST)
+    @PostMapping("deletes")
     public R<Integer> delete(@RequestBody List<String> coll) {
 
        int total =  service.deleteByIdIn(coll);
@@ -67,7 +66,7 @@ public class RESTfulController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "保存数据")
-    @RequestMapping(value = "put",method = RequestMethod.POST)
+    @PostMapping("put")
     public R<Integer> put(@RequestBody E obj) {
 
         int total = service.save(obj);
@@ -76,7 +75,7 @@ public class RESTfulController<E extends AbstractModel<E>, Q extends PagePo>  {
     }
 
     @Operation(summary = "批量保存")
-    @RequestMapping(value = "puts",method = RequestMethod.POST)
+    @PostMapping("puts")
     public R<Integer> puts(@RequestBody List<E> obj) {
 
         int total = service.saveList(obj);

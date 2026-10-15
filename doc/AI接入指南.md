@@ -114,13 +114,14 @@ MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换
 ```yaml
 yulinlin:
   monitor:
+    enabled: true
     threshold: 1s
     max-records: 1000
     username: admin
     password: ${MONITOR_PASSWORD:}
 ```
 
-引入模块即启用，不需要额外开关。访问 `/monitor/` 可打开内置只读页面；页面使用 Vue 3 和锁定版本的 Element Plus 2.14.7，通过 jsDelivr 加载前端资源。部署环境无法访问公共 CDN 时，应将对应资源转存到业务自己的静态资源域名，再替换模块页面中的地址。
+模块默认启用；设置 `yulinlin.monitor.enabled=false` 后，不注册数据库采集器、SQL 监听器、管理接口和页面，访问 `/monitor/` 也不会得到模块页面。启用时访问 `/monitor/` 可打开内置只读页面；页面使用 Vue 3 和锁定版本的 Element Plus 2.14.7，通过 jsDelivr 加载前端资源。部署环境无法访问公共 CDN 时，应将对应资源转存到业务自己的静态资源域名，再替换模块页面中的地址。
 
 页面可以直接打开；数据接口发现尚未验证时，页面会在原地显示账号密码对话框。验证成功后只在当前 HTTP Session 中保存一个布尔标记，再自动加载监控数据，不跳转登录页，也不依赖任何安全框架。账号默认是 `admin`，密码没有默认值，必须通过配置或环境变量提供；密码为空时登录接口拒绝验证，避免发布一个所有人都知道的默认密码。
 
@@ -565,6 +566,7 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | yulinlin.datasource.default-group | 未设置 | 单组自动；多组指定默认 |
+| yulinlin.monitor.enabled | true | 是否启用数据库操作采集及内置监控接口和页面；关闭后不注册相关 Bean |
 | yulinlin.monitor.threshold | 1s | 慢操作明细保留阈值，同时作为 P1–P4 优先级的计算基准；异常始终保留 |
 | yulinlin.monitor.max-records | 1000 | 慢操作明细和 SQL 聚合组各自的内存上限；超出后淘汰最早或最久未访问的数据 |
 | yulinlin.monitor.username | admin | 内置监控对话框账号 |

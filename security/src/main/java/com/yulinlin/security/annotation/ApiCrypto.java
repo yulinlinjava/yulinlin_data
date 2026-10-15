@@ -21,6 +21,8 @@ public @interface ApiCrypto {
      * {@code true}: the request must be encrypted and the response is encrypted.
      * {@code false}: the request may be plaintext, but an encrypted request is
      * still decrypted; the response remains plaintext.
+     * When {@code yulinlin.security.crypto.enabled=false}, both values use the
+     * compatible request behavior and always return a plaintext response.
      */
     boolean value() default true;
 }

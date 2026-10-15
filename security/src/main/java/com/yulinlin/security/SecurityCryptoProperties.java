@@ -11,6 +11,9 @@ import java.util.Map;
 @ConfigurationProperties("yulinlin.security.crypto")
 public class SecurityCryptoProperties {
 
+    /** Enables strict encrypted requests and encrypted responses on @ApiCrypto(true) endpoints. */
+    private boolean enabled = true;
+
     /** Single-device algorithm. Ignored when devices are configured. */
     private String algorithm = "AES/CBC/PKCS5Padding";
 
@@ -40,6 +43,14 @@ public class SecurityCryptoProperties {
 
     /** Server-controlled paths that must bypass both request decryption and response encryption. */
     private List<String> excludePaths = new ArrayList<>(List.of("/monitor/**"));
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
 
     public String getAlgorithm() {
         return algorithm;

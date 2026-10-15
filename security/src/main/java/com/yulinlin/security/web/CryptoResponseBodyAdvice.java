@@ -29,6 +29,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
     private final DeviceTypeResolver deviceTypeResolver;
     private final ObjectMapper objectMapper;
     private final CryptoPathExclusions pathExclusions;
+    private final boolean enabled;
     private final String deviceHeader;
 
     public CryptoResponseBodyAdvice(
@@ -49,6 +50,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         this.deviceTypeResolver = deviceTypeResolver;
         this.objectMapper = objectMapper;
         this.pathExclusions = pathExclusions;
+        this.enabled = properties.isEnabled();
         if (properties.getDeviceHeader() == null || properties.getDeviceHeader().isBlank()) {
             throw new IllegalArgumentException("yulinlin.security.crypto.device-header must not be blank");
         }
@@ -60,7 +62,8 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             MethodParameter returnType,
             Class<? extends HttpMessageConverter<?>> converterType) {
         ApiCrypto annotation = CryptoAnnotations.find(returnType);
-        return annotation != null && annotation.value() && !pathExclusions.isCurrentRequestExcluded();
+        return enabled && annotation != null && annotation.value()
+                && !pathExclusions.isCurrentRequestExcluded();
     }
 
     @Override

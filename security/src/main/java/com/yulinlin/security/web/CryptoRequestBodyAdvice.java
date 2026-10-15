@@ -26,6 +26,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
     private final DeviceCryptoManager cryptoManager;
     private final DeviceTypeResolver deviceTypeResolver;
     private final CryptoPathExclusions pathExclusions;
+    private final boolean enabled;
     private final long maxRequestBytes;
 
     public CryptoRequestBodyAdvice(
@@ -43,6 +44,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         this.cryptoManager = cryptoManager;
         this.deviceTypeResolver = deviceTypeResolver;
         this.pathExclusions = pathExclusions;
+        this.enabled = properties.isEnabled();
         if (properties.getMaxRequestSize() == null || properties.getMaxRequestSize().toBytes() < 0) {
             throw new IllegalArgumentException("yulinlin.security.crypto.max-request-size must not be negative");
         }
@@ -68,7 +70,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         byte[] requestBody = StreamUtils.copyToByteArray(inputMessage.getBody());
         checkSize(requestBody.length);
         ApiCrypto annotation = CryptoAnnotations.find(parameter);
-        boolean encryptionRequired = annotation != null && annotation.value();
+        boolean encryptionRequired = enabled && annotation != null && annotation.value();
 
         String content = new String(requestBody, StandardCharsets.UTF_8).trim();
         boolean json = content.startsWith("{") || content.startsWith("[");

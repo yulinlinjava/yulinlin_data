@@ -2398,6 +2398,9 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 yulinlin:
   security:
     crypto:
+      # true：严格加密；false：兼容明文/密文请求，响应统一明文
+      enabled: true
+
       # 客户端通过该请求头选择设备密钥
       device-header: Device-Type
 
@@ -2452,6 +2455,7 @@ YULINLIN_SECURITY_IOS_IV=0123456789abcdef
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
+| `enabled` | `true` | 是否启用严格加密；关闭后注解接口接受明文或密文，响应统一明文 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
 | `default-device` | `web` | 请求未传设备头时使用的设备 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的 Spring 路径模式 |
@@ -2479,13 +2483,17 @@ padding   = PKCS5/PKCS7
 
 ### 接口注解
 
-需要加密的业务接口使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置：
+需要加密的业务接口使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。全局 `enabled` 控制严格加密模式，但不会删除请求解密能力：
 
-| 写法 | 请求 | 响应 |
-| --- | --- | --- |
-| `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
-| `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 保持明文 |
-| 没有注解 | security 完全不处理 | 保持明文 |
+| 全局配置 | 接口注解 | 请求 | 响应 |
+| --- | --- | --- | --- |
+| `enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
+| `enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
+| `enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
+| 任意值 | 没有注解 | security 完全不处理 | 明文 |
+| 任意值 | 命中 `exclude-paths` | security 完全不处理 | 明文 |
+
+`enabled=false` 是兼容模式，不是卸载安全模块。设备密钥管理器和请求 Advice 仍会注册，key 与 IV 仍然必须配置，以便继续解密尚未升级的旧客户端；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。已经发送密文的客户端和已经切换明文的客户端可以并行迁移。
 
 业务 JSON 接口推荐统一使用 `@PostMapping + @RequestBody`。请求 Advice 只处理 body，不加密 query 参数和 path 变量。
 
@@ -2698,6 +2706,7 @@ GCM 使用以下 UTF-8 内容作为 AAD，客户端必须完全一致：
 yulinlin:
   security:
     crypto:
+      enabled: true
       device-header: Device-Type
       default-device: web
       algorithm: AES/CBC/PKCS5Padding

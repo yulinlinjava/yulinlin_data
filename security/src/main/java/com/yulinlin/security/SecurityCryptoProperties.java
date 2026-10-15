@@ -12,10 +12,10 @@ import java.util.Map;
 public class SecurityCryptoProperties {
 
     /** Single-device algorithm. Ignored when devices are configured. */
-    private String algorithm = "AES/ECB/PKCS5Padding";
+    private String algorithm = "AES/CBC/PKCS5Padding";
 
     /** Single-device key encoding. Ignored when devices are configured. */
-    private Encoding keyEncoding = Encoding.BASE64;
+    private Encoding keyEncoding = Encoding.UTF8;
 
     /** Single-device CBC IV. Ignored when devices are configured. */
     private String iv;
@@ -27,7 +27,7 @@ public class SecurityCryptoProperties {
     private String key;
 
     /** Request header used to select the device key. */
-    private String deviceHeader = "X-Device-Type";
+    private String deviceHeader = "Device-Type";
 
     /** Device used when the request header is absent. */
     private String defaultDevice = "web";
@@ -128,8 +128,8 @@ public class SecurityCryptoProperties {
 
     public static class Device {
 
-        private String algorithm = "AES/ECB/PKCS5Padding";
-        private Encoding keyEncoding = Encoding.BASE64;
+        private String algorithm = "AES/CBC/PKCS5Padding";
+        private Encoding keyEncoding = Encoding.UTF8;
         private String key;
         private String iv;
         private Encoding ivEncoding = Encoding.UTF8;

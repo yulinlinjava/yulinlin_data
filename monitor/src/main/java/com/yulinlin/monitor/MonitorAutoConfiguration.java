@@ -4,6 +4,7 @@ import com.yulinlin.data.core.YulinlinCoreAutoConfig;
 import com.yulinlin.jdbc.DataJdbcApplication;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -11,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
 
 @AutoConfiguration(after = {YulinlinCoreAutoConfig.class, DataJdbcApplication.class})
 @EnableConfigurationProperties(MonitorProperties.class)
+@ConditionalOnProperty(prefix = "yulinlin.monitor", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class MonitorAutoConfiguration {
 
     @Bean

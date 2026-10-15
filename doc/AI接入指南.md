@@ -2396,6 +2396,8 @@ yulinlin:
     crypto:
       device-header: X-Device-Type
       default-device: web
+      exclude-paths:
+        - /monitor/**
       devices:
         web:
           algorithm: AES/GCM/NoPadding
@@ -2525,7 +2527,22 @@ public class OrderController {
 
 `@ApiCrypto(false)` 是兼容模式，不是完全关闭请求处理。框架把整个 body 转成 UTF-8 字符串并去掉首尾空白：以 `{` 或 `[` 开头时按明文 JSON 原样交给 Spring/Jackson，且不会读取或校验设备类型；其他内容全部作为 Base64 密文，并按请求设备选择密钥解密。不会为了判断明文而预解析 JSON，因此每个明文请求只反序列化一次。密文格式错误或设备未知会返回 400，不会再次降级成明文；GCM 还能可靠拒绝错误密钥和被篡改内容，CBC 则只提供旧协议兼容。解密结果的 JSON 合法性继续由原消息转换器校验。
 
-没有 `@ApiCrypto` 的接口保持原行为。不提供“只加密响应”的独立开关，也不存在调试请求头或其他明文绕过开关。
+没有 `@ApiCrypto` 的接口保持原行为。不提供“只加密响应”的独立开关，也不存在调试请求头或其他由客户端控制的明文绕过开关。
+
+### 明文排除路径
+
+`exclude-paths` 是服务端控制的完整加解密排除列表，支持 Spring 路径模式。默认值包含 `/monitor/**`，保证同时引入 `security` 和 `monitor` 时，内置页面的登录、退出、监控数据和静态页面不会被加密：
+
+```yaml
+yulinlin:
+  security:
+    crypto:
+      exclude-paths:
+        - /monitor/**
+        - /actuator/health
+```
+
+排除规则优先于 `@ApiCrypto`：命中路径后，请求体不读取、不解密，响应体也不加密。配置新列表会替换默认列表；如果仍需使用监控页面，应继续保留 `/monitor/**`。该能力只接受服务端 YAML 配置，不提供跳过加密的请求头，避免客户端绕过业务接口的加密要求。
 
 ### 报文格式
 

@@ -7,12 +7,22 @@ import java.time.Duration;
 /** Settings for the optional in-memory slow database monitor. */
 @ConfigurationProperties("yulinlin.monitor")
 public class MonitorProperties {
+    /** Controls database-operation collection and all built-in monitor HTTP endpoints. */
+    private boolean enabled = true;
     private Duration threshold = Duration.ofSeconds(1);
     private int maxRecords = 1000;
     /** Username accepted by the monitor page's built-in login dialog. */
     private String username = "admin";
     /** Password accepted by the monitor page. Empty disables login until configured. */
     private String password = "";
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
 
     public Duration getThreshold() {
         return threshold;

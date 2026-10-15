@@ -3,7 +3,9 @@ package com.yulinlin.security;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.util.unit.DataSize;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @ConfigurationProperties("yulinlin.security.crypto")
@@ -35,6 +37,9 @@ public class SecurityCryptoProperties {
 
     /** Maximum encrypted or decrypted request body size. */
     private DataSize maxRequestSize = DataSize.ofMegabytes(1);
+
+    /** Server-controlled paths that must bypass both request decryption and response encryption. */
+    private List<String> excludePaths = new ArrayList<>(List.of("/monitor/**"));
 
     public String getAlgorithm() {
         return algorithm;
@@ -106,6 +111,14 @@ public class SecurityCryptoProperties {
 
     public void setMaxRequestSize(DataSize maxRequestSize) {
         this.maxRequestSize = maxRequestSize;
+    }
+
+    public List<String> getExcludePaths() {
+        return excludePaths;
+    }
+
+    public void setExcludePaths(List<String> excludePaths) {
+        this.excludePaths = excludePaths == null ? new ArrayList<>() : new ArrayList<>(excludePaths);
     }
 
     public enum Encoding {

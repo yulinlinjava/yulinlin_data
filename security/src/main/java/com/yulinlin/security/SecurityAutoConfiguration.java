@@ -5,6 +5,7 @@ import com.yulinlin.security.crypto.AesCrypto;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
 import com.yulinlin.security.web.CryptoRequestBodyAdvice;
 import com.yulinlin.security.web.CryptoResponseBodyAdvice;
+import com.yulinlin.security.web.CryptoPathExclusions;
 import com.yulinlin.security.web.DeviceTypeResolver;
 import com.yulinlin.security.web.HeaderDeviceTypeResolver;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -44,11 +45,18 @@ public class SecurityAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public CryptoPathExclusions cryptoPathExclusions(SecurityCryptoProperties properties) {
+        return new CryptoPathExclusions(properties);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public CryptoRequestBodyAdvice cryptoRequestBodyAdvice(
             DeviceCryptoManager cryptoManager,
             DeviceTypeResolver deviceTypeResolver,
-            SecurityCryptoProperties properties) {
-        return new CryptoRequestBodyAdvice(cryptoManager, deviceTypeResolver, properties);
+            SecurityCryptoProperties properties,
+            CryptoPathExclusions pathExclusions) {
+        return new CryptoRequestBodyAdvice(cryptoManager, deviceTypeResolver, properties, pathExclusions);
     }
 
     @Bean
@@ -57,7 +65,9 @@ public class SecurityAutoConfiguration {
             DeviceCryptoManager cryptoManager,
             DeviceTypeResolver deviceTypeResolver,
             ObjectMapper objectMapper,
-            SecurityCryptoProperties properties) {
-        return new CryptoResponseBodyAdvice(cryptoManager, deviceTypeResolver, objectMapper, properties);
+            SecurityCryptoProperties properties,
+            CryptoPathExclusions pathExclusions) {
+        return new CryptoResponseBodyAdvice(
+                cryptoManager, deviceTypeResolver, objectMapper, properties, pathExclusions);
     }
 }

@@ -28,6 +28,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
     private final DeviceCryptoManager cryptoManager;
     private final DeviceTypeResolver deviceTypeResolver;
     private final ObjectMapper objectMapper;
+    private final CryptoPathExclusions pathExclusions;
     private final String deviceHeader;
 
     public CryptoResponseBodyAdvice(
@@ -35,9 +36,19 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             DeviceTypeResolver deviceTypeResolver,
             ObjectMapper objectMapper,
             SecurityCryptoProperties properties) {
+        this(cryptoManager, deviceTypeResolver, objectMapper, properties, new CryptoPathExclusions(properties));
+    }
+
+    public CryptoResponseBodyAdvice(
+            DeviceCryptoManager cryptoManager,
+            DeviceTypeResolver deviceTypeResolver,
+            ObjectMapper objectMapper,
+            SecurityCryptoProperties properties,
+            CryptoPathExclusions pathExclusions) {
         this.cryptoManager = cryptoManager;
         this.deviceTypeResolver = deviceTypeResolver;
         this.objectMapper = objectMapper;
+        this.pathExclusions = pathExclusions;
         if (properties.getDeviceHeader() == null || properties.getDeviceHeader().isBlank()) {
             throw new IllegalArgumentException("yulinlin.security.crypto.device-header must not be blank");
         }
@@ -49,7 +60,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             MethodParameter returnType,
             Class<? extends HttpMessageConverter<?>> converterType) {
         ApiCrypto annotation = CryptoAnnotations.find(returnType);
-        return annotation != null && annotation.value();
+        return annotation != null && annotation.value() && !pathExclusions.isCurrentRequestExcluded();
     }
 
     @Override
@@ -60,6 +71,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             Class<? extends HttpMessageConverter<?>> selectedConverterType,
             ServerHttpRequest request,
             ServerHttpResponse response) {
+        if (pathExclusions.isExcluded(request)) return body;
         boolean stringResponse = StringHttpMessageConverter.class.isAssignableFrom(selectedConverterType);
         if (!stringResponse && !isJson(selectedContentType)) {
             throw new CryptoException("@ApiCrypto response only supports JSON or String response bodies");

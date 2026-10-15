@@ -25,14 +25,24 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
 
     private final DeviceCryptoManager cryptoManager;
     private final DeviceTypeResolver deviceTypeResolver;
+    private final CryptoPathExclusions pathExclusions;
     private final long maxRequestBytes;
 
     public CryptoRequestBodyAdvice(
             DeviceCryptoManager cryptoManager,
             DeviceTypeResolver deviceTypeResolver,
             SecurityCryptoProperties properties) {
+        this(cryptoManager, deviceTypeResolver, properties, new CryptoPathExclusions(properties));
+    }
+
+    public CryptoRequestBodyAdvice(
+            DeviceCryptoManager cryptoManager,
+            DeviceTypeResolver deviceTypeResolver,
+            SecurityCryptoProperties properties,
+            CryptoPathExclusions pathExclusions) {
         this.cryptoManager = cryptoManager;
         this.deviceTypeResolver = deviceTypeResolver;
+        this.pathExclusions = pathExclusions;
         if (properties.getMaxRequestSize() == null || properties.getMaxRequestSize().toBytes() < 0) {
             throw new IllegalArgumentException("yulinlin.security.crypto.max-request-size must not be negative");
         }
@@ -45,7 +55,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
             Type targetType,
             Class<? extends HttpMessageConverter<?>> converterType) {
         ApiCrypto annotation = CryptoAnnotations.find(methodParameter);
-        return annotation != null;
+        return annotation != null && !pathExclusions.isCurrentRequestExcluded();
     }
 
     @Override
@@ -54,6 +64,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
             MethodParameter parameter,
             Type targetType,
             Class<? extends HttpMessageConverter<?>> converterType) throws IOException {
+        if (pathExclusions.isExcluded(inputMessage)) return inputMessage;
         byte[] requestBody = StreamUtils.copyToByteArray(inputMessage.getBody());
         checkSize(requestBody.length);
         ApiCrypto annotation = CryptoAnnotations.find(parameter);

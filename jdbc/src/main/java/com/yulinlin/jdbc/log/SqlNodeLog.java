@@ -40,9 +40,9 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
             boolean slow = isSlow(elapsedMs, properties);
             if (!slow && !isSqlLogEnabled(properties, session)) return;
             if (slow) {
-                if (log.isWarnEnabled()) log.warn(singleMessage("SQL SLOW", elapsedMs, result, session, properties));
+                if (log.isWarnEnabled()) log.warn(singleMessage("SQL慢查询", elapsedMs, result, session, properties));
             } else if (log.isInfoEnabled()) {
-                log.info(singleMessage("SQL OK", elapsedMs, result, session, properties));
+                log.info(singleMessage("SQL执行成功", elapsedMs, result, session, properties));
             }
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
@@ -63,7 +63,7 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
     public void error(long elapsedMs, Throwable error, ParseResult result, EntitySession session) {
         try {
             if (!log.isErrorEnabled()) return;
-            log.error(singleMessage("SQL ERROR", elapsedMs, result, session, properties(session)), error);
+            log.error(singleMessage("SQL执行异常", elapsedMs, result, session, properties(session)), error);
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
         }
@@ -77,10 +77,10 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
             if (!slow && !isSqlLogEnabled(properties, session)) return;
             if (slow) {
                 if (log.isWarnEnabled()) {
-                    log.warn(batchMessage("SQL BATCH SLOW", elapsedMs, results, affected, session, properties));
+                    log.warn(batchMessage("SQL批量执行缓慢", elapsedMs, results, affected, session, properties));
                 }
             } else if (log.isInfoEnabled()) {
-                log.info(batchMessage("SQL BATCH OK", elapsedMs, results, affected, session, properties));
+                log.info(batchMessage("SQL批量执行成功", elapsedMs, results, affected, session, properties));
             }
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
@@ -96,7 +96,7 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
     public void errorBatch(long elapsedMs, Throwable error, List<ParseResult> results, EntitySession session) {
         try {
             if (!log.isErrorEnabled()) return;
-            log.error(batchMessage("SQL BATCH ERROR", elapsedMs, results, -1, session, properties(session)), error);
+            log.error(batchMessage("SQL批量执行异常", elapsedMs, results, -1, session, properties(session)), error);
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
         }
@@ -274,7 +274,7 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
 
     private static void reportLoggingFailure(RuntimeException failure) {
         try {
-            if (log.isDebugEnabled()) log.debug("SQL log rendering failed", failure);
+            if (log.isDebugEnabled()) log.debug("SQL日志渲染失败", failure);
         } catch (RuntimeException ignored) {
             // Logging must never change the database operation's outcome.
         }

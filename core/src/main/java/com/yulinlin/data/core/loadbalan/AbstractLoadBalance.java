@@ -141,7 +141,7 @@ public abstract class AbstractLoadBalance implements LoadBalance {
         }
         if (removed) {
             try { session.shutdown(); }
-            catch (Exception error) { log.error("session关闭异常", error); }
+            catch (Exception error) { log.error("会话关闭异常", error); }
         }
         return removed;
     }

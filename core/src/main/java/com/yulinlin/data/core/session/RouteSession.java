@@ -203,12 +203,12 @@ public class RouteSession  extends  RegisterSession{
                 try {
                     scheduleInvalidation(invalidation);
                 } catch (RuntimeException error) {
-                    log.error("Delayed write succeeded but query-cache invalidation failed", error);
+                    log.error("延迟写执行成功，但查询缓存失效处理失败", error);
                 }
                 try {
                     filterManager.after(session.group(), request, affected);
                 } catch (RuntimeException error) {
-                    log.error("Delayed write succeeded but after-filter failed", error);
+                    log.error("延迟写执行成功，但写后过滤器执行失败", error);
                 }
             } else {
                 scheduleInvalidation(invalidation);

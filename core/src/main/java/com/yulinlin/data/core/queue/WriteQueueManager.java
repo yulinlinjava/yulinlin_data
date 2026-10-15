@@ -213,7 +213,7 @@ public final class WriteQueueManager implements AutoCloseable {
                                  int affected, long elapsedMs, int remaining) {
         try {
             if (log.isDebugEnabled()) {
-                log.debug("QUEUE FLUSH trigger={} sessions={} groups={} nodes={} affected={} elapsedMs={} pending={}",
+                log.debug("延迟写队列刷新完成 trigger={} sessions={} groups={} nodes={} affected={} elapsedMs={} pending={}",
                         trigger.label, sessions, groups, nodes, affected, elapsedMs, remaining);
             }
         } catch (RuntimeException ignored) {
@@ -342,10 +342,10 @@ public final class WriteQueueManager implements AutoCloseable {
         }
         prepend(waiting);
         if (discarded > 0) {
-            log.error("Delayed write failed permanently; discarded {} node(s) after {} retry attempt(s)",
+            log.error("延迟写最终失败，节点已丢弃 nodes={} retryCount={}",
                     discarded, retryCount, error);
         } else {
-            log.warn("Delayed write failed; {} node(s) will be retried on the next flush", retried, error);
+            log.warn("延迟写执行失败，将在下次刷新时重试 nodes={}", retried, error);
         }
     }
 
@@ -393,7 +393,7 @@ public final class WriteQueueManager implements AutoCloseable {
                         try {
                             flush(FlushTrigger.THRESHOLD);
                         } catch (Throwable error) {
-                            log.error("Immediate delayed-write flush failed", error);
+                            log.error("延迟写队列立即刷新失败", error);
                         }
                     }
                 } finally {
@@ -403,7 +403,7 @@ public final class WriteQueueManager implements AutoCloseable {
             });
         } catch (RuntimeException error) {
             immediateFlushRunning.set(false);
-            log.error("Unable to schedule immediate delayed-write flush; periodic flush remains active", error);
+            log.error("延迟写队列无法调度立即刷新，周期刷新仍保持运行", error);
         }
     }
 
@@ -413,7 +413,7 @@ public final class WriteQueueManager implements AutoCloseable {
         schedule.cancel(false);
         flush(FlushTrigger.CLOSE);
         if (pending.get() > 0) {
-            log.error("Write queue closed with {} node(s) that could not be flushed", pending.get());
+            log.error("延迟写队列关闭时仍有节点未能刷新 nodes={}", pending.get());
         }
     }
 }

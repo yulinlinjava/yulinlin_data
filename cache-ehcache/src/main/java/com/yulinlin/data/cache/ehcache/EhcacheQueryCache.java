@@ -150,7 +150,7 @@ public final class EhcacheQueryCache implements QueryCache {
             cache.remove(key.value());
             record(misses);
             record(serializationFailures);
-            log.warn("Discarded unreadable query cache entry {}", key.value(), error);
+            log.warn("查询缓存条目无法读取，已丢弃 key={}", key.value(), error);
             return CacheLookup.miss();
         }
     }
@@ -220,7 +220,7 @@ public final class EhcacheQueryCache implements QueryCache {
             cache.remove(physicalKey);
             record(misses);
             record(serializationFailures);
-            log.warn("Discarded unreadable application cache entry {}", physicalKey, error);
+            log.warn("业务缓存条目无法读取，已丢弃 key={}", physicalKey, error);
             return CacheLookup.miss();
         }
     }
@@ -236,7 +236,7 @@ public final class EhcacheQueryCache implements QueryCache {
             byte[] bytes = objectMapper.writeValueAsBytes(value);
             if (bytes.length > maximumEntryBytes) {
                 record(oversizedEntries);
-                log.warn("Skipped oversized {} cache entry {}: {} bytes exceeds {} bytes",
+                log.warn("缓存条目超过大小限制，已跳过 kind={} key={} sizeBytes={} limitBytes={}",
                         kind, physicalKey, bytes.length, maximumEntryBytes);
                 return;
             }
@@ -244,7 +244,7 @@ public final class EhcacheQueryCache implements QueryCache {
             record(puts);
         } catch (Exception error) {
             record(serializationFailures);
-            log.warn("Skipped {} cache entry {} because it cannot be serialized", kind, physicalKey, error);
+            log.warn("缓存条目无法序列化，已跳过 kind={} key={}", kind, physicalKey, error);
         }
     }
 

@@ -562,7 +562,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     private void cacheDebug(String event, CacheKey key, ParseResult result) {
         try {
             if (CACHE_LOG.isDebugEnabled()) {
-                CACHE_LOG.debug("CACHE {} group={} type={} key={}", event, group(),
+                CACHE_LOG.debug("缓存访问 event={} group={} type={} key={}", event, group(),
                         result == null ? "unknown" : result.getType(), key == null ? "unknown" : key.value());
             }
         } catch (RuntimeException ignored) {
@@ -573,7 +573,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     private void cacheBypassDebug(ParseResult result, String reason) {
         try {
             if (CACHE_LOG.isDebugEnabled()) {
-                CACHE_LOG.debug("CACHE BYPASS group={} type={} reason={}", group(),
+                CACHE_LOG.debug("缓存已跳过 group={} type={} reason={}", group(),
                         result == null ? "unknown" : result.getType(), reason);
             }
         } catch (RuntimeException ignored) {

@@ -174,7 +174,7 @@ public class LogManager {
     private void warn(LogPrint<?> handler, String operation, RuntimeException exception) {
         String handlerName = handler == null ? "null" : handler.getClass().getName();
         try {
-            log.warn("Log handler {} failed during {}; failure was isolated from business execution",
+            log.warn("日志处理器执行失败，已与业务执行隔离 handler={} operation={}",
                     handlerName, operation, exception);
         } catch (RuntimeException ignored) {
             // Even a broken logging backend must never alter the business result or replace the original failure.

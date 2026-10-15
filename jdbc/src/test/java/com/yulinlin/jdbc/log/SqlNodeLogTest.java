@@ -63,7 +63,7 @@ class SqlNodeLogTest {
         assertThat(events.list).hasSize(1);
         assertThat(events.list.getFirst().getLevel()).isEqualTo(Level.INFO);
         assertThat(events.list.getFirst().getFormattedMessage())
-                .isEqualTo("SQL OK group=mysql cluster=master type=select elapsedMs=12 "
+                .isEqualTo("SQL执行成功 group=mysql cluster=master type=select elapsedMs=12 "
                         + "sql=\"select * from users where id = ?\"")
                 .doesNotContain("secret", "\n", "\r", "params=");
     }
@@ -81,7 +81,7 @@ class SqlNodeLogTest {
         assertThat(events.list).hasSize(1);
         assertThat(events.list.getFirst().getLevel()).isEqualTo(Level.WARN);
         assertThat(events.list.getFirst().getFormattedMessage())
-                .startsWith("SQL SLOW group=mysql cluster=master type=count elapsedMs=1000");
+                .startsWith("SQL慢查询 group=mysql cluster=master type=count elapsedMs=1000");
     }
 
     @Test
@@ -118,7 +118,7 @@ class SqlNodeLogTest {
 
         assertThat(events.list).hasSize(1);
         assertThat(events.list.getFirst().getFormattedMessage())
-                .isEqualTo("SQL BATCH OK group=mysql cluster=master type=insert elapsedMs=18 nodes=3 "
+                .isEqualTo("SQL批量执行成功 group=mysql cluster=master type=insert elapsedMs=18 nodes=3 "
                         + "affected=3 templates=2 sqls=[\"insert into users values (?)\", "
                         + "\"insert into audit values (?)\"] sampleParams=[1]");
     }
@@ -135,7 +135,7 @@ class SqlNodeLogTest {
         ILoggingEvent event = events.list.getFirst();
         assertThat(event.getLevel()).isEqualTo(Level.ERROR);
         assertThat(event.getFormattedMessage())
-                .startsWith("SQL ERROR group=mysql cluster=master type=update elapsedMs=42")
+                .startsWith("SQL执行异常 group=mysql cluster=master type=update elapsedMs=42")
                 .doesNotContain("hidden");
         assertThat(event.getThrowableProxy()).isNotNull();
         assertThat(event.getThrowableProxy().getMessage()).isEqualTo("database unavailable");
@@ -155,7 +155,7 @@ class SqlNodeLogTest {
         ILoggingEvent event = events.list.getFirst();
         assertThat(event.getLevel()).isEqualTo(Level.ERROR);
         assertThat(event.getFormattedMessage())
-                .isEqualTo("SQL BATCH ERROR group=mysql cluster=master type=delete elapsedMs=37 nodes=2 "
+                .isEqualTo("SQL批量执行异常 group=mysql cluster=master type=delete elapsedMs=37 nodes=2 "
                         + "templates=1 sqls=[\"delete from users where id = ?\"]");
         assertThat(event.getThrowableProxy().getMessage()).isEqualTo("batch failed");
     }

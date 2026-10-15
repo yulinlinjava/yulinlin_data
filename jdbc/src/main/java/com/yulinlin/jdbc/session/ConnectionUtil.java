@@ -64,7 +64,7 @@ public class ConnectionUtil {
         } finally {
             legacyPools.remove();
             legacyDepth.remove();
-            if (debug) log.debug("Legacy JDBC transaction completed, rollback={}", rollback);
+            if (debug) log.debug("旧版JDBC事务执行完成 rollback={}", rollback);
         }
         if (failure != null) throw failure;
     }

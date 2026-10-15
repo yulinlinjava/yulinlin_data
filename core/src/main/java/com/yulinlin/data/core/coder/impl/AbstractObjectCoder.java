@@ -67,7 +67,7 @@ public abstract class AbstractObjectCoder<E> implements ICoder<Object,E> {
                     return value;
                 }
             }catch (Exception e){
-                log.info("反序列化失败 {} {}",clazz,text);
+                log.info("反序列化失败 class={} value={}", clazz, text);
                 return null;
             }
 

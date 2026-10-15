@@ -56,7 +56,7 @@ public class StarterExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<R<Void>> handleUnexpected(Exception error) {
-        log.error("Unhandled controller exception", error);
+        log.error("控制器发生未处理异常", error);
         return response(HttpStatus.INTERNAL_SERVER_ERROR, HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "系统繁忙，请稍后重试");
     }

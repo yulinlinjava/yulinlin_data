@@ -27,11 +27,11 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
 
     /** Keeps schema logging and execution in the owning Session. */
     protected int executeSchemaSql(Statement statement, String sql) throws SQLException {
-        log.info("[{}][schema]\n{}", group(), sql);
+        log.info("[{}][表结构]\n{}", group(), sql);
         try {
             return statement.executeUpdate(sql);
         } catch (SQLException error) {
-            log.error("[{}][schema] execution failed\n{}", group(), sql, error);
+            log.error("[{}][表结构]执行失败\n{}", group(), sql, error);
             throw error;
         }
     }
@@ -165,7 +165,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
 
     @Override
     public void shutdown() {
-        log.info("会话关闭："+group());
+        log.info("会话关闭 group={}", group());
 
 
     }

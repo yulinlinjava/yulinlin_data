@@ -2547,7 +2547,7 @@ public class UserController {
 
 ### 默认 CBC 前端对接
 
-请求仍使用 `Content-Type: application/json`，但 body 是未经 JSON 双引号包裹的标准 Base64 密文：
+请求仍使用 `Content-Type: application/json`。推荐 body 直接发送未经 JSON 双引号包裹的标准 Base64 密文；为兼容 Axios 的默认 JSON 转换，服务端也接受只包裹一层 JSON 双引号的 Base64 字符串：
 
 ```http
 POST /api/user/detail HTTP/1.1
@@ -2555,6 +2555,12 @@ Content-Type: application/json
 Device-Type: web
 
 N4H0Qf4H0m4YqQPG4Q3XWg==
+```
+
+以下 Axios 实际报文也能兼容，服务端会先移除最外层双引号再进行 Base64 解码：
+
+```text
+"N4H0Qf4H0m4YqQPG4Q3XWg=="
 ```
 
 服务端加密响应会返回实际设备和算法：

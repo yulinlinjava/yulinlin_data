@@ -82,20 +82,35 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         }
 
         try {
+            String ciphertext = unwrapJsonString(content);
             String device = deviceTypeResolver.resolve(inputMessage.getHeaders());
             AesCrypto crypto = cryptoManager.getRequired(device);
-            byte[] plaintext = crypto.decryptBase64(content);
+            byte[] plaintext = crypto.decryptBase64(ciphertext);
             checkSize(plaintext.length);
             return bodyMessage(inputMessage.getHeaders(), plaintext, true);
         } catch (ResponseStatusException error) {
             throw error;
         } catch (Exception error) {
-            throw invalidEncryptedRequest();
+            throw invalidEncryptedRequest(error);
         }
     }
 
-    private ResponseStatusException invalidEncryptedRequest() {
-        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid encrypted request");
+    /** Axios may serialize a Base64 string once more because the content type is application/json. */
+    private String unwrapJsonString(String content) {
+        if (content.length() >= 2 && content.charAt(0) == '"'
+                && content.charAt(content.length() - 1) == '"') {
+            String ciphertext = content.substring(1, content.length() - 1);
+            // Standard Base64 never needs JSON escaping. Reject other JSON strings instead of guessing.
+            if (ciphertext.indexOf('\\') >= 0 || ciphertext.indexOf('"') >= 0) {
+                throw new IllegalArgumentException("Encrypted JSON string contains escapes");
+            }
+            return ciphertext;
+        }
+        return content;
+    }
+
+    private ResponseStatusException invalidEncryptedRequest(Throwable cause) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid encrypted request", cause);
     }
 
     private void checkSize(int size) {

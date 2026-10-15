@@ -2489,7 +2489,7 @@ public class OrderController {
 }
 ```
 
-Controller 收到的仍然是正常 DTO，返回值也按普通 Java 对象编写。框架在 Jackson 反序列化前解密请求。普通返回对象会整体加密；返回 `R` 或其子类 `ResponseVo` 时，只加密 `data`，保留 code、msg、ok 和 timestamp，并把 crypt 设置为 true。
+Controller 收到的仍然是正常 DTO，返回值也按普通 Java 对象编写。框架在 Jackson 反序列化前解密请求。普通返回对象会整体加密；返回 `R` 或其废弃兼容子类 `ResponseVo` 时，只加密 `data`，保留 code、msg、ok 和 timestamp，并把 crypt 设置为 true。`data`为 null 时不生成无意义密文，响应保持 crypt=false。
 
 注解只有一个开关。方法级设置可以覆盖类级设置：
 
@@ -2648,7 +2648,7 @@ public class SecureValueService {
 - 当前只支持 Spring MVC，不支持 WebFlux。
 - 设备请求头用于选择密钥，不是身份认证信息；不能仅凭 `X-Device-Type` 判断调用方可信。
 - 自动 Advice 只用于 JSON 或字符串响应；不要标记文件下载、流式响应、SSE、WebSocket 或 multipart 接口。
-- 普通返回对象整体加密为 Base64 密文字符串。`R` 和 `ResponseVo` 只加密 data，其他响应字段保持明文，crypt 为 true；data 中存放 Base64 密文字符串。
+- 普通返回对象整体加密为 Base64 密文字符串。`R` 和废弃兼容类型 `ResponseVo` 只加密非 null 的 data，其他响应字段保持明文；加密后 crypt 为 true、data 中存放 Base64 密文字符串，data 为 null 时 crypt 保持 false。
 - 应用日志不得记录密钥、解密后的敏感正文或完整密文。
 - AES-GCM 不是密码哈希，用户密码仍应使用专用密码哈希方案保存。
 - 当前未实现时间戳、nonce 防重放和密钥轮换；这些属于下一阶段，不应在文档或业务中假设已经具备。
@@ -3093,7 +3093,7 @@ Repository 扫描和 Schema 扫描是两件事：`yulinlin.repository.scan-packa
 | `Page<E>` | `lang` | ORM 和 Service 共用的分页结果，包含当前页列表、总数和扩展值 |
 | `IdPo` | `starter` | Web 接口的单个字符串 ID 入参 |
 | `ListPo<E>` | `starter` | Web 接口的通用列表入参 |
-| `R<E>` / `ResponseVo<E>` | `starter` | 标准 Web 响应体；`ResponseVo`保留兼容写法 |
+| `R<E>` / `ResponseVo<E>` | `starter` | 标准 Web 响应体；新代码使用 `R`，`ResponseVo`仅保留废弃兼容写法 |
 
 这些类型按使用的门面模块引入。只使用 ORM 的项目可直接使用 `PagePo`和 `Page`，不必为了 `IdPo`或 `R`引入 Web Controller。它们也不要求实现 Java `Serializable`，HTTP JSON 仍由 Spring/Jackson 处理。
 
@@ -3185,6 +3185,41 @@ Page<PayChannelEntity> result = ModelSelectWrapper
 ```
 
 `PayChannelEntity.class`决定表、返回字段和结果类型，`PayChannelPo`只描述 WHERE、分页和排序输入。查询 PO 不需要 `@JoinTable`，也不应开启自动 Schema。`@JoinWhere`支持的操作符、空值和 AND/OR 精确语义见[查询条件对象](02-CRUD与统计分析.md#查询条件对象)。
+
+#### 统一 Controller 响应：`R<E>`
+
+普通 JSON Controller 统一显式返回 `R<E>`。这样业务数据、成功状态、错误提示和可选接口加密使用同一协议；框架不会通过全局 Advice 猜测并自动包装任意返回对象。
+
+```java
+@PostMapping("/page")
+public R<Page<PayChannelEntity>> page(@RequestBody PayChannelPo po) {
+    return R.ok(payChannelService.page(po));
+}
+
+@DeleteMapping("/{id}")
+public R<Void> delete(@PathVariable String id) {
+    payChannelService.delete(id);
+    return R.ok();
+}
+```
+
+标准工厂方法：
+
+| 方法 | 结果 |
+| --- | --- |
+| `R.ok()` | 成功且没有响应数据 |
+| `R.ok(data)` | 成功并返回数据 |
+| `R.ok(data, message)` | 成功并返回数据和提示 |
+| `R.fail(message)` | 默认 `500`失败响应 |
+| `R.fail(code, message)` | 指定错误码的失败响应 |
+
+成功响应默认 `code=200`、`ok=true`；失败工厂始终设置 `ok=false`。每个新响应都会写入当前 `timestamp`，`crypt`默认 false。旧的 `R.newInstance(...)`和 `ResponseVo<E>`暂时保留二进制/源码兼容，但均已废弃，新业务不要继续使用。
+
+`starter`默认注册最低优先级的异常处理器：参数绑定或 JSON 格式错误返回 `400`；`ApiException`携带 `400–599`标准 HTTP 错误码时使用该状态，其他数值按 `400`处理；`ResponseStatusException`保留 HTTP 状态；未识别异常记录完整服务端日志并返回 `500 + 系统繁忙，请稍后重试`。错误 HTTP 状态和 `R.code`保持一致；业务项目可以提供更高优先级的 `@RestControllerAdvice`覆盖细分规则。不要把 SQL、文件路径、密钥或异常堆栈写进客户端 `msg`。
+
+启用 `@ApiCrypto`且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](06-接口安全.md)。
+
+文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不使用 `R`包装，也不进入面向 JSON 的 `@ApiCrypto`响应处理。
 
 ### 基础实体选择
 

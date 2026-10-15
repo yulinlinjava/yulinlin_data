@@ -2,7 +2,11 @@ package com.yulinlin.starter.domain;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
+/**
+ * @deprecated Use {@link R}.
+ */
 @Schema(description = "响应体")
+@Deprecated
 public class ResponseVo<E> extends R<E> {
 
     public ResponseVo() {
@@ -13,7 +17,7 @@ public class ResponseVo<E> extends R<E> {
     }
 
     public static   <E> ResponseVo<E> newInstance(E data){
-        return newInstance(data,200);
+        return newInstance(data, SUCCESS_CODE);
     }
 
     public static   <E> ResponseVo<E> newInstance(E data,int code){
@@ -21,12 +25,11 @@ public class ResponseVo<E> extends R<E> {
     }
 
     public   static  <E> ResponseVo<E> newInstance(E data,String msg){
-        return newInstance(data,200,msg);
+        return newInstance(data, SUCCESS_CODE,msg);
     }
 
     public  static  <E> ResponseVo<E> newInstance(E data,int code,String msg){
-        ResponseVo vo =  new ResponseVo(data,code,msg);
-        return vo;
+        return new ResponseVo<>(data,code,msg);
     }
 
 

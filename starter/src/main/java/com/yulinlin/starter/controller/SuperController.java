@@ -1,10 +1,10 @@
 package com.yulinlin.starter.controller;
 
 import com.yulinlin.data.lang.util.Page;
-import com.yulinlin.starter.domain.ResponseVo;
 import com.yulinlin.starter.domain.IdPo;
+import com.yulinlin.starter.domain.R;
 import com.yulinlin.common.domain.po.PagePo;
-import com.yulinlin.common.domain.vo.PageVo;
+import com.yulinlin.common.exception.ApiException;
 import com.yulinlin.common.model.AbstractModel;
 import com.yulinlin.common.service.ISuperService;
 import com.yulinlin.data.lang.reflection.GenericUtil;
@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import java.util.List;
 
 
-public class SuperController<E extends AbstractModel<E>,R extends PagePo>  {
+public class SuperController<E extends AbstractModel<E>, Q extends PagePo>  {
 
 
     @Autowired
@@ -26,61 +26,50 @@ public class SuperController<E extends AbstractModel<E>,R extends PagePo>  {
 
     @Operation(summary = "根据id查询数据")
     @RequestMapping(value = "getById",method = RequestMethod.POST)
-    public ResponseVo<E> getById(@RequestBody IdPo po) {
+    public R<E> getById(@RequestBody IdPo po) {
 
         E obj = service.findById(po.getId());
         if(obj == null){
             obj = service.newInstance();
         }
-        return ResponseVo.newInstance(obj);
+        return R.ok(obj);
     }
-
-
-
-/*    @Operation(summary = "根据id查询数据")
-    @RequestMapping(value = "findById",method = RequestMethod.POST)
-    public ResponseVo<E> findById(@RequestBody String id) {
-
-        E obj = service.findById(id);
-        if(obj == null){
-            obj = service.newInstance();
-        }
-        return ResponseVo.newInstance(obj);
-    }*/
-
 
     @Operation(summary = "删除数据")
     @RequestMapping(value = "deleteByIdIn",method = RequestMethod.POST)
-    public ResponseVo<Integer> deleteByIdIn(@RequestBody List<String> coll) {
+    public R<Integer> deleteByIdIn(@RequestBody List<String> coll) {
 
        int total =  service.deleteByIdIn(coll);
-        return ResponseVo.newInstance(total,"成功删除："+total+"条数据");
+        if (total != coll.size()) throw new ApiException("部分数据删除失败", 500);
+        return R.ok(total, "成功删除：" + total + "条数据");
     }
 
     @Operation(summary = "保存数据")
     @RequestMapping(value = "saveOne",method = RequestMethod.POST)
-    public ResponseVo<Integer>  saveOne(@RequestBody E obj) {
+    public R<Integer> saveOne(@RequestBody E obj) {
 
         int total = service.save(obj);
 
-        return ResponseVo.newInstance(total,"成功保存："+total+"条数据");
+        if (total <= 0) throw new ApiException("保存失败", 500);
+        return R.ok(total, "成功保存：" + total + "条数据");
     }
 
     @Operation(summary = "批量保存")
     @RequestMapping(value = "saveList",method = RequestMethod.POST)
-    public ResponseVo<Integer>  saveList(@RequestBody List<E> obj) {
+    public R<Integer> saveList(@RequestBody List<E> obj) {
 
         int total = service.saveList(obj);
-        return ResponseVo.newInstance(total,"成功保存："+total+"条数据");
+        if (total != obj.size()) throw new ApiException("部分数据保存失败", 500);
+        return R.ok(total, "成功保存：" + total + "条数据");
     }
 
 
     @Operation(summary = "分页查询")
     @RequestMapping(value = "page",method = RequestMethod.POST)
-    public ResponseVo<Page<E>> page(@RequestBody R pagePo) {
+    public R<Page<E>> page(@RequestBody Q pagePo) {
 
         Page<E> vo =  service.page(pagePo);
-        return ResponseVo.newInstance(vo);
+        return R.ok(vo);
     }
 
 

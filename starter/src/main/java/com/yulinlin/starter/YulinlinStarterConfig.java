@@ -3,7 +3,9 @@ package com.yulinlin.starter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.data.lang.json.YulinlinSimpModule;
 import com.yulinlin.data.lang.json.JsonUtil;
+import com.yulinlin.starter.web.StarterExceptionHandler;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -22,6 +24,12 @@ public class YulinlinStarterConfig implements WebMvcConfigurer {
         objectMapper.registerModule(new YulinlinSimpModule());
         JsonUtil.setMapper(objectMapper);
         return objectMapper;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(StarterExceptionHandler.class)
+    public StarterExceptionHandler starterExceptionHandler() {
+        return new StarterExceptionHandler();
     }
 
 

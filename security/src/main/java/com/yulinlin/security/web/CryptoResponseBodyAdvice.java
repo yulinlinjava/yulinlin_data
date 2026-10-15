@@ -64,6 +64,9 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         if (!stringResponse && !isJson(selectedContentType)) {
             throw new CryptoException("@ApiCrypto response only supports JSON or String response bodies");
         }
+        if (body instanceof CryptoDataResponse dataResponse && dataResponse.getData() == null) {
+            return body;
+        }
         String device;
         AesCrypto crypto;
         try {

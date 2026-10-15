@@ -8,24 +8,27 @@ import lombok.Data;
 @Data
 public class R<E> implements CryptoDataResponse {
 
+    public static final int SUCCESS_CODE = 200;
+    public static final int ERROR_CODE = 500;
+
     @Schema(description = "数据")
     private E data;
 
     @Schema(description = "状态码")
-    private int code = 200;
+    private int code = SUCCESS_CODE;
 
     //是否加密
     private boolean crypt = false;
 
 
-    private boolean ok ;
+    private boolean ok = true;
 
     @Schema(description = "消息")
     private String msg;
 
 
-    @Schema(description = "时间挫")
-    private long timestamp;
+    @Schema(description = "时间戳")
+    private long timestamp = System.currentTimeMillis();
 
     public R() {
     }
@@ -34,8 +37,12 @@ public class R<E> implements CryptoDataResponse {
         this.data = data;
         this.code = code;
         this.msg = msg;
-        this.ok = code == 200;
-        this.timestamp = System.currentTimeMillis();
+        this.ok = code >= 200 && code < 300;
+    }
+
+    public void setCode(int code) {
+        this.code = code;
+        this.ok = code >= 200 && code < 300;
     }
 
     @Override
@@ -51,22 +58,50 @@ public class R<E> implements CryptoDataResponse {
         this.crypt = true;
     }
 
-
-    public static   <E> R<E> newInstance(E data){
-        return newInstance(data,200);
+    public static R<Void> ok() {
+        return ok(null);
     }
 
+    public static <E> R<E> ok(E data) {
+        return ok(data, null);
+    }
+
+    public static <E> R<E> ok(E data, String msg) {
+        return new R<>(data, SUCCESS_CODE, msg);
+    }
+
+    public static <E> R<E> fail(String msg) {
+        return fail(ERROR_CODE, msg);
+    }
+
+    public static <E> R<E> fail(int code, String msg) {
+        R<E> response = new R<>(null, code, msg);
+        response.ok = false;
+        return response;
+    }
+
+    /** @deprecated Use {@link #ok(Object)} or {@link #fail(int, String)}. */
+    @Deprecated
+    public static   <E> R<E> newInstance(E data){
+        return ok(data);
+    }
+
+    /** @deprecated Use {@link #ok(Object)} or {@link #fail(int, String)}. */
+    @Deprecated
     public static   <E> R<E> newInstance(E data, int code){
         return newInstance(data,code,null);
     }
 
+    /** @deprecated Use {@link #ok(Object, String)}. */
+    @Deprecated
     public   static  <E> R<E> newInstance(E data, String msg){
-        return newInstance(data,200,msg);
+        return ok(data,msg);
     }
 
+    /** @deprecated Use {@link #ok(Object, String)} or {@link #fail(int, String)}. */
+    @Deprecated
     public  static  <E> R<E> newInstance(E data, int code, String msg){
-        R vo =  new R(data,code,msg);
-        return vo;
+        return new R<>(data,code,msg);
     }
 
 

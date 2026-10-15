@@ -2470,6 +2470,8 @@ yulinlin:
 
 `@ApiCrypto` 可以放在 Controller 类或具体方法上。方法配置优先于类配置：
 
+需要请求加解密的业务 JSON 接口统一使用 `@PostMapping + @RequestBody`。查询、详情和删除也把参数组成 JSON body；不要使用 query 参数或 path 变量传递期望被加密的内容，因为请求 Advice 只处理消息体。监控页面、静态资源、健康检查和文件/媒体流等非业务 JSON 入口可以继续使用适合它们的 HTTP 方法，并且不使用本协议。
+
 ```java
 package demo.api;
 
@@ -3188,7 +3190,7 @@ Page<PayChannelEntity> result = ModelSelectWrapper
 
 #### 统一 Controller 响应：`R<E>`
 
-普通 JSON Controller 统一显式返回 `R<E>`。这样业务数据、成功状态、错误提示和可选接口加密使用同一协议；框架不会通过全局 Advice 猜测并自动包装任意返回对象。
+普通 JSON Controller 统一使用 `@PostMapping + @RequestBody`并显式返回 `R<E>`。查询、详情、创建、修改和删除都把参数放进一个 JSON 请求体，启用 `@ApiCrypto`后才能对整个 body 使用同一套明文判定和解密流程；框架不会通过全局 Advice 猜测并自动包装任意返回对象。
 
 ```java
 @PostMapping("/page")
@@ -3196,9 +3198,9 @@ public R<Page<PayChannelEntity>> page(@RequestBody PayChannelPo po) {
     return R.ok(payChannelService.page(po));
 }
 
-@DeleteMapping("/{id}")
-public R<Void> delete(@PathVariable String id) {
-    payChannelService.delete(id);
+@PostMapping("/delete")
+public R<Void> delete(@RequestBody IdPo po) {
+    payChannelService.delete(po.getId());
     return R.ok();
 }
 ```
@@ -3219,7 +3221,7 @@ public R<Void> delete(@PathVariable String id) {
 
 启用 `@ApiCrypto`且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](06-接口安全.md)。
 
-文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不使用 `R`包装，也不进入面向 JSON 的 `@ApiCrypto`响应处理。
+业务 JSON 接口不要用 `@GetMapping`、`@PutMapping`、`@PatchMapping`或 `@DeleteMapping`承载加密参数，也不要把敏感条件放在 query/path 中。监控页面、静态资源、健康检查、文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不受这条约束；流式响应不使用 `R`包装，也不进入面向 JSON 的 `@ApiCrypto`响应处理。
 
 ### 基础实体选择
 
@@ -3562,6 +3564,9 @@ public class UserService {
 package com.example.app.user.api;
 
 import com.example.app.user.service.UserService;
+import com.yulinlin.security.annotation.ApiCrypto;
+import com.yulinlin.starter.domain.IdPo;
+import com.yulinlin.starter.domain.R;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -3569,6 +3574,7 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/users")
+@ApiCrypto
 public class UserController {
     private final UserService service;
 
@@ -3576,27 +3582,37 @@ public class UserController {
         this.service = service;
     }
 
-    @GetMapping("/by-username")
-    public UserResponse findByUsername(@RequestParam String username) {
-        return service.findByUsername(username);
+    @PostMapping("/by-username")
+    public R<UserResponse> findByUsername(@Valid @RequestBody FindUserRequest request) {
+        return R.ok(service.findByUsername(request.username()));
     }
 
-    @PostMapping
-    public String create(@Valid @RequestBody CreateUserRequest request) {
-        return service.create(request.username());
+    @PostMapping("/create")
+    public R<String> create(@Valid @RequestBody CreateUserRequest request) {
+        return R.ok(service.create(request.username()), "创建成功");
     }
 
-    @PatchMapping("/{id}/name")
-    public void rename(@PathVariable String id, @Valid @RequestBody RenameUserRequest request) {
-        service.rename(id, request.username());
+    @PostMapping("/rename")
+    public R<Void> rename(@Valid @RequestBody RenameUserRequest request) {
+        service.rename(request.id(), request.username());
+        return R.ok();
     }
 
+    @PostMapping("/delete")
+    public R<Void> delete(@RequestBody IdPo request) {
+        service.delete(request.getId());
+        return R.ok();
+    }
+
+    public record FindUserRequest(@NotBlank String username) { }
     public record CreateUserRequest(@NotBlank @Size(max = 64) String username) { }
-    public record RenameUserRequest(@NotBlank @Size(max = 64) String username) { }
+    public record RenameUserRequest(
+            @NotBlank String id,
+            @NotBlank @Size(max = 64) String username) { }
 }
 ```
 
-Controller 只处理协议、校验和 DTO，不直接调用 Wrapper 或持有事务。真实项目应将异常统一转换为约定的错误响应，不在每个 Controller 重复 try/catch。
+Controller 只处理 POST JSON 协议、校验和 DTO，不直接调用 Wrapper 或持有事务。查询和删除同样定义小型请求 DTO，不把参数拆到 URL。真实项目应将异常统一转换为约定的错误响应，不在每个 Controller 重复 try/catch。
 
 ### 事务与自动更新
 

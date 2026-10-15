@@ -69,7 +69,7 @@ class CacheKeyTest {
     }
 
     private static CacheKey key(String group, ParseType type, INode node) {
-        return CacheKey.query(group, "master", AbstractSession.class,
+        return OrmCacheKeyFactory.query(group, "master", AbstractSession.class,
                 UserRow.class, UserRow.class, type, node);
     }
 

@@ -7,14 +7,11 @@ import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.CacheClient;
 import com.yulinlin.data.core.cache.DefaultCacheClient;
 import com.yulinlin.data.core.cache.QueryCacheProperties;
-import com.yulinlin.data.core.node.CommandNode;
-import com.yulinlin.data.core.parse.ParseType;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -309,16 +306,11 @@ class CaffeineQueryCacheTest {
     }
 
     private static CacheKey key() {
-        return CacheKey.query("mysql", "master", CaffeineQueryCacheTest.class,
-                String.class, String.class, ParseType.select,
-                new CommandNode<>("select #{id}", Map.of("id", 1), ParseType.select));
+        return CacheKey.fromMaterials("caffeine-test", "mysql", "master", "id", 1);
     }
 
     private static CacheKey key(String field, Object value) {
-        return CacheKey.query("mysql", "master", CaffeineQueryCacheTest.class,
-                String.class, String.class, ParseType.select,
-                new CommandNode<>("select * from users where " + field + " = #{value}",
-                        Map.of("value", value), ParseType.select));
+        return CacheKey.fromMaterials("caffeine-test", "mysql", "master", field, value);
     }
 
     private static CachePartition partition(CacheNamespace namespace, String field, Object value) {

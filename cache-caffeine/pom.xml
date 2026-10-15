@@ -14,7 +14,7 @@
     <dependencies>
         <dependency>
             <groupId>com.yulinlin</groupId>
-            <artifactId>core</artifactId>
+            <artifactId>cache-core</artifactId>
             <version>${yulinlin.version}</version>
         </dependency>
         <dependency>

@@ -1,6 +1,5 @@
 package com.yulinlin.data.core.cache;
 
-import com.yulinlin.data.core.YulinlinCoreAutoConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
@@ -22,11 +21,11 @@ class QueryCachesTest {
     }
 
     @Test
-    void coreDoesNotEnableProviderOnlyCacheProperties() {
-        EnableConfigurationProperties annotation = YulinlinCoreAutoConfig.class
+    void cacheCoreDoesNotEnableProviderOnlyCacheProperties() {
+        EnableConfigurationProperties annotation = CacheCoreAutoConfiguration.class
                 .getAnnotation(EnableConfigurationProperties.class);
 
-        assertThat(annotation.value()).doesNotContain(QueryCacheProperties.class);
+        assertThat(annotation).isNull();
     }
 
     @Test
@@ -42,7 +41,7 @@ class QueryCachesTest {
                 new StubCache("caffeine"), new StubCache("ehcache"))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("caffeine", "ehcache")
-                .hasMessageContaining("Keep only cache-caffeine or cache-ehcache");
+                .hasMessageContaining("Keep only one of cache-caffeine, cache-ehcache, or cache-redis");
     }
 
     private record StubCache(String providerName) implements QueryCache {

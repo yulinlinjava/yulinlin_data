@@ -13,7 +13,7 @@ public final class QueryCaches {
         if (providers.size() > 1) {
             throw new IllegalStateException("Multiple query-cache providers found: "
                     + providers.stream().map(QueryCache::providerName).toList()
-                    + ". Keep only cache-caffeine or cache-ehcache.");
+                    + ". Keep only one of cache-caffeine, cache-ehcache, or cache-redis.");
         }
         return providers.getFirst();
     }

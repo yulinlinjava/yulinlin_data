@@ -1,8 +1,5 @@
 package com.yulinlin.data.core.cache;
 
-import com.yulinlin.data.core.node.INode;
-import com.yulinlin.data.core.parse.ParseType;
-
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Map;
@@ -23,23 +20,12 @@ public final class CacheKey {
         this.low = low;
     }
 
-    public static CacheKey query(String group,
-                                 Object cluster,
-                                 Class<?> sessionType,
-                                 Class<?> entityClass,
-                                 Class<?> fromClass,
-                                 ParseType parseType,
-                                 INode node) {
+    /** Creates a logical key from canonical metadata without depending on an ORM node model. */
+    public static CacheKey fromMaterials(Object... materials) {
         Murmur3Hash128 hasher = new Murmur3Hash128();
-        CacheKeyMetadata.write(hasher, VERSION);
-        CacheKeyMetadata.write(hasher, group);
-        CacheKeyMetadata.write(hasher, cluster);
-        CacheKeyMetadata.write(hasher, sessionType);
-        CacheKeyMetadata.write(hasher, entityClass);
-        CacheKeyMetadata.write(hasher, fromClass);
-        CacheKeyMetadata.write(hasher, parseType);
-        CacheKeyMetadata.write(hasher,
-                parseType == ParseType.count ? CountCacheKeyMaterial.from(node) : node);
+        if (materials != null) {
+            for (Object material : materials) CacheKeyMetadata.write(hasher, material);
+        }
         Murmur3Hash128.Result hash = hasher.finish();
         return new CacheKey(hash.first(), hash.second());
     }
@@ -111,16 +97,6 @@ public final class CacheKey {
         }
         Murmur3Hash128.Result hash = hasher.finish();
         return new CacheKey(hash.first(), hash.second());
-    }
-
-    @Deprecated
-    public static CacheKey of(ParseType type, INode node) {
-        return query(null, null, null, null, null, type, node);
-    }
-
-    @Deprecated
-    public static CacheKey of(ParseType type, INode node, String namespace) {
-        return query(namespace, null, null, null, null, type, node);
     }
 
     public String value() {

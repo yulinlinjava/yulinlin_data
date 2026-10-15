@@ -11,6 +11,7 @@ import com.yulinlin.data.core.cache.CachePartitionResolver;
 import com.yulinlin.data.core.cache.CacheLookup;
 import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.OrmCacheKeyFactory;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.coder.IDataBuffer;
@@ -397,7 +398,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             return callable.get();
         }
 
-        CacheKey cacheKey = CacheKey.query(
+        CacheKey cacheKey = OrmCacheKeyFactory.query(
                 group(), cluster(), getClass(), request.getEntityClass(),
                 request.getFromClass(), result.getType(), request.getWrapper());
         Set<CacheNamespace> namespaces = CacheNamespaceResolver.resolve(

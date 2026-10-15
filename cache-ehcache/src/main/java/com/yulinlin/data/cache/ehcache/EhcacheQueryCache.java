@@ -1,6 +1,5 @@
 package com.yulinlin.data.cache.ehcache;
 
-import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.cache.CacheLookup;
@@ -45,10 +44,10 @@ public final class EhcacheQueryCache implements QueryCache {
     private static final String DISK_POOL_ALIAS = "yulinlin-cache-disk";
     private static final int MAX_PARTITION_VALUES_PER_TABLE = 4096;
 
-    private final ObjectMapper objectMapper;
+    private final EhcacheValueCodec codec;
     private final QueryCacheProperties common;
     private final PersistentCacheManager manager;
-    private final Cache<String, PersistentEntry> cache;
+    private final Cache<String, byte[]> cache;
     private final Cache<String, Long> versions;
     private final Object versionLock = new Object();
     private final Map<CacheNamespace, PartitionState> partitionStates = new HashMap<>();
@@ -64,7 +63,7 @@ public final class EhcacheQueryCache implements QueryCache {
     public EhcacheQueryCache(QueryCacheProperties common,
                              EhcacheProperties properties,
                              ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper.copy();
+        this.codec = new EhcacheValueCodec(objectMapper, properties.getSerializer());
         this.common = common;
         this.maximumEntryBytes = megabytesToBytes(properties.getMaximumEntrySizeMb());
         this.recordStatistics = properties.isRecordStatistics();
@@ -82,7 +81,7 @@ public final class EhcacheQueryCache implements QueryCache {
                 .withDefaultDiskStoreThreadPool(DISK_POOL_ALIAS)
                 .with(CacheManagerBuilder.persistence(properties.getDirectory().toFile()))
                 .withCache(CACHE_ALIAS, CacheConfigurationBuilder
-                        .newCacheConfigurationBuilder(String.class, PersistentEntry.class,
+                        .newCacheConfigurationBuilder(String.class, byte[].class,
                                 resources)
                         .withExpiry(new EntryExpiry(properties.getExpirationPolicy())))
                 .withCache(VERSION_ALIAS, CacheConfigurationBuilder
@@ -92,7 +91,7 @@ public final class EhcacheQueryCache implements QueryCache {
                                         .disk(10, MemoryUnit.MB, properties.isPersistent()))
                         .withExpiry(ExpiryPolicyBuilder.noExpiration()))
                 .build(true);
-        this.cache = manager.getCache(CACHE_ALIAS, String.class, PersistentEntry.class);
+        this.cache = manager.getCache(CACHE_ALIAS, String.class, byte[].class);
         this.versions = manager.getCache(VERSION_ALIAS, String.class, Long.class);
     }
 
@@ -134,16 +133,13 @@ public final class EhcacheQueryCache implements QueryCache {
 
     @Override
     public CacheLookup get(CacheKey key, CacheValueType valueType) {
-        PersistentEntry entry = cache.get(key.value());
+        byte[] entry = cache.get(key.value());
         if (entry == null) {
             record(misses);
             return CacheLookup.miss();
         }
         try {
-            JavaType target = valueType.collection()
-                    ? objectMapper.getTypeFactory().constructCollectionType(java.util.List.class, valueType.valueClass())
-                    : objectMapper.getTypeFactory().constructType(valueType.valueClass());
-            Object value = objectMapper.readValue(entry.value(), target);
+            Object value = codec.decode(entry, valueType).value();
             record(hits);
             return CacheLookup.hit(value);
         } catch (Exception error) {
@@ -206,14 +202,13 @@ public final class EhcacheQueryCache implements QueryCache {
     @Override
     public CacheLookup getApplication(String namespace, String key, Type valueType) {
         String physicalKey = applicationKey(namespace, key).value();
-        PersistentEntry entry = cache.get(physicalKey);
+        byte[] entry = cache.get(physicalKey);
         if (entry == null) {
             record(misses);
             return CacheLookup.miss();
         }
         try {
-            Object value = objectMapper.readValue(entry.value(),
-                    objectMapper.getTypeFactory().constructType(valueType));
+            Object value = codec.decode(entry, valueType).value();
             record(hits);
             return CacheLookup.hit(value);
         } catch (Exception error) {
@@ -233,14 +228,14 @@ public final class EhcacheQueryCache implements QueryCache {
 
     private void putEntry(String physicalKey, Object value, Duration ttl, String kind) {
         try {
-            byte[] bytes = objectMapper.writeValueAsBytes(value);
+            byte[] bytes = codec.encode(value, common.resolveTtl(ttl));
             if (bytes.length > maximumEntryBytes) {
                 record(oversizedEntries);
                 log.warn("缓存条目超过大小限制，已跳过 kind={} key={} sizeBytes={} limitBytes={}",
                         kind, physicalKey, bytes.length, maximumEntryBytes);
                 return;
             }
-            cache.put(physicalKey, new PersistentEntry(bytes, common.resolveTtl(ttl)));
+            cache.put(physicalKey, bytes);
             record(puts);
         } catch (Exception error) {
             record(serializationFailures);
@@ -368,11 +363,7 @@ public final class EhcacheQueryCache implements QueryCache {
         }
     }
 
-    private record PersistentEntry(byte[] value, Duration ttl) implements Serializable {
-        @Serial private static final long serialVersionUID = 1L;
-    }
-
-    private static final class EntryExpiry implements ExpiryPolicy<String, PersistentEntry>, Serializable {
+    private static final class EntryExpiry implements ExpiryPolicy<String, byte[]>, Serializable {
         @Serial private static final long serialVersionUID = 1L;
         private final EhcacheProperties.ExpirationPolicy policy;
 
@@ -380,17 +371,19 @@ public final class EhcacheQueryCache implements QueryCache {
             this.policy = policy;
         }
 
-        @Override public Duration getExpiryForCreation(String key, PersistentEntry value) { return value.ttl(); }
+        @Override public Duration getExpiryForCreation(String key, byte[] value) {
+            return EhcacheValueCodec.ttl(value);
+        }
         @Override public Duration getExpiryForAccess(String key,
-                                                     java.util.function.Supplier<? extends PersistentEntry> value) {
+                                                     java.util.function.Supplier<? extends byte[]> value) {
             if (policy != EhcacheProperties.ExpirationPolicy.AFTER_ACCESS) return null;
-            PersistentEntry entry = value.get();
-            return entry == null ? null : entry.ttl();
+            byte[] entry = value.get();
+            return entry == null ? null : EhcacheValueCodec.ttl(entry);
         }
         @Override public Duration getExpiryForUpdate(String key,
-                                                     java.util.function.Supplier<? extends PersistentEntry> oldValue,
-                                                     PersistentEntry newValue) {
-            return newValue.ttl();
+                                                     java.util.function.Supplier<? extends byte[]> oldValue,
+                                                     byte[] newValue) {
+            return EhcacheValueCodec.ttl(newValue);
         }
     }
 }

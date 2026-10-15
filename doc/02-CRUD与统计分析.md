@@ -262,7 +262,7 @@ int affected = ModelUpdateWrapper.newInstance("mysql", patch)
         .execute();
 ```
 
-写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine` 或 `cache-ehcache` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
+写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine`、`cache-ehcache` 或 `cache-redis` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
 
 ## 查询条件与结果组织
 

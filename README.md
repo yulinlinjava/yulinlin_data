@@ -12,7 +12,7 @@
 - 通过显式 `@JoinSync` 或 `.autoUpdate()` 在事务内按 setter 跟踪部分更新，不要求所有查询都进入持久化上下文。
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
 - 最终一致的高频小写入可显式使用 `.queue()`，由进程内定时队列合并 `INode` 后复用现有 Session 和 JDBC batch。
-- 查询缓存是可选模块：可选 Caffeine 或 Ehcache，Key 包含数据源与查询元数据；条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
+- 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，Key 包含数据源与查询元数据；条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
 - 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描，Elasticsearch 提供同一入口的索引与基础 Mapping 初始化；只有 `autoSchema=true` 的完整实体才参与结构初始化。
 - PostgreSQL 与 Elasticsearch 通过同一套 `match()`、`highlight()` 和实体全文字段声明提供常用全文检索；MySQL、SQLite、H2 保持 LIKE/原字段兼容回退。
@@ -49,7 +49,7 @@
 | PostgreSQL 全文索引、中文匹配和高亮 | 高：学习 `tsvector`、GIN、`ts_headline` 并编写 DDL/Mapper SQL | 高：Native Query；JPA 本身不提供全文 API | 低：配置 pg_jieba，字段声明 `fullText`，继续使用 `match()`/`highlight()` |
 | Elasticsearch 查询、Mapping 和高亮 | 高：另接 ES Client/框架，维护 Document、DSL 和结果解析 | 中高：需引入 Hibernate Search 或 Spring Data ES，并学习新注解与 Search DSL | 低：引入 ES 模块，继续使用相同实体、Wrapper、`match()` 和 `highlight()` |
 | 高级 ES 同义词、建议、向量与语义搜索 | 高：ES 专项开发 | 中：Hibernate Search/ES 专项配置 | 中高：当前公共 Wrapper 未完整覆盖，必要时使用原生 ES 能力 |
-| 查询缓存接入 | 中：配置 MyBatis 二级缓存或 Spring Cache/Provider | 中：配置二级/查询缓存 Provider | 低：按需引入 Caffeine 或 Ehcache 模块，业务 API 不变 |
+| 查询缓存接入 | 中：配置 MyBatis 二级缓存或 Spring Cache/Provider | 中：配置二级/查询缓存 Provider | 低：按需引入 Caffeine、Ehcache 或 Redis 模块，业务 API 不变 |
 | 更新后的缓存失效 | 低但粗：默认让当前 Mapper namespace 缓存空间全部失效 | 中：实体缓存和查询缓存规则不同 | 低：单字段等值结构按条件值失效；出现多种或复杂结构后升级为表 namespace 整体失效 |
 | 多数据源、列表与 Count 缓存隔离 | 中高：业务缓存需自行设计 Key 和失效关系 | 中高：需区分 persistence unit、Region 与查询缓存 | 低：数据源、实体、SQL、参数和请求类型统一进入缓存元数据 |
 | 跨请求延迟批量写入 | 高：需自行开发队列、定时任务、分组、满量刷新和失败处理 | 高：事务 Flush 不是跨请求队列，仍需自行开发 | 低：`.queue()` 固化 INode，按 Session/类型/实体分组，按时间或 `flush-size` 刷新 |
@@ -57,7 +57,7 @@
 | 自动建表、索引与结构校验 | 高：通常维护 DDL 或接入迁移工具 | 低到中：Hibernate Schema 能力 | 低：Schema 扫描、`@JoinIndex` 和 CREATE/VALIDATE 安全子集 |
 | 慢操作聚合和查看页面 | 中高：另接监控组件 | 中高：另接 Statistics/Micrometer 与页面 | 低：引入 `monitor`，使用内置只读页面 |
 | MySQL/PostgreSQL 到 ES 的可靠同步 | 高：Outbox/MQ 自行实现 | 中：Hibernate Search 可降低 ORM 实体索引同步成本 | 高：当前仍需 Outbox/MQ；统一查询 API 不等于跨系统事务 |
-| 多节点分布式缓存 | 需 Redis/广播等外部能力 | 需 Redis/广播等外部能力 | 当前 Caffeine/Ehcache 是本地能力，多节点仍需外部协调 |
+| 多节点共享缓存 | 需 Redis/广播等外部能力 | 需 Redis/广播等外部能力 | 内置 `cache-redis`；关闭其 Caffeine L1 后所有节点直接读取 Redis |
 
 JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分；但 Hibernate Search 不是 JPA 查询语法的延续。接入后仍需学习 `@Indexed`、`@FullTextField`、`SearchSession`、Predicate/Projection/Highlight DSL、Analyzer 和索引生命周期，因此属于复杂扩展，而不是“引入即用”的简单扩展。yulinlin-data 的数据库、搜索和缓存也是按需模块，但模块继续复用原实体和查询 API，所以按简单扩展计算。
 
@@ -97,7 +97,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 | 新数据源模块、架构、排障、验收与历史性能 | [扩展开发与维护](doc/05-扩展开发与维护.md) |
 | JSON 接口请求解密、响应加密与浏览器协议 | [接口安全](doc/06-接口安全.md) |
 | SQLite/H2 多线程写入结果、选型依据与复现 | [SQLite/H2 性能报告](doc/07-SQLite与H2性能报告.md) |
-| Caffeine/Ehcache 查询缓存、TTL、复杂 SQL 与多数据源 Key | [查询缓存](doc/08-查询缓存.md) |
+| Caffeine/Ehcache/Redis 查询缓存、TTL、复杂 SQL 与多数据源 Key | [查询缓存](doc/08-查询缓存.md) |
 
 [文档目录](doc/README.md)提供完整阅读导航。AI 能读取仓库时从 [llms.txt](llms.txt)进入；只能上传一个附件时用 [AI 接入指南](doc/AI接入指南.md)，其中包含七个使用专题。
 
@@ -110,7 +110,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。
 - 接口报文加密：security；当前提供显式注解启用的 AES-256-GCM JSON 加解密。
-- 查询缓存完全可选：不引入缓存模块时直接访问数据源；低延迟内存缓存引入 `cache-caffeine`，Heap + Disk 持久化缓存引入 `cache-ehcache`，两者不能同时引入。
+- 查询缓存完全可选：`cache-core` 只承载缓存 SPI、`CacheClient` 和 Key/TTL/失效模型，并由 ORM core 或 Provider 传递引入；不引入具体 Provider 时直接访问数据源。低延迟内存缓存引入 `cache-caffeine`，Heap + Disk 持久化缓存引入 `cache-ehcache`，Redis 共享缓存引入 `cache-redis`。三个 Provider 只能选择一个；`cache-redis` 已内置可关闭的 Caffeine L1，不要再引入 `cache-caffeine`。
 - 慢数据库监控：引入 `monitor`，访问 `/monitor/`；页面内置账号密码验证对话框，验证结果保存在当前 Session，不依赖安全框架。
 
 完整依赖和配置见第一专题。制品来源由团队提供，不假设已发布 Maven Central；业务不依赖 admin 示例模块。

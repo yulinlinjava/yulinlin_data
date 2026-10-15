@@ -1,6 +1,5 @@
 package com.yulinlin.data.core.cache;
 
-import com.yulinlin.data.core.session.AbstractSession;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -10,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class CachePartitionTest {
 
-    private static final CacheNamespace USERS = CacheNamespace.of(AbstractSession.class, "mysql", "users");
+    private static final CacheNamespace USERS = CacheNamespace.of(CachePartitionTest.class, "mysql", "users");
 
     @Test
     void textBucketsConservativelyIgnoreCaseAndSurroundingWhitespace() {

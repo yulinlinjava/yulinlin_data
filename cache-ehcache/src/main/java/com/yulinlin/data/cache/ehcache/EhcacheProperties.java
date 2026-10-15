@@ -16,6 +16,8 @@ public class EhcacheProperties {
     private ExpirationPolicy expirationPolicy = ExpirationPolicy.AFTER_WRITE;
     private int diskThreads = 2;
     private long maximumEntrySizeMb = 16;
+    /** Value format used before Ehcache stores bytes in its configured tiers. */
+    private EhcacheValueSerializer serializer = EhcacheValueSerializer.JSON;
     /** Disabled by default to avoid counters on the cache hot path. */
     private boolean recordStatistics;
 
@@ -90,6 +92,15 @@ public class EhcacheProperties {
             throw new IllegalArgumentException("maximum-entry-size-mb must be positive");
         }
         this.maximumEntrySizeMb = maximumEntrySizeMb;
+    }
+
+    public EhcacheValueSerializer getSerializer() {
+        return serializer;
+    }
+
+    public void setSerializer(EhcacheValueSerializer serializer) {
+        if (serializer == null) throw new IllegalArgumentException("serializer must not be null");
+        this.serializer = serializer;
     }
 
     public boolean isRecordStatistics() {

@@ -35,6 +35,8 @@
 | 反射、深克隆、JSON | lang |
 | JSON 接口请求/响应加密 | security；需要 Spring MVC，独立于 ORM 数据库模块 |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
+| 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
+| 可选查询缓存 | 单机内存用 cache-caffeine，本地磁盘持久化用 cache-ehcache，共享 Redis 用 cache-redis；三选一 |
 | 实体基类、Model Wrapper、树和 ID | common |
 | 示例或基准 | admin，不作为业务依赖 |
 
@@ -882,7 +884,7 @@ int affected = ModelUpdateWrapper.newInstance("mysql", patch)
         .execute();
 ```
 
-写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine` 或 `cache-ehcache` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
+写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine`、`cache-ehcache` 或 `cache-redis` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
 
 ### 查询条件与结果组织
 
@@ -2662,7 +2664,7 @@ public class SecureValueService {
 <!-- source: doc/08-查询缓存.md -->
 ## 查询缓存
 
-查询缓存是可选能力。`core` 只提供统一协议和无缓存兜底；不引入缓存模块时，应用照常启动，标记为缓存的查询会直接访问数据源。
+查询缓存是可选能力。`cache-core` 提供缓存 SPI、`CacheClient`、Key/TTL/namespace 等公共协议和无缓存兜底；ORM `core` 只负责从 INode、Wrapper 和实体元数据构造查询 Key、判断失效范围。不引入具体缓存 Provider 时，应用照常启动，标记为缓存的查询会直接访问数据源。
 
 ### 公共配置
 
@@ -2680,7 +2682,7 @@ yulinlin:
 | `ttl-in-key` | `false` | TTL 是否参与 ORM 查询缓存 Key；不影响 `CacheClient` 业务缓存 |
 | `clear-on-write` | `true` | 成功写入后是否默认清理相关 ORM 查询缓存 |
 
-`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存。`QueryCacheProperties` 只由 `cache-caffeine` 或 `cache-ehcache` 的自动配置启用；未引入 Provider 时不存在查询缓存，该配置不会生效，写路径也不执行 namespace 解析和失效处理。
+`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存。`QueryCacheProperties` 只由 `cache-caffeine`、`cache-ehcache` 或 `cache-redis` 的自动配置启用；未引入 Provider 时不存在查询缓存，该配置不会生效，写路径也不执行 namespace 解析和失效处理。
 
 默认关闭时，只要查询条件、数据源和 namespace 版本相同，不同 TTL 的查询就会复用同一个缓存条目。已有条目被命中时不会修改其过期时间；`REFRESH`或未命中重新写入时，才使用本次请求的 TTL。这样可以减少重复数据并提高缓存复用率。
 
@@ -2696,7 +2698,7 @@ yulinlin:
 
 ### 选择实现
 
-只引入一个实现，不要同时引入两个。
+只引入一个实现，不要同时引入多个。三个实现都会传递引入 `cache-core`，业务不需要重复声明；`cache-redis` 直接包含自己的 Caffeine L1，不依赖 `cache-caffeine` Provider。
 
 #### Caffeine 内存缓存
 
@@ -2771,6 +2773,7 @@ yulinlin:
       persistent: true
       expiration-policy: after-write
       disk-threads: 2
+      serializer: json
       maximum-entry-size-mb: 16
       record-statistics: false
 ```
@@ -2784,10 +2787,13 @@ yulinlin:
 | `persistent` | `true` | 是否在正常关闭并重启后保留磁盘缓存 |
 | `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
 | `disk-threads` | `2` | Ehcache 磁盘层固定工作线程数；本地 SSD 通常使用 `2` 到 `4` |
-| `maximum-entry-size-mb` | `16` | 单条 JSON 序列化结果上限，超出后记录并跳过，防止一个大列表挤占缓存 |
+| `serializer` | `json` | Value 格式：`json`、`smile` 或高吞吐的 `fory` |
+| `maximum-entry-size-mb` | `16` | 单条序列化结果上限，超出后记录并跳过，防止一个大列表挤占缓存 |
 | `record-statistics` | `false` | 是否记录框架层命中、未命中、写入、超大条目和序列化失败计数；需要观测时显式开启 |
 
 正常关闭时框架调用 `close()`。即使 `persistent: true`，缓存仍应被视为可丢失数据；缓存损坏或反序列化失败会删除对应项并回源查询。缓存量不大时保持 `offheap-size-mb: 0` 即可；只有缓存较大或 GC 压力明显时才建议从 `256` 或 `512` MB 开始启用。容器内存预算必须同时包含 Heap、Off-Heap、线程栈和 JVM 自身开销。
+
+Ehcache 的业务 Value 统一保存为带序列化格式和 TTL 的原始 `byte[]`，Heap、Off-Heap、Disk 不再额外保存一个 Java 包装对象。格式信息随条目保存，因此切换 `json`、`smile` 或 `fory` 后仍可读取尚未过期的其他格式条目。
 
 需要监控时先配置 `record-statistics: true`，再直接注入具体实现读取和重置统计：
 
@@ -2797,6 +2803,106 @@ private EhcacheQueryCache ehcacheQueryCache;
 
 EhcacheQueryCache.Stats stats = ehcacheQueryCache.stats();
 ehcacheQueryCache.resetStatistics();
+```
+
+#### Redis 共享缓存与可选 Caffeine L1
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>cache-redis</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+模块使用 Spring Boot 默认的 Lettuce 和 `RedisConnectionFactory`，不需要业务代码创建 `RedisClient`。默认调用链为 `Caffeine L1 → Redis L2 → 数据源`；关闭 L1 后为 `Redis → 数据源`。
+
+```yaml
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+
+yulinlin:
+  cache:
+    ttl: 10m
+    ttl-in-key: false
+    clear-on-write: true
+    redis:
+      key-prefix: video:prod
+      write-mode: async
+      batch-size: 128
+      serializer: smile
+      maximum-entry-size-mb: 16
+      record-statistics: false
+      caffeine:
+        enabled: true
+        maximum-size: 10000
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `key-prefix` | `dev` | 隔离不同系统、环境和版本的 Redis Key；默认用于本地开发，生产环境建议显式设置为“项目名:环境” |
+| `write-mode` | `async` | `async` 先写 L1，再由虚拟线程写 Redis；`sync` 在当前线程完成 Redis 写入 |
+| `batch-size` | `128` | 一次 Redis Pipeline 最多提交多少条；收到第一条任务就立即提交当前已有任务，不会等队列凑满 128 条 |
+| `serializer` | `smile` | Redis Value 格式：`smile`、`json` 或高吞吐的 `fory`；JSON 系列使用 Jackson Blackbird |
+| `maximum-entry-size-mb` | `16` | 单条序列化结果上限；超出后跳过缓存，避免大列表占满 Redis 和异步队列 |
+| `record-statistics` | `false` | 是否记录 L1/Redis 命中、未命中、写入失败和异步丢弃统计；默认关闭热点计数 |
+| `caffeine.enabled` | `true` | 是否启用进程内 L1；关闭后每次缓存读取和版本判断都访问 Redis |
+| `caffeine.maximum-size` | `10000` | L1 最大条目数，ORM 查询与 `CacheClient` 共用 |
+
+`async`只用于写入普通缓存值。删除、namespace 失效、单条件分区失效和清空操作始终同步写 Redis，避免旧缓存继续可达。后台线程取到第一条任务后立即 `drainTo` 当时已经存在的任务，并使用 Pipeline 批量发送；`batch-size`是单批上限，不是等待阈值。异步队列满时仅跳过该条 Redis L2 写入，查询仍可回源，不做重试。
+
+`caffeine.enabled=true` 适合单实例或允许一个 L1 TTL 内短暂不一致的业务。每个节点的 L1 和本地版本快照互不广播，其他节点更新数据后，本节点可能继续命中旧 L1，直到条目过期。需要多个实例都立即依据 Redis 版本读取时设置为 `false`；本模块不引入 Pub/Sub、分布式锁或强一致协议。
+
+L1 与 Redis 使用同一个解析后的 TTL，但 Redis 命中后重新放入 L1 会从当前时间重新计算该 TTL，因此 L1 最晚可能比 Redis 条目多存活一个 TTL。单机加速场景可以接受；需要严格以 Redis 过期时间为准时关闭 L1。
+
+Redis 中保存的是 Smile/JSON/Fory 原始字节，不做 Base64。缓存值带有版本、序列化格式和 TTL 信封，因此修改 `serializer` 后仍能读取未过期的旧格式条目。使用 `smile` 或 `json` 时，实体和业务缓存对象必须符合 Jackson 反序列化要求。
+
+#### 序列化格式选择
+
+| 格式 | 适合场景 | 特点 |
+| --- | --- | --- |
+| `json` | 兼容性、可排障性优先 | 默认用于 Ehcache；文本可读，类升级和跨版本排障最直观 |
+| `smile` | 性能、体积与兼容性的平衡 | Redis 默认；二进制 JSON，仍复用项目 Jackson 配置 |
+| `fory` | 大列表、复杂对象、高频缓存 | Java 原生对象图二进制格式，通常吞吐更高、分配更少；必须把缓存存储视为可信边界 |
+
+Fory 运行时由 Provider 单例复用，并启用异步编译，不会为每次 `get/set` 创建实例。框架无法预先知道业务实体类型，因此使用动态类型模式；不要让用户提交的任意字节直接进入 Redis 或 Ehcache 磁盘目录。读取失败时，框架会删除损坏条目并回源数据源。
+
+JDK 25 使用 Fory 时需要加入 JVM 参数。普通 classpath 应用：
+
+```text
+--add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+```
+
+使用 module-path 时改为：
+
+```text
+--add-opens=java.base/java.lang.invoke=org.apache.fory.core
+```
+
+只使用默认 `json/smile` 时不需要该参数，Fory 运行时也不会初始化。启用示例：
+
+```yaml
+yulinlin:
+  cache:
+    ehcache:
+      serializer: fory
+    # 使用 cache-redis 时改为：
+    # redis:
+    #   serializer: fory
+```
+
+需要观测时开启统计并注入具体实现：
+
+```java
+@Resource
+private RedisQueryCache redisQueryCache;
+
+RedisQueryCache.Stats stats = redisQueryCache.stats();
+long localEntries = redisQueryCache.estimatedLocalSize();
+redisQueryCache.resetStatistics();
 ```
 
 ### 启用查询缓存
@@ -2919,7 +3025,7 @@ MurmurHash3-x64-128(
 )
 ```
 
-元数据直接流入128位哈希器，不构建完整中间字符串。`CacheKey` 在内存中只保存两个 `long`；Caffeine 直接使用该对象作为 Key，只有 Ehcache 持久化或日志输出时才按需生成 `v2:` 开头的32位十六进制文本。实体反射字段通过 `ClassValue` 缓存，不会在每次查询时重新扫描、排序。
+元数据直接流入128位哈希器，不构建完整中间字符串。`CacheKey` 在内存中只保存两个 `long`；Caffeine 直接使用该对象作为 Key，Ehcache/Redis 持久化或日志输出时才按需生成 `v2:` 开头的32位十六进制文本。实体反射字段通过 `ClassValue` 缓存，不会在每次查询时重新扫描、排序。
 
 `CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
 
@@ -2995,7 +3101,7 @@ int affected = write.clearCache(true).execute();
 
 延迟写队列在真正写入成功后才清理，不在入队时清理。相同 `Session + 操作类型 + fromClass` 的请求合并时使用三态规则：任一请求显式 `true`，合并组就是 `true`；全部显式 `false`，合并组才是 `false`；包含未指定且没有 `true` 时保持未指定，执行时继承全局配置。
 
-失效采用“命名空间版本号”，不会遍历百万级 Key：普通查询 Key 携带 `Session 类型 + group + 表名` 的版本快照；单条件分区查询携带表策略版本和对应条件值版本。写入成功后只递增相关版本，旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 的普通 namespace 版本会持久化；分区条目在进程重启后使用新的运行期版本，不会重新命中重启前的旧分区结果。
+失效采用“命名空间版本号”，不会遍历百万级 Key：普通查询 Key 携带 `Session 类型 + group + 表名` 的版本快照；单条件分区查询携带表策略版本和对应条件值版本。写入成功后只递增相关版本，旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 的普通 namespace 版本会持久化；分区条目在进程重启后使用新的运行期版本，不会重新命中重启前的旧分区结果。Redis 会把普通版本和分区版本都保存在共享 Redis 元数据中；关闭 L1 时，各节点每次都读取共享版本。
 
 事务规则：
 
@@ -3013,7 +3119,7 @@ int affected = write.clearCache(true).execute();
 
 同一个 Key 回源时使用分段锁和二次检查，降低缓存到期瞬间的重复查询。缓存保存查询增强前的数据；返回给业务前会复制模型并创建当前调用需要的统一实体代理，旧事务代理不会被保存复用。
 
-Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化要求。连接、流、Statement、ResultSet 等资源对象不能作为缓存查询结果。
+Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节保存结果；选择 JSON/Smile 时实体应符合 Jackson 的反序列化要求。连接、流、Statement、ResultSet 等资源对象不能作为缓存查询结果。
 
 ### 启动规则
 
@@ -3022,7 +3128,8 @@ Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化
 | 不引入缓存模块 | 正常启动；`CacheClient.available()`为 false，缓存优先查询直接访问数据源 |
 | 只引入 `cache-caffeine` | 启用内存缓存 |
 | 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
-| 同时引入两个实现 | 启动失败并报告多个缓存 Provider |
+| 只引入 `cache-redis` | 启用 Redis L2；默认同时启用模块内置 Caffeine L1 |
+| 同时引入多个实现 | 启动失败并报告多个缓存 Provider |
 
 第一种情况下不会创建 `QueryCacheProperties`，也不会因 `clearCache(true)` 解析表 namespace。这不是“空缓存执行一遍失效”，而是写路径直接跳过整套缓存失效逻辑。
 
@@ -3649,7 +3756,7 @@ UserEntity findByUsernameEq(String username);
 - 写 Wrapper 和 `ExecuteRequest` 只使用 `clearCache(boolean)` 覆盖单次行为。一般保持默认；只有明确接受 TTL 窗口内旧结果时才使用 `clearCache(false)`。
 - 自定义查询或跨表投影无法完整推导依赖时，通过 `@JoinCache.namespaces` 或查询请求的 `cacheNamespaces(...)` 补充表命名空间；自定义写 SQL 开启清理时会退化为清理全部 ORM 查询缓存。
 - 事务内必须读到最新数据的查询使用 `CacheMode.NONE`；强制回源并重写缓存使用 `CacheMode.REFRESH`。
-- 未引入缓存 Provider 时，普通查询安全回源数据库，`QueryCacheProperties` 不会启用，写路径也不解析 namespace 或执行失效。一个应用只选 Caffeine 或 Ehcache 之一，不要同时引入。
+- 未引入缓存 Provider 时，普通查询安全回源数据库，`QueryCacheProperties` 不会启用，写路径也不解析 namespace 或执行失效。一个应用只选 Caffeine、Ehcache 或 Redis 之一；`cache-redis` 已自带可选 Caffeine L1，不要再重复引入 `cache-caffeine`。
 - 默认 TTL 放在 `yulinlin.cache.ttl`，默认不让 TTL 参与 Key。监控统计默认关闭，只在确实需要观测时开启。
 
 ### 日志规范

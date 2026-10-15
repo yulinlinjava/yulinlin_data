@@ -1,12 +1,11 @@
 package com.yulinlin.data.cache.caffeine;
 
-import com.yulinlin.data.core.YulinlinCoreAutoConfig;
 import com.yulinlin.data.core.cache.QueryCacheProperties;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
-@AutoConfiguration(before = YulinlinCoreAutoConfig.class)
+@AutoConfiguration(beforeName = "com.yulinlin.data.core.YulinlinCoreAutoConfig")
 @EnableConfigurationProperties({QueryCacheProperties.class, CaffeineCacheProperties.class})
 public class CaffeineCacheAutoConfiguration {
 

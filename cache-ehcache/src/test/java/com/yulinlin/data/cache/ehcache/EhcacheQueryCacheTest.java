@@ -10,8 +10,6 @@ import com.yulinlin.data.core.cache.CacheValueType;
 import com.yulinlin.data.core.cache.CacheClient;
 import com.yulinlin.data.core.cache.DefaultCacheClient;
 import com.yulinlin.data.core.cache.QueryCacheProperties;
-import com.yulinlin.data.core.node.CommandNode;
-import com.yulinlin.data.core.parse.ParseType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.CleanupMode;
 import org.junit.jupiter.api.io.TempDir;
@@ -21,7 +19,6 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -333,10 +330,7 @@ class EhcacheQueryCacheTest {
     }
 
     private static CacheKey key(String field, Object value) {
-        return CacheKey.query("mysql", "master", EhcacheQueryCacheTest.class,
-                UserRow.class, UserRow.class, ParseType.select,
-                new CommandNode<>("select * from user where " + field + "=#{value}",
-                        Map.of("value", value), ParseType.select));
+        return CacheKey.fromMaterials("ehcache-test", "mysql", "master", field, value);
     }
 
     private static CachePartition partition(CacheNamespace namespace, String field, Object value) {

@@ -1,12 +1,8 @@
 package com.yulinlin.data.core.cache;
 
-import com.yulinlin.data.core.node.CommandNode;
-import com.yulinlin.data.core.parse.ParseType;
-import com.yulinlin.data.core.session.AbstractSession;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,7 +12,7 @@ class QueryCachePartitionContractTest {
     @Test
     void defaultPartitionScopeFallsBackToItsTableNamespace() {
         RecordingCache cache = new RecordingCache();
-        CacheNamespace namespace = CacheNamespace.of(AbstractSession.class, "mysql", "users");
+        CacheNamespace namespace = CacheNamespace.of(QueryCachePartitionContractTest.class, "mysql", "users");
         CachePartition partition = CachePartition.of(namespace, "username", "alice").orElseThrow();
         CacheKey logical = logicalKey();
 
@@ -41,8 +37,8 @@ class QueryCachePartitionContractTest {
     }
 
     private static CacheKey logicalKey() {
-        return CacheKey.query("mysql", "master", AbstractSession.class, Object.class, Object.class,
-                ParseType.select, new CommandNode<>("select 1", Map.of(), ParseType.select));
+        return CacheKey.fromMaterials("query-contract", "mysql", "master",
+                QueryCachePartitionContractTest.class);
     }
 
     private static final class RecordingCache implements QueryCache {

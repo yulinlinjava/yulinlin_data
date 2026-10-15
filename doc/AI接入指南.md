@@ -6,7 +6,7 @@
 
 ---
 
-用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存和项目最佳实践；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
+用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存，以及 Common 公共模型和项目最佳实践；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
 
 ---
 
@@ -19,7 +19,7 @@
 
 先选数据库模块，再配置数据源和会话组。本文完成 Spring Boot 接入、MySQL 与 PostgreSQL 配置、SQLite/H2 本地存储，以及多数据源注册和默认组选取。
 
-阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [本地库选型](#sqliteh2-选型) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
+阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [本地库选型](#sqliteh2-选型) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [慢数据库监控](#慢数据库监控) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
 
 适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-06 核对仓库源码；本地库 JMH、JDK 25 编译和 Schema 定向测试已执行。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
 
@@ -34,6 +34,7 @@
 | HTTP 工具 | core，starter 已传递引入 |
 | 反射、深克隆、JSON | lang |
 | JSON 接口请求/响应加密 | security；需要 Spring MVC，独立于 ORM 数据库模块 |
+| 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
 | 实体基类、Model Wrapper、树和 ID | common |
 | 示例或基准 | admin，不作为业务依赖 |
 
@@ -83,6 +84,51 @@ yulinlin:
 ```
 
 正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。为兼容已有生产项目，`schema-mode` 默认 `NONE`；不需要框架管理结构时删除整个 `yulinlin.mysql` 段并由迁移脚本准备表。设为 `CREATE` 后，启动时递归扫描 `schema-packages`，创建缺失的表、普通列和声明索引，并校验已有结构；`VALIDATE` 只校验，缺失直接阻止启动。完整实体与 CRUD 见 [第二专题](02-CRUD与统计分析.md)。
+
+#### JDBC 执行日志
+
+MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换为对应模块名即可：
+
+- `log` 默认 `false`，只控制真正访问数据库后的成功日志；缓存命中没有执行 SQL，因此不会伪造 SQL 日志。
+- `log-params` 默认 `false`。开启后打印绑定参数，但长值最多保留 `max-param-length` 个字符；字节数组和输入流只记录类型、长度等摘要。
+- `max-param-length` 默认 `256`，必须为正整数。
+- `slow-sql-threshold` 默认 `0`（关闭）。配置为 `1s` 后，框架侧耗时达到 1 秒的执行以 `WARN` 输出，即使 `log=false` 也会记录。
+- SQL 异常始终以单条 `ERROR` 输出，包含实际耗时并携带原始堆栈。批量写入按执行组打印一条摘要；摘要列出最多 5 种 SQL 模板及模板总数，不再为每一行打印 INFO。
+
+耗时是应用侧观察值，可能包含获取连接、JDBC 驱动和事务收尾时间，并不等同于数据库服务器内部的纯执行时间。查询缓存的 `HIT/MISS/REFRESH/BYPASS` 使用 `com.yulinlin.data.cache.QueryCache` 的 DEBUG 日志；延迟写队列刷新摘要使用 `com.yulinlin.data.core.queue.WriteQueueManager` 的 DEBUG 日志。需要排查缓存时可临时提高对应 logger 级别，或者使用 `.cache(CacheMode.REFRESH)` 强制访问数据库。
+
+#### 慢数据库监控
+
+需要在运行期查看慢 SQL 与数据库异常时，引入可选模块：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>monitor</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+```yaml
+yulinlin:
+  monitor:
+    threshold: 1s
+    max-records: 1000
+    username: admin
+    password: ${MONITOR_PASSWORD:}
+```
+
+引入模块即启用，不需要额外开关。访问 `/monitor/` 可打开内置只读页面；页面使用 Vue 3 和锁定版本的 Element Plus 2.14.7，通过 jsDelivr 加载前端资源。部署环境无法访问公共 CDN 时，应将对应资源转存到业务自己的静态资源域名，再替换模块页面中的地址。
+
+页面可以直接打开；数据接口发现尚未验证时，页面会在原地显示账号密码对话框。验证成功后只在当前 HTTP Session 中保存一个布尔标记，再自动加载监控数据，不跳转登录页，也不依赖任何安全框架。账号默认是 `admin`，密码没有默认值，必须通过配置或环境变量提供；密码为空时登录接口拒绝验证，避免发布一个所有人都知道的默认密码。
+
+监控会轻量聚合所有实际执行的 JDBC 操作，以 `Group + Session 类型 + 操作类型 + 来源实体 + SQL 模板` 为一组，展示执行次数、慢查询率、平均耗时、最大耗时和最近耗时。只有达到 `threshold` 的成功操作及数据库异常才保留明细，最多保存最近 `max-records` 条；SQL 聚合组也使用该数量作为内存上限。平均耗时基于全部执行计算，不会因为只统计慢操作而被放大。
+
+页面按照优化优先级排序：`P0` 表示出现异常；`P1` 表示平均耗时达到阈值 3 倍或最大耗时达到 10 倍；`P2` 表示平均达到 2 倍、最大达到 5 倍或慢查询率达到 50%；`P3` 表示平均达到阈值、最大达到 2 倍或慢查询率达到 10%；`P4` 表示只有少量请求超过阈值；其余为正常。慢查询率参与等级判断前至少需要 10 次执行，避免首次慢请求直接产生过高等级。同等级依次比较异常次数、慢操作次数、慢查询率、平均耗时和最大耗时。
+
+实体请求会显示来源实体、完整类名以及 `@JoinTable` / `@JoinTableList` 声明的表。自定义 SQL 的 `fromClass` 为 `null` 或 `Object.class` 时，来源显示“自定义 SQL”、表名显示 `-`，不会通过正则猜测表名。批量写入每个执行组记录一次；SQL 只保留模板，不采集绑定参数。多数据源按 `Session.group()` 和具体 Session 类型区分，`RouteSession` 不重复计数；缓存命中没有访问数据库，因此不会生成记录，延迟写队列最终执行 JDBC 时会自然纳入监控。
+
+页面接口和 Java API 都只读查询监控数据；`DatabaseMonitor.clear()` 仅供应用内部按需调用。
 
 ### SQLite 接入
 
@@ -517,10 +563,11 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | yulinlin.datasource.default-group | 未设置 | 单组自动；多组指定默认 |
+| yulinlin.monitor.threshold | 1s | 慢操作明细保留阈值，同时作为 P1–P4 优先级的计算基准；异常始终保留 |
+| yulinlin.monitor.max-records | 1000 | 慢操作明细和 SQL 聚合组各自的内存上限；超出后淘汰最早或最久未访问的数据 |
+| yulinlin.monitor.username | admin | 内置监控对话框账号 |
+| yulinlin.monitor.password | 空 | 内置监控对话框密码；必须显式配置，推荐使用环境变量 |
 | yulinlin.`<module>`.log | false | 当前模块 SQL 成功日志；module 为 mysql、postgresql、sqlite 或 h2 |
-| yulinlin.`<module>`.log-params | false | 是否输出 JDBC 绑定参数；生产环境建议保持关闭 |
-| yulinlin.`<module>`.max-param-length | 256 | 单个日志参数的最大展示字符数 |
-| yulinlin.`<module>`.slow-sql-threshold | 0 | 应用侧慢 SQL 阈值；0 关闭，达到阈值以 WARN 输出 |
 | yulinlin.`<module>`.map-underscore-to-camel-case | true | 当前模块下划线与驼峰映射 |
 | yulinlin.`<module>`.parallel-connections | 4 | 当前模块每框架事务连接上限；SQLite 最终固定为 1 |
 | yulinlin.`<module>`.execute-batch-size | 256 | 当前模块一次 executeBatch 的行数，不是 commit |
@@ -867,6 +914,8 @@ var users = query.selectList();
 
 #### 查询条件对象
 
+业务页面查询优先定义 `XxxPo extends PagePo`，在子类业务字段上声明 `@JoinWhere`，一次复用条件、分页与排序。完整的 `PayChannelPo`、Controller 和 `ISuperService.page(po)`示例见[Common 业务开发：页面查询对象](09-项目开发最佳实践.md#页面查询对象pagepo--joinwhere)。本节只解释对象条件如何转换为 WHERE，也适用于不分页的独立查询 DTO。
+
 直接把实体作为查询条件：
 
 ```java
@@ -1203,6 +1252,8 @@ yulinlin:
 不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才按 `clearCache` 规则清理查询缓存。队列合并同组请求时，任一请求显式 `clearCache(true)` 就清理；全部显式为 `false` 才不清理；其余组合继续继承全局配置。
 
 这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。队列没有硬容量上限；如果持续生产速度高于数据库写入速度，待执行和待重试 Node 会继续占用内存，应在业务入口限流并监控积压。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
+
+队列不会为每个入队对象打印日志。开启 `com.yulinlin.data.core.queue.WriteQueueManager=DEBUG` 后，每个非空刷新快照输出一条摘要，包括触发方式、Session/分组/Node 数、影响行数、耗时和剩余积压；失败、重试和最终丢弃仍分别使用 WARN/ERROR。
 
 ### 事务使用
 
@@ -2222,7 +2273,9 @@ Class<?> returnType = GenericUtil.forMethodReturnType(method, 0);
 Class<?> parameterType = GenericUtil.forMethodParameter(method, 0, 0);
 ```
 
-解析不到具体类型时返回 null。`BaseGeneric`、`GenericClass`、`GenericField`、`GenericMethod` 是旧的链式泛型模型，仍为兼容保留；新外部代码优先用 `GenericUtil`。`GenericClass.newInstance` 使用 `ClassValue` 缓存，不阻止类加载器卸载。
+解析不到具体类型时返回 null。`GenericUtil` 只在首次调用时进入 Spring `ResolvableType`，之后按源/声明类使用 `ClassValue` 缓存类、字段、方法参数和返回值的最终类型；解析失败的 null 也会缓存。类卸载时其缓存可一起回收，测试或动态类替换可调用 `clearCache(Class<?>)` 或 `clearCache()`。
+
+`BaseGeneric`、`GenericClass`、`GenericField`、`GenericMethod` 是旧的链式泛型模型，仍为兼容保留；新外部代码优先用 `GenericUtil`。`GenericClass.newInstance` 同样使用 `ClassValue` 缓存，不阻止类加载器卸载。
 
 #### AnnotationUtil 与 ScanUtils
 
@@ -2868,6 +2921,8 @@ MurmurHash3-x64-128(
 
 `CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
 
+缓存命中时不会访问数据源，因此数据库模块的 `log=true` 不会打印 SQL。排障时可将 `com.yulinlin.data.cache.QueryCache` 调整为 DEBUG，查看 `HIT`、`MISS`、`REFRESH`、等待后命中以及事务/行锁绕过等事件；日志只记录哈希 Key，不记录缓存值。需要确认物理 SQL 时使用 `CacheMode.REFRESH` 或暂时关闭该次查询缓存。
+
 分页内部的 `count` 使用独立的逻辑 Key：普通查询只保留 `from/join + where`，因此不同页码、页大小、排序、返回字段、高亮和行锁会复用同一个总数；聚合查询还会保留 `aggregations + metrics + having`，避免不同分组统计误命中。普通列表 Key 仍然包含分页和排序。未知的第三方 Wrapper 不做字段裁剪，继续使用完整节点生成 Key，以正确性优先。
 
 数据源 group 必须进入 Key。同一个实体和条件在 `mysql`、`pgsql` 或其他 group 中不会串缓存；同一个逻辑 group 下的负载均衡节点可以共享逻辑 Key。
@@ -2896,6 +2951,33 @@ int deleted = ModelDeleteWrapper
 | `clearCache(true)` | 本次写入提交成功后清理相关查询缓存，覆盖全局 `false` |
 | `clearCache(false)` | 本次写入不清理查询缓存，覆盖全局 `true` |
 
+#### 单条件自动分区
+
+分区失效是缓存 Provider 的内置能力，始终自动开启，不需要配置，也没有额外 API。只有已经调用 `cache(...)` 或使用 `@JoinCache` 的查询才会进入缓存；它不会让普通查询自动启用缓存。
+
+当同一数据源、同一物理表的缓存查询始终使用同一个单字段等值条件时，框架会按条件值划分缓存：
+
+```java
+List<SysUser> alice = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .eq("username", "Alice")
+        .cache()
+        .selectList();
+```
+
+例如当前结构是 `username = ?`，更新或删除条件同样为 `username = 'Alice'` 时，提交后只让 `Alice` 分区失效，`Bob` 分区仍可命中。普通列表、分页、Count、聚合等缓存仍按表失效，不会因为分区优化而保留旧结果。
+
+最小识别规则如下：
+
+- 查询必须是单表、非行锁，并且有效条件只有一个 `Eq`；框架工厂产生的空 `And/Or` 包装会被忽略。
+- 条件字段只识别普通列名或当前表已验证的别名前缀；JSON 路径、函数、引号字段和未知前缀直接按整表处理。
+- 字段名先走实体的 `JoinField`/驼峰映射，条件值先走当前 Session 的 Coder；映射或编码结果无法安全识别时同样按整表处理。
+- 更新、删除使用相同字段的单个 `Eq` 时精准失效对应值。
+- 更新同时修改该条件字段、插入、自定义 SQL、多条件或无法解析的写入，会让该表当前全部分区失效。
+- 如果缓存查询又使用第二个等值字段，例如先有 `username = ?`、后来又有 `id = ?`，该物理表自动升级为普通整表失效模式。
+- 状态按 `Session 类型 + group + 物理表` 隔离；同表对应多个实体类时共享同一判断。
+
+分区 Key 仍保留完整查询信息，因此不同分页、排序、投影和 TTL 不会错误命中；分区版本只负责让同一个条件值下的这些条目一起失效。没有引入缓存模块，或第三方 Provider 未实现分区能力时，会安全回退为现有整表失效。
+
 实体写入会从 `INode`、From/Join/Store、`@JoinTable` 和 `@JoinTableList` 提取相关表。自定义 SQL 没有实体或节点表信息时，框架无法可靠猜测涉及的表；启用清理时会退化为清理全部 ORM 查询缓存并输出警告：
 
 ```java
@@ -2911,16 +2993,19 @@ int affected = write.clearCache(true).execute();
 
 延迟写队列在真正写入成功后才清理，不在入队时清理。相同 `Session + 操作类型 + fromClass` 的请求合并时使用三态规则：任一请求显式 `true`，合并组就是 `true`；全部显式 `false`，合并组才是 `false`；包含未指定且没有 `true` 时保持未指定，执行时继承全局配置。
 
-失效采用“命名空间版本号”，不会遍历百万级 Key：查询 Key 会携带 `Session 类型 + group + 表名` 的版本快照，写入成功后只递增相关版本。旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 会持久化版本号，应用重启后仍不会重新命中已经失效的旧数据。
+失效采用“命名空间版本号”，不会遍历百万级 Key：普通查询 Key 携带 `Session 类型 + group + 表名` 的版本快照；单条件分区查询携带表策略版本和对应条件值版本。写入成功后只递增相关版本，旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 的普通 namespace 版本会持久化；分区条目在进程重启后使用新的运行期版本，不会重新命中重启前的旧分区结果。
 
 事务规则：
 
 - 普通单次写入在底层 Session 提交成功后按 `clearCache` 策略清理。
 - `RouteSession` 多数据源事务会合并重复表名，只在最外层提交成功后统一清理。
+- 多数据源提交中途失败、结果无法确定时会保守清理待处理缓存；最多多一次回源，不保留可能已提交数据的旧缓存。
 - Spring 事务在 `afterCommit` 阶段清理；回滚或提交失败不清理。
+- 活动事务内的查询直接访问数据源，不读取也不写入全局查询缓存，防止未提交结果在回滚后残留；事务内使用 `CACHE_ONLY` 会直接报告缓存不可用。
+- `lock()` 行锁查询始终访问数据库，不会因为 `cache()` 命中而跳过加锁。
 - 查询回源期间若并发发生更新，旧查询只能写入旧版本 Key，不能重新污染新版本缓存。
 
-即使有主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
+即使有主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。事务外要求绝对强一致的查询使用 `CacheMode.NONE`。
 
 ### 并发与对象边界
 
@@ -2944,11 +3029,11 @@ Ehcache 使用 JSON 字节保存结果，实体应符合 Jackson 的反序列化
 ---
 
 <!-- source: doc/09-项目开发最佳实践.md -->
-## 项目开发最佳实践
+## Common 业务开发与项目最佳实践
 
-本文给出一套推荐的 Spring Boot 项目结构和完整业务案例。它负责回答“业务代码应该放在哪里”；完整 API 签名仍以[接入与数据源](01-接入与数据源.md)、[CRUD 与统计](02-CRUD与统计分析.md)、[关联查询与代理](03-关联查询与代理.md)和[查询缓存](08-查询缓存.md)为准。
+本文先说明 `common` 提供给业务代码直接复用的实体、分页查询模型和 Service 接口，再给出推荐的 Spring Boot 项目结构与完整业务案例。它负责回答“已有公共能力怎么用、业务代码应该放在哪里”；SQL 条件的完整解析规则仍以[CRUD 与统计](02-CRUD与统计分析.md)、[关联查询与代理](03-关联查询与代理.md)和[查询缓存](08-查询缓存.md)为准。
 
-阅读导航：[核心规则](#核心规则) · [目录结构](#推荐目录结构) · [完整案例](#完整业务案例) · [事务与代理](#事务与自动更新) · [缓存](#缓存规范) · [多数据源](#多数据源规范) · [批量写入](#批量写入规范) · [反例](#常见反例) · [评审清单](#上线前评审清单)
+阅读导航：[核心规则](#核心规则) · [目录结构](#推荐目录结构) · [公共业务模型](#公共业务模型) · [基础实体](#基础实体选择) · [通用 Service](#通用-service-接口) · [完整案例](#完整业务案例) · [事务与代理](#事务与自动更新) · [缓存](#缓存规范) · [多数据源](#多数据源规范) · [批量写入](#批量写入规范) · [反例](#常见反例) · [评审清单](#上线前评审清单)
 
 ### 核心规则
 
@@ -2995,6 +3080,300 @@ com.example.app
 ```
 
 Repository 扫描和 Schema 扫描是两件事：`yulinlin.repository.scan-packages` 找接口，`yulinlin.<module>.schema-packages` 找显式 `autoSchema=true` 的完整实体。两者都可按业务包递归扫描。
+
+### 公共业务模型
+
+框架把常见的页面查询、分页结果和 Web 响应模型集中提供给业务项目，避免每个模块重复声明 `pageNumber`、`pageSize`、排序、ID 和列表等字段。它们是对外公共 API，不是 ORM 内部临时对象。
+
+| 类型 | 所属模块 | 用途 |
+| --- | --- | --- |
+| `PagePo` | `common` | 页面查询入参基类，统一分页、排序和运行时追加条件 |
+| `OrderItem` | `common` | 一个排序字段及升降序 |
+| `PageVo<E>` | `common` | 兼容已有业务的分页响应类型，继承 `Page<E>` |
+| `Page<E>` | `lang` | ORM 和 Service 共用的分页结果，包含当前页列表、总数和扩展值 |
+| `IdPo` | `starter` | Web 接口的单个字符串 ID 入参 |
+| `ListPo<E>` | `starter` | Web 接口的通用列表入参 |
+| `R<E>` / `ResponseVo<E>` | `starter` | 标准 Web 响应体；`ResponseVo`保留兼容写法 |
+
+这些类型按使用的门面模块引入。只使用 ORM 的项目可直接使用 `PagePo`和 `Page`，不必为了 `IdPo`或 `R`引入 Web Controller。它们也不要求实现 Java `Serializable`，HTTP JSON 仍由 Spring/Jackson 处理。
+
+#### 页面查询对象：`PagePo + @JoinWhere`
+
+页面列表查询推荐为每个业务页面定义一个很薄的 `XxxPo extends PagePo`。父类统一携带分页和排序，子类只声明本页面的业务条件：
+
+```java
+package com.example.app.pay.api;
+
+import com.yulinlin.common.domain.po.PagePo;
+import com.yulinlin.data.core.anno.ConditionEnum;
+import com.yulinlin.data.core.anno.JoinWhere;
+import com.yulinlin.data.lang.util.DateTime;
+import lombok.Data;
+
+import java.util.List;
+
+@Data
+public class PayChannelPo extends PagePo {
+
+    @JoinWhere(condition = ConditionEnum.eq)
+    private String platformId;
+
+    @JoinWhere(condition = ConditionEnum.eq)
+    private String status;
+
+    @JoinWhere(condition = ConditionEnum.between)
+    private List<DateTime> crtTime;
+}
+```
+
+Controller 只接收业务查询对象，Service 复用 `ISuperService.page(PagePo)`：
+
+```java
+@PostMapping("/page")
+public R<Page<PayChannelEntity>> page(@RequestBody PayChannelPo po) {
+    return R.newInstance(payChannelService.page(po));
+}
+```
+
+请求可以同时携带业务条件、分页和排序：
+
+```json
+{
+  "pageNumber": 1,
+  "pageSize": 20,
+  "platformId": "web",
+  "status": "enabled",
+  "crtTime": ["2026-10-01 00:00:00", "2026-10-15 23:59:59"],
+  "orderList": [
+    { "name": "crtTime", "asc": false }
+  ]
+}
+```
+
+`ISuperService.page(po)`的核心过程是先把查询对象交给 Wrapper，再应用分页和排序（接口实现还会合并 `PagePo.and/or`中的运行时条件）：
+
+```java
+Page<PayChannelEntity> result = ModelSelectWrapper
+        .newInstance(PayChannelEntity.class, po)
+        .page(po.getPageNumber(), po.getPageSize())
+        .orderBy(order -> {
+            if (po.getOrderList() != null) {
+                for (OrderItem item : po.getOrderList()) {
+                    order.orderBy(item.getName(), item.isAsc());
+                }
+            }
+        })
+        .selectPage();
+```
+
+查询对象解析遵循以下规则：
+
+- 只有带 `@JoinWhere` 且实际提供值的子类字段生成 WHERE；`pageNumber`、`pageSize`和 `orderList`没有该注解，不会成为查询条件。
+- `@JoinWhere.name`省略时使用查询对象的 Java 属性名；查询属性与实体属性不同时显式填写实体属性名。
+- `between`传入按“起始、结束”排列的两个值，`in`传集合；字段类型继续使用框架现有 SQL 编解码规则。
+- `PagePo.and(...)`和 `or(...)`用于运行时才知道字段或操作符的补充条件，不是普通页面查询的必写步骤。
+- `orderList.name`应使用实体 Java 属性名。直接接收前端排序时，业务层应限制允许排序的属性，避免任意字段参与查询。
+- 复杂嵌套 AND/OR、子查询或数据库专用表达式继续使用 Wrapper，不要把所有 SQL 逻辑塞进 PO。
+
+不通过 `ISuperService`时，也可以直接把同一个查询对象传给指定数据源：
+
+```java
+Page<PayChannelEntity> result = ModelSelectWrapper
+        .newInstance("mysql", PayChannelEntity.class, po)
+        .page(po.getPageNumber(), po.getPageSize())
+        .selectPage();
+```
+
+`PayChannelEntity.class`决定表、返回字段和结果类型，`PayChannelPo`只描述 WHERE、分页和排序输入。查询 PO 不需要 `@JoinTable`，也不应开启自动 Schema。`@JoinWhere`支持的操作符、空值和 AND/OR 精确语义见[查询条件对象](02-CRUD与统计分析.md#查询条件对象)。
+
+### 基础实体选择
+
+`common` 模块提供了几个可复用实体。它们不只是字段集合，还实现了 `AbstractModel` 的 CRUD 便捷入口和写入前生命周期，因此应按表结构选择，不要为了少写字段而继承。
+
+| 类型 | 持久化字段 | 自动行为 | 适用场景 |
+| --- | --- | --- | --- |
+| 普通 POJO | 自行定义 | 无 | 数据库自增主键、`Long`/UUID 主键、投影结果或非标准表 |
+| `IdEntity<E>` | `String id` | 插入前在 `id` 为 null 或空串时生成 Snowflake 字符串 ID | 大多数由应用生成字符串主键的业务表 |
+| `SuperEntity<E>` | `id`、`crtTime`、`uptTime` | 包含 `IdEntity` 行为，插入时补齐空的创建/更新时间 | 同时具有主键和审计时间列的表 |
+| `TreeEntity<E>` | `id`、`crtTime`、`uptTime`、`parentId`、`parentPath` | 默认根节点 ID 为 `"0"`，`selectTree()` 可按 `ITreeNode` 组装 `children` | 菜单、部门和分类等树表 |
+| `IncrementEntity` | 动态表名、列名和主键条件 | 使用 `UpdateTypeEnum.inc` 生成原子增量更新 | 计数器类的专用更新载体，不作为业务实体父类 |
+
+#### `IdEntity`
+
+```java
+@JoinTable(value = "sys_user", autoSchema = true)
+public class UserEntity extends IdEntity<UserEntity> {
+    @JoinField(textLength = 64, description = "登录用户名")
+    private String username;
+
+    public UserEntity() { }
+    // getter/setter
+}
+```
+
+`id` 已声明为主键和默认条件字段，子类不要再次定义同名字段。插入前的 `insertBefore()` 会保留业务已设置的 ID，仅在未设置时调用 `generateId()`。需要其他应用侧 ID 策略时可在子类重写 `generateId()`；如果主键由数据库自增、序列或触发器产生，应改用普通 POJO 并显式定义主键。
+
+`nextIncrId()` 会用表中当前最大 ID 初始化进程内计数器，之后在本进程递增。它不是数据库自增 ID，也不保证多实例唯一；分布式业务保持默认 Snowflake 策略或接入统一 ID 服务。
+
+#### `SuperEntity`
+
+```java
+@JoinTable(value = "video_comment", autoSchema = true)
+public class CommentEntity extends SuperEntity<CommentEntity> {
+    @JoinField(description = "视频 ID")
+    private String videoId;
+
+    @JoinField(textType = TextTypeEnum.text, description = "评论内容")
+    private String content;
+
+    public CommentEntity() { }
+    // getter/setter
+}
+```
+
+`crtTime` 和 `uptTime` 的 Java 类型都是框架 `DateTime`，按驼峰转下划线规则对应 `crt_time` 和 `upt_time`。只有物理表确实具有这两列时才继承 `SuperEntity`；自动 Schema 也会把继承字段当作真实列处理。
+
+当前 `updateBefore()` 只在 `uptTime == null` 时填入当前时间。如果业务要求每次更新都刷新时间，应在写入前显式 `setUptTime(DateTime.now())`，或在项目自定义父类中重写 `updateBefore()`，不要把“非空时保留原值”误解为无条件自动刷新。
+
+#### `TreeEntity`
+
+```java
+@JoinTable(value = "sys_menu", autoSchema = true)
+public class MenuEntity extends TreeEntity<MenuEntity> {
+    @JoinField(textLength = 64, description = "菜单名称")
+    private String name;
+
+    public MenuEntity() { }
+    // getter/setter
+}
+```
+
+`children` 已标记 `@JoinField(exist = false)`，只用于内存树结构，不会成为表列。`parentId` 和 `parentPath` 是真实列；新节点没有指定父节点时使用全局根值 `"0"`。如果项目需要其他根值，应在启动配置阶段统一设置，不要在请求中反复修改这个静态值。
+
+`ModelSelectWrapper.selectTree()` 会将查到的 `ITreeNode` 列表在内存中组装为树；普通 `selectList()` 仍返回扁平列表。`findChildren()` 和 `findParent()` 是使用默认 group 的便捷方法；在多数据源项目中，优先在 Service/Repository 明确路由后查询，避免树节点自身隐式选库。
+
+#### 自定义项目基类
+
+只有多张表真正共享同一列语义时才增加项目基类，例如所有业务表都具有租户 ID：
+
+```java
+public abstract class TenantEntity<E extends TenantEntity<E>> extends SuperEntity<E> {
+    @JoinField(name = "tenant_id", textLength = 64, description = "租户 ID")
+    private String tenantId;
+
+    public String getTenantId() { return tenantId; }
+    public void setTenantId(String tenantId) { this.tenantId = tenantId; }
+}
+```
+
+实体的泛型参数始终传具体类，例如 `UserEntity extends IdEntity<UserEntity>`。不要在子类重复声明 `id`、`crtTime`、`uptTime`、`parentId` 或 `parentPath`；重名字段会让反射映射、Schema 比对和更新条件变得不确定。与表无关的计算属性仍必须显式使用 `@JoinField(exist = false)`。
+
+### 通用 Service 接口
+
+`common` 模块通过接口默认方法提供无状态 CRUD 和树服务能力。新项目直接 `implements ISuperService<E>` 或 `implements ITreeService<E>`，不再占用业务 Service 的类继承位。`impl.ServiceImpl/TreeImpl` 与 `impl2` 只作为已废弃兼容层。
+
+| 接口/实现 | 用途 | 关键能力 |
+| --- | --- | --- |
+| `ISuperService<E>` | 通用 CRUD 契约和默认实现 | 按 ID 查询、新增、更新、删除、保存、分页 |
+| `ServiceImpl<E>` | 已废弃兼容类 | 保留旧 `extends ServiceImpl` 写法和 `dataGroup()` 扩展点 |
+| `ITreeService<E>` | 树业务契约和默认实现 | 维护父路径、移动子树、删除后代、内存组树 |
+| `TreeImpl<E>` | 已废弃兼容类 | 保留旧 `extends TreeImpl` 写法 |
+
+#### `ISuperService` 用法
+
+```java
+package com.example.app.user.service;
+
+import com.example.app.user.domain.UserEntity;
+import com.yulinlin.common.service.ISuperService;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class UserCrudService implements ISuperService<UserEntity> {
+
+    @Transactional(readOnly = true)
+    public UserEntity detail(String id) {
+        return findById(id);
+    }
+
+    @Transactional
+    public int create(UserEntity user) {
+        return insertOne(user);
+    }
+
+    @Transactional
+    public int change(UserEntity user) {
+        return updateOne(user);
+    }
+}
+```
+
+Service 接口默认方法不会注册 Spring Bean，也不会自动开启事务。具体实现类仍必须使用 `@Service`，并由业务入口定义事务边界。实现这个接口不等于自动获得事务、缓存或数据源路由。
+
+常用方法语义：
+
+| 方法 | 行为 |
+| --- | --- |
+| `findById(id)` / `findByIdIn(ids)` | 按实体主键查询 |
+| `all()` / `page(PagePo)` | 查询全部或动态分页 |
+| `insertOne/list` | 明确新增，会执行实体 `insertBefore()` |
+| `updateOne/list` | 明确按主键更新，会执行 `updateBefore()` |
+| `deleteById/IdIn` | 明确按主键删除 |
+| `save/saveList` | 先查询主键是否存在，再将对象分为 insert/update 两组 |
+| `newInstance()` | 通过反射创建实体实例 |
+
+`save()` 不是数据库原生 UPSERT：它会先查后写，有额外往返，且并发时仍要依赖唯一索引处理竞态。业务明确知道是新增还是更新时，直接调用 `insert*` 或 `update*` 性能更好，语义也更清楚。
+
+`page(PagePo)`会解析业务子类上的 `@JoinWhere`字段，再应用 `PagePo`自带的动态条件、分页和排序；完整页面写法见[公共业务模型](#页面查询对象pagepo--joinwhere)。不要把前端传入的排序字段名无限制透传；Controller/Service 应使用允许列表转换为可排序的实体属性。
+
+#### `ITreeService` 用法
+
+```java
+package com.example.app.menu.service;
+
+import com.example.app.menu.domain.MenuEntity;
+import com.yulinlin.common.service.ITreeService;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+
+@Service
+public class MenuService implements ITreeService<MenuEntity> {
+
+    @Transactional(readOnly = true)
+    public List<MenuEntity> tree(MenuQuery query) {
+        return getTree(query);
+    }
+
+    @Transactional
+    public int saveMenu(MenuEntity menu) {
+        return save(menu);
+    }
+
+    @Transactional
+    public int removeMenu(String id) {
+        return deleteById(id);
+    }
+}
+```
+
+`ITreeService` 继承全部通用 CRUD，并增加以下约定：
+
+1. `save()` 会根据 `parentPath` 最后一项推导 `parentId`，空路径表示根节点。
+2. `updateOne()` 在父节点变化时重新计算后代节点的 `parentPath`。
+3. `deleteByIdIn()` 会同时删除 `parentPath` 匹配的后代节点，这是级联删除，调用前必须确认业务意图。
+4. `getTree(query)` 先查询扁平数据，再在内存中组树；实体实现 `ISortValue` 时按 `sortValue` 递归排序。
+
+树移动和级联删除会修改多行，必须在事务中执行。接口会拒绝 `parentPath` 包含自身 ID 的移动，防止节点移入自己的后代形成环。大树的 `getTree()` 会一次性加载数据，后台菜单等小树可直接使用；数万节点的树应改用按层/按父 ID 分页查询。
+
+#### 与 Repository 如何选择
+
+- 简单后台 CRUD、树维护，且始终使用默认数据源时，可实现 `ISuperService` 或 `ITreeService`。
+- 需要声明式查询、方法级 `@JoinCache`、`@JoinSession` 或希望数据访问边界更清晰时，优先 Repository + 业务 Service。
+- 一个业务域选择一个主入口。不要在同一个 Service 中既实现通用接口、又为同一批 CRUD 注入 Repository，造成两套规则和缓存策略。
+- 这两个接口默认方法创建的 Wrapper 没有显式 group，依赖全局默认数据源。多数据源业务优先使用可明确声明 group 的 Repository 或 Wrapper。
 
 ### 完整业务案例
 
@@ -3279,6 +3658,9 @@ public int importUsers(List<UserEntity> users) {
 | --- | --- | --- |
 | Controller 直接调 Wrapper | 协议层与数据层耦合，无法统一事务 | Controller 只调 Service |
 | 在 Repository 方法开事务，返回后再 setter | Repository 返回时事务可能已结束 | Service 上组合 `@Transactional + @JoinSync` |
+| 实现 `ISuperService` 后不声明事务 | 接口默认方法只封装 CRUD，不会自动开启事务 | 在具体 Service 业务入口上使用 `@Transactional` |
+| 把 `save()` 当成无竞态 UPSERT | 实际是先查后分组写入，并发请求可同时判断为不存在 | 已知操作类型时使用 `insert/update`，并依赖唯一索引保底 |
+| 将 `ITreeService.deleteById*` 当作普通单行删除 | 该默认实现会级联删除后代节点 | 事务内执行，接口命名和二次确认明确告知级联语义 |
 | 全局开启自动更新，却大量无事务查询 | 需要代理的查询会明确报“请开启事务” | 默认关闭，在写业务方法显式 `@JoinSync` |
 | 将 `@JoinCache` 加到写方法 | 缓存注解是查询策略，不是写入清理开关 | 保留全局 `clear-on-write`，或在写 Wrapper 上调用 `clearCache(boolean)` |
 | 在写 Wrapper 上调用旧 `cache/invalidate` API | 写入不缓存结果，旧命名容易混淆查询策略 | 统一使用 `clearCache(boolean)` |
@@ -3292,6 +3674,7 @@ public int importUsers(List<UserEntity> users) {
 
 - [ ] 所有写 Service 都有清晰的事务边界，通过 Spring Bean 外部调用。
 - [ ] 使用 `@JoinSync` 的查询、setter 和提交处在同一线程与事务。
+- [ ] 实体基类与物理表列一致；未重复声明继承的主键、审计时间或树字段。
 - [ ] 实体具有无参构造、完整主键映射和可预期的列名；非列字段明确 `exist=false`。
 - [ ] 更新和删除校验主键/条件及影响行数，已考虑 null 跳过语义。
 - [ ] 缓存仅用于查询，TTL、namespace、`clear-on-write` 默认值和单次覆盖策略已明确，应用未同时引入两个 Provider。

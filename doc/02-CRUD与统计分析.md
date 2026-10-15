@@ -294,6 +294,8 @@ var users = query.selectList();
 
 ### 查询条件对象
 
+业务页面查询优先定义 `XxxPo extends PagePo`，在子类业务字段上声明 `@JoinWhere`，一次复用条件、分页与排序。完整的 `PayChannelPo`、Controller 和 `ISuperService.page(po)`示例见[Common 业务开发：页面查询对象](09-项目开发最佳实践.md#页面查询对象pagepo--joinwhere)。本节只解释对象条件如何转换为 WHERE，也适用于不分页的独立查询 DTO。
+
 直接把实体作为查询条件：
 
 ```java

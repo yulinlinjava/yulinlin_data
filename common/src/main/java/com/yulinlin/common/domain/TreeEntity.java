@@ -10,6 +10,7 @@ import lombok.Data;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 
 public  class TreeEntity<E extends TreeEntity<E>> extends SuperEntity<E> implements ITreeNode<E> {
@@ -47,7 +48,7 @@ public  class TreeEntity<E extends TreeEntity<E>> extends SuperEntity<E> impleme
             parentId = root;
         }
         if(parentPath == null){
-            parentPath = parent_path;
+            parentPath = new ListString(parent_path);
         }
         super.insertBefore();
     }
@@ -110,7 +111,7 @@ public  class TreeEntity<E extends TreeEntity<E>> extends SuperEntity<E> impleme
     }
 
     public E findParent(){
-        if(parentId == root){
+        if(Objects.equals(parentId, root)){
             return null;
         }
         return (E)ModelSelectWrapper.newInstance(this.getClass()).eq("id",parentId).selectOne();

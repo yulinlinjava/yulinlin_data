@@ -1,5 +1,6 @@
 package com.yulinlin.admin;
 
+import com.yulinlin.data.core.http.HttpUtil;
 import com.yulinlin.data.lang.json.JsonUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.reflection.SerializableUtil;
@@ -44,7 +45,20 @@ public class A {
     public static void main(String[] args) {
 
 
-        Object key="a.b".split("\\.");
+        String json= """
+                {
+                  "project": "bb",
+                  "token": "yes@)978*53",
+                  "userId": "1",
+                  "title": "示例视频一",
+                  "videoUrl": "https://mmbppbs.nndybj.com/mstorage2/slice_video/20260908/485391/index.m3u8?wsSecret=d9885b65ea2061a07d30fc9cbc87fec2&wsTime=1791971256&ip=115.134.107.110",
+                  "picture": "https://uim.9uu22.com/storage/picture/20260816/1120306a812c7e0b5b6.jpg"
+                }
+                """;
+
+        String bodyAsString = HttpUtil.post("https://miyun.space/api/put")
+                .json(JsonUtil.parseJson(json, Map.class))
+                .execute().getBodyAsString();
 
         int a=0;
 

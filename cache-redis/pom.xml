@@ -38,9 +38,9 @@
             <artifactId>jackson-module-blackbird</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.apache.fory</groupId>
-            <artifactId>fory-core</artifactId>
-            <version>${fory.version}</version>
+            <groupId>com.esotericsoftware.kryo</groupId>
+            <artifactId>kryo5</artifactId>
+            <version>${kryo.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

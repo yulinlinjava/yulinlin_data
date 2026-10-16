@@ -6,6 +6,6 @@ public enum RedisValueSerializer {
     SMILE,
     /** Text JSON, mainly useful while inspecting cache values. */
     JSON,
-    /** High-throughput binary object graph serialization for trusted cache storage. */
-    FORY
+    /** Compact binary object graph serialization backed by a virtual-thread-friendly object pool. */
+    KRYO
 }

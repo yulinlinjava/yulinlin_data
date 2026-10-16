@@ -6,6 +6,6 @@ public enum EhcacheValueSerializer {
     JSON,
     /** Compact binary JSON with the application's Jackson configuration. */
     SMILE,
-    /** High-throughput binary object graph serialization for trusted cache storage. */
-    FORY
+    /** Compact binary object graph serialization backed by a virtual-thread-friendly object pool. */
+    KRYO
 }

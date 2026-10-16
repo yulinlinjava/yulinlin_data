@@ -101,6 +101,11 @@ public final class EhcacheQueryCache implements QueryCache {
     }
 
     @Override
+    public Duration resolveTtl(Duration requested, Set<CacheNamespace> namespaces) {
+        return common.resolveTtl(requested, namespaces);
+    }
+
+    @Override
     public CacheKey scope(CacheKey key, Set<CacheNamespace> namespaces) {
         return scope(key, namespaces, null);
     }

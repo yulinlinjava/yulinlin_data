@@ -1,6 +1,7 @@
 package com.yulinlin.admin;
 
 
+import com.yulinlin.common.model.EntityCounter;
 import com.yulinlin.common.model.ModelInsertWrapper;
 import com.yulinlin.common.model.ModelSelectWrapper;
 import com.yulinlin.data.core.request.QueryRequest;
@@ -24,16 +25,20 @@ public class AdminApplicationTests {
     RouteSession session;
 
     @Test
-    public void go(){
+    public void go() throws Exception{
         SysUserEntity user = new SysUserEntity();
         user.setUsername("admin");
 
-
-
-        List<SysUserEntity> sqllite = ModelSelectWrapper.newInstance("mysql", SysUserEntity.class)
-                .cache()
-                .selectList();
-
+        EntityCounter.newInstance(SysUserEntity.class,1)
+                        .inc(SysUserEntity::getAge,1)
+                                .submit();
+        EntityCounter.newInstance(SysUserEntity.class,1)
+                .inc(SysUserEntity::getAge,1)
+                .submit();
+        EntityCounter.newInstance(SysUserEntity.class,2)
+                .inc(SysUserEntity::getAge,1)
+                .execute();
+        Thread.sleep(110*1000);
 
 
         int a = 0;

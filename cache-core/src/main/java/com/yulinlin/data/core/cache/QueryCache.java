@@ -9,6 +9,8 @@ public interface QueryCache extends AutoCloseable {
     default boolean available() { return true; }
     /** Whether writes should clear related query-cache namespaces unless a request overrides it. */
     default boolean clearOnWrite() { return available(); }
+    /** Resolves the effective ORM TTL after its table namespaces are known. */
+    default Duration resolveTtl(Duration requested, Set<CacheNamespace> namespaces) { return requested; }
     /** Adds the provider's current global and namespace versions to a logical query key. */
     default CacheKey scope(CacheKey key, Set<CacheNamespace> namespaces) { return key; }
     /** Also isolates entries that intentionally use different expiry durations. */

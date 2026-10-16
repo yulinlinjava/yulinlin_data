@@ -127,6 +127,11 @@ public final class RedisQueryCache implements QueryCache {
     }
 
     @Override
+    public Duration resolveTtl(Duration requested, Set<CacheNamespace> namespaces) {
+        return common.resolveTtl(requested, namespaces);
+    }
+
+    @Override
     public CacheKey scope(CacheKey key, Set<CacheNamespace> namespaces, Duration ttl) {
         VersionRead global = version(GLOBAL_VERSION);
         if (!global.success()) return failureScope(key, ttl);

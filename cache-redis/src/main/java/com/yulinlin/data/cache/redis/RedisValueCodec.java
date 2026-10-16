@@ -6,31 +6,34 @@ import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.dataformat.smile.SmileFactory;
 import com.fasterxml.jackson.module.blackbird.BlackbirdModule;
+import com.esotericsoftware.kryo.kryo5.Kryo;
+import com.esotericsoftware.kryo.kryo5.io.Input;
+import com.esotericsoftware.kryo.kryo5.io.Output;
+import com.esotericsoftware.kryo.kryo5.util.Pool;
 import com.yulinlin.data.core.cache.CacheValueType;
-import org.apache.fory.Fory;
-import org.apache.fory.ThreadSafeFory;
 
 import java.lang.reflect.Type;
 import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Typed JSON/Smile/Fory codec with a small self-describing envelope. */
+/** Typed JSON/Smile/Kryo codec with a small self-describing envelope. */
 final class RedisValueCodec {
 
     private static final int MAGIC = 0x594C5231; // YLR1
     private static final int HEADER_SIZE = Integer.BYTES + 1 + Long.BYTES + Integer.BYTES;
     private static final byte JSON = 1;
     private static final byte SMILE = 2;
-    private static final byte FORY = 3;
+    // Serializer id 3 is reserved by a removed legacy codec. Do not reuse persisted format ids.
+    private static final byte KRYO = 4;
+    private static final int KRYO_POOL_CAPACITY = 32;
 
     private final RedisValueSerializer writeSerializer;
     private final ObjectMapper json;
     private final ObjectMapper smile;
-    private volatile ThreadSafeFory fory;
+    private volatile Pool<Kryo> kryos;
     private final Map<WriterKey, ObjectWriter> writers = new ConcurrentHashMap<>();
     private final Map<ReaderKey, ObjectReader> readers = new ConcurrentHashMap<>();
 
@@ -39,13 +42,14 @@ final class RedisValueCodec {
         this.json = optimized(base.copy());
         this.smile = optimized(base.copyWith(new SmileFactory()));
         this.writeSerializer = writeSerializer;
-        if (writeSerializer == RedisValueSerializer.FORY) fory();
+        if (writeSerializer == RedisValueSerializer.KRYO) kryos();
     }
 
     byte[] encode(Object value, Duration ttl) throws Exception {
-        byte[] body = writeSerializer == RedisValueSerializer.FORY
-                ? fory().serialize(value)
-                : encodeJackson(value, writeSerializer);
+        byte[] body = switch (writeSerializer) {
+            case KRYO -> encodeKryo(value);
+            case JSON, SMILE -> encodeJackson(value, writeSerializer);
+        };
         ByteBuffer buffer = ByteBuffer.allocate(HEADER_SIZE + body.length);
         buffer.putInt(MAGIC);
         buffer.put(id(writeSerializer));
@@ -57,8 +61,8 @@ final class RedisValueCodec {
 
     Decoded decode(byte[] value, CacheValueType valueType) throws Exception {
         Envelope envelope = envelope(value);
-        if (envelope.serializer() == RedisValueSerializer.FORY) {
-            Object decoded = decodeFory(value);
+        if (envelope.serializer() == RedisValueSerializer.KRYO) {
+            Object decoded = decodeKryo(value);
             validate(decoded, valueType);
             return new Decoded(decoded, envelope.ttl());
         }
@@ -71,8 +75,8 @@ final class RedisValueCodec {
 
     Decoded decode(byte[] value, Type valueType) throws Exception {
         Envelope envelope = envelope(value);
-        if (envelope.serializer() == RedisValueSerializer.FORY) {
-            return new Decoded(decodeFory(value), envelope.ttl());
+        if (envelope.serializer() == RedisValueSerializer.KRYO) {
+            return new Decoded(decodeKryo(value), envelope.ttl());
         }
         ObjectMapper mapper = mapper(envelope.serializer());
         return decode(value, envelope, mapper.getTypeFactory().constructType(valueType));
@@ -96,24 +100,55 @@ final class RedisValueCodec {
         return writer.writeValueAsBytes(value);
     }
 
-    private Object decodeFory(byte[] value) {
-        return fory().deserialize(Arrays.copyOfRange(value, HEADER_SIZE, value.length));
+    private byte[] encodeKryo(Object value) {
+        Pool<Kryo> pool = kryos();
+        Kryo kryo = pool.obtain();
+        try {
+            useContextClassLoader(kryo);
+            Output output = new Output(4096, -1);
+            kryo.writeClassAndObject(output, value);
+            return output.toBytes();
+        } finally {
+            kryo.reset();
+            pool.free(kryo);
+        }
     }
 
-    private ThreadSafeFory fory() {
-        ThreadSafeFory current = fory;
+    private Object decodeKryo(byte[] value) {
+        Pool<Kryo> pool = kryos();
+        Kryo kryo = pool.obtain();
+        try {
+            useContextClassLoader(kryo);
+            Input input = new Input(value, HEADER_SIZE, value.length - HEADER_SIZE);
+            return kryo.readClassAndObject(input);
+        } finally {
+            kryo.reset();
+            pool.free(kryo);
+        }
+    }
+
+    private Pool<Kryo> kryos() {
+        Pool<Kryo> current = kryos;
         if (current != null) return current;
         synchronized (this) {
-            if (fory == null) {
-                fory = Fory.builder()
-                        .withXlang(false)
-                        .withRefTracking(true)
-                        .requireClassRegistration(false)
-                        .withAsyncCompilation(true)
-                        .buildThreadSafeFory();
+            if (kryos == null) {
+                kryos = new Pool<>(true, false, KRYO_POOL_CAPACITY) {
+                    @Override
+                    protected Kryo create() {
+                        Kryo kryo = new Kryo();
+                        kryo.setRegistrationRequired(false);
+                        kryo.setReferences(true);
+                        return kryo;
+                    }
+                };
             }
-            return fory;
+            return kryos;
         }
+    }
+
+    private static void useContextClassLoader(Kryo kryo) {
+        ClassLoader loader = Thread.currentThread().getContextClassLoader();
+        if (loader != null) kryo.setClassLoader(loader);
     }
 
     private static void validate(Object value, CacheValueType valueType) {
@@ -146,7 +181,7 @@ final class RedisValueCodec {
         return switch (serializer) {
             case JSON -> json;
             case SMILE -> smile;
-            case FORY -> throw new IllegalArgumentException("Fory does not use a Jackson mapper");
+            case KRYO -> throw new IllegalArgumentException("Kryo does not use a Jackson mapper");
         };
     }
 
@@ -159,7 +194,7 @@ final class RedisValueCodec {
         return switch (serializer) {
             case JSON -> JSON;
             case SMILE -> SMILE;
-            case FORY -> FORY;
+            case KRYO -> KRYO;
         };
     }
 
@@ -167,7 +202,7 @@ final class RedisValueCodec {
         return switch (id) {
             case JSON -> RedisValueSerializer.JSON;
             case SMILE -> RedisValueSerializer.SMILE;
-            case FORY -> RedisValueSerializer.FORY;
+            case KRYO -> RedisValueSerializer.KRYO;
             default -> throw new IllegalArgumentException("Unknown Redis cache serializer: " + id);
         };
     }

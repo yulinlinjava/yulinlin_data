@@ -12,7 +12,7 @@
 - 通过显式 `@JoinSync` 或 `.autoUpdate()` 在事务内按 setter 跟踪部分更新，不要求所有查询都进入持久化上下文。
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
 - 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.submit()`，按数据源、实体和主键把多次字段增减聚合为一次原子更新，再复用现有 Session 和 JDBC batch。
-- 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，Key 包含数据源与查询元数据；条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
+- 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，支持全局及按 `table`/`group.table` 配置 TTL；Key 包含数据源与查询元数据，条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
 - 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描，Elasticsearch 提供同一入口的索引与基础 Mapping 初始化；只有 `autoSchema=true` 的完整实体才参与结构初始化。
 - PostgreSQL 与 Elasticsearch 通过同一套 `match()`、`highlight()` 和实体全文字段声明提供常用全文检索；MySQL、SQLite、H2 保持 LIKE/原字段兼容回退。

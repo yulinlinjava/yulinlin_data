@@ -30,6 +30,7 @@ public class SysUserEntity extends SuperEntity<SysUserEntity>  {
         @JoinField
         private String username;
 
+        private Integer age;
 
         public Object getO(){
                 return 1;

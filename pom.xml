@@ -65,7 +65,7 @@
         <aopalliance.version>1.0</aopalliance.version>
         <lombok.version>1.18.46</lombok.version>
         <ehcache.version>3.12.0</ehcache.version>
-        <fory.version>1.7.6</fory.version>
+        <kryo.version>5.7.1</kryo.version>
         <yulinlin.version>
            3.0
         </yulinlin.version>

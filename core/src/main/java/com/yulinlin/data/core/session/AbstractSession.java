@@ -37,6 +37,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -404,6 +405,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         Set<CacheNamespace> namespaces = CacheNamespaceResolver.resolve(
                 getClass(), group(), request.getFromClass(), request.getWrapper(),
                 request.getCacheNamespaces());
+        Duration cacheTtl = cacheManager.resolveTtl(request.getCacheTtl(), namespaces);
         CachePartition partition = null;
         if (result.getType() == ParseType.select && namespaces.size() == 1) {
             CacheNamespace namespace = namespaces.iterator().next();
@@ -412,15 +414,15 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                     this::cachePartitionValue).orElse(null);
         }
         cacheKey = partition == null
-                ? cacheManager.scope(cacheKey, namespaces, request.getCacheTtl())
-                : cacheManager.scopePartition(cacheKey, partition, request.getCacheTtl());
+                ? cacheManager.scope(cacheKey, namespaces, cacheTtl)
+                : cacheManager.scopePartition(cacheKey, partition, cacheTtl);
         CacheValueType valueType = result.getType() == ParseType.count
                 ? CacheValueType.scalar(Integer.class)
                 : CacheValueType.listOf(request.getEntityClass());
 
         if (mode == CacheMode.REFRESH) {
             E value = callable.get();
-            cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
+            cacheManager.put(cacheKey, valueType, value, cacheTtl);
             cacheDebug("REFRESH", cacheKey, result);
             return value;
         }
@@ -444,7 +446,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                 return (E) lookup.value();
             }
             E value = callable.get();
-            cacheManager.put(cacheKey, valueType, value, request.getCacheTtl());
+            cacheManager.put(cacheKey, valueType, value, cacheTtl);
             cacheDebug("PUT", cacheKey, result);
             return value;
         } finally {

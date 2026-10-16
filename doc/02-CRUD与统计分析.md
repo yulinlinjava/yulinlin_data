@@ -2,7 +2,7 @@
 
 本文从一个用户实体完成 CRUD，再扩展条件查询、SQL JOIN、自定义 SQL、统计模型和事务。数据库接入与 group 注册先看 [第一专题](01-接入与数据源.md)。
 
-阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [延迟写队列](#延迟写队列) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
+阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [实体计数器](#实体计数器) · [延迟写队列](#延迟写队列) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
 
 ## 最小实体和配套表
 
@@ -602,9 +602,66 @@ executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及�
 
 多个连接有各自的本地事务，中途提交失败无法撤销已成功提交的连接；跨连接未提交数据也不保证可读。严格单库原子性和事务内读己之写使用 parallel-connections: 1。
 
+## 实体计数器
+
+`common` 的 `EntityCounter` 面向播放量、点击量、热度等数值累加。一次 Builder 只描述一行，但同一行可以同时修改多个字段：
+
+```java
+import com.yulinlin.common.model.EntityCounter;
+
+EntityCounter.newInstance("mysql", VideoEntity.class, videoId)
+        .inc(VideoEntity::getViewCount, 1)
+        .inc(VideoEntity::getHotValue, 5)
+        .dec(VideoEntity::getRemainingQuota, 1)
+        .submit();
+```
+
+多行由业务代码正常循环，不提供容易混淆的链式 `.id(...)` 批量语法：
+
+```java
+for (VideoStat stat : stats) {
+    EntityCounter.newInstance("mysql", VideoEntity.class, stat.videoId())
+            .inc(VideoEntity::getViewCount, stat.views())
+            .inc(VideoEntity::getHotValue, stat.hotValue())
+            .submit();
+}
+```
+
+不传数据源时复用 RouteSession 的默认路由规则；单组自动选择，多组使用 `yulinlin.datasource.default-group`，实体上的 `@JoinSession` 仍可参与路由：
+
+```java
+EntityCounter.newInstance(VideoEntity.class, videoId)
+        .inc(VideoEntity::getViewCount)
+        .submit();
+```
+
+终结方法有两种，Builder 终结后不能再次执行或提交：
+
+| 方法 | 行为 | 返回值 | 事务 |
+| --- | --- | --- | --- |
+| `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 可加入当前 Route/Spring 事务 |
+| `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
+
+聚合键是“数据源选择器 + 实体类型 + 主键”，字段增量保存在该行下面。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
+
+```yaml
+yulinlin:
+  data:
+    counter:
+      flush-interval: 1m
+      flush-size: 1024
+      clear-cache: false
+```
+
+`flush-size` 统计待刷新的不同实体行数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；某个数据源/实体分组失败时把该组增量合回活动区，由后续刷新继续处理。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数。
+
+字段必须是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为计数器。`inc/dec` 的数量必须是 `long` 范围内的非负整数。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
+
+这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
+
 ## 延迟写队列
 
-适合点赞、浏览统计等允许最终一致、希望把短时间内的小批写入合并执行的业务。插入、更新和删除使用同一个入口：
+适合任意插入、更新和删除的延后批量执行。它只合并请求节点，不会把相同主键的重复数值增量先求和；播放量、点击量、热度等高频计数优先使用上一节的 `EntityCounter.submit()`。三种普通写操作使用同一个入口：
 
 ```java
 ModelInsertWrapper.newInstance("mysql", users).queue().execute();

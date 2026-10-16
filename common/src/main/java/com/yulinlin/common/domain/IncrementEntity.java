@@ -8,6 +8,11 @@ import lombok.Data;
 
 import java.util.concurrent.atomic.LongAdder;
 
+/**
+ * @deprecated 使用 {@link com.yulinlin.common.model.EntityCounter}。新接口基于实体字段和主键，
+ * 支持单行多字段、立即执行和进程内聚合执行，不再暴露动态表名与列名。
+ */
+@Deprecated(since = "3.0", forRemoval = false)
 @JoinTable("${table}")
 @Data
 public class IncrementEntity {

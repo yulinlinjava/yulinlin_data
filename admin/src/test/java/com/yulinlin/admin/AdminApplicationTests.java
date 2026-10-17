@@ -28,6 +28,12 @@ public class AdminApplicationTests {
     public void go() throws Exception{
 
 
+        SysUserEntity sysUserEntity = new SysUserEntity();
+        sysUserEntity.setId("1");
+        sysUserEntity.setAge(11);
+
+        sysUserEntity.setEnabled(false);
+        sysUserEntity.createUpdateWrapper().execute();
 
         int a = 0;
 

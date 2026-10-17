@@ -120,7 +120,7 @@ class SqlNodeLogTest {
         assertThat(events.list.getFirst().getFormattedMessage())
                 .isEqualTo("SQL批量执行成功 group=mysql cluster=master type=insert elapsedMs=18 nodes=3 "
                         + "affected=3 templates=2 sqls=[\"insert into users values (?)\", "
-                        + "\"insert into audit values (?)\"] sampleParams=[1]");
+                        + "\"insert into audit values (?)\"] params=[1]");
     }
 
     @Test

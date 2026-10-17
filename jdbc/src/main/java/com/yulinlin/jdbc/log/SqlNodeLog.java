@@ -121,7 +121,7 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
         if (affected >= 0) message.append(" affected=").append(affected);
         message.append(" templates=").append(templates.count())
                 .append(" sqls=").append(templates.rendered());
-        appendParams(message, sample, properties, " sampleParams=");
+        appendParams(message, sample, properties);
         return message.toString();
     }
 

@@ -37,6 +37,8 @@ public class SysUserEntity extends SuperEntity<SysUserEntity>  {
 
         private DateTime crtValue;
 
+        private Boolean enabled;
+
         public Object getO(){
                 return 1;
         }

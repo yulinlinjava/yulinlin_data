@@ -32,6 +32,8 @@ public class SysUserEntity extends SuperEntity<SysUserEntity>  {
 
         private Integer age;
 
+        private Integer version;
+
         public Object getO(){
                 return 1;
         }

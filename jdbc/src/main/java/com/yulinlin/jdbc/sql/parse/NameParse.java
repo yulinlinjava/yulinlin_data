@@ -36,7 +36,7 @@ public class NameParse implements IParse<AbstractMetaNode> {
                 return expression != null ? expression
                         : SqlJsonUtil.resolve(params.parse(params.toColumn(name)).toString(), this, comparisonValue);
             }
-            return name;
+            return alias(name);
         }
         String column = params.parse(params.toColumn(name)).toString();
         if (!AliasUtil.supportAlias(params)) column = writeReference(column);

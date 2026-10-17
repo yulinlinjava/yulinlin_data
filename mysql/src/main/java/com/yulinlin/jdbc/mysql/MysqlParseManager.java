@@ -8,6 +8,7 @@ import com.yulinlin.jdbc.mysql.parse.group.IntervalParse;
 public class MysqlParseManager extends SqlParseManager {
     @Override protected void init() {
         super.init();
+        register(new com.yulinlin.jdbc.mysql.parse.NameParse());
         register(new DateParse());
         register(new IntervalParse());
     }

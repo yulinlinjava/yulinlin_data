@@ -26,18 +26,11 @@ public class AdminApplicationTests {
 
     @Test
     public void go() throws Exception{
-        SysUserEntity user = new SysUserEntity();
-        user.setUsername("admin");
 
-        EntityCounter.newInstance(SysUserEntity.class,1)
-                        .inc(SysUserEntity::getAge,1)
-                                .submit();
-        EntityCounter.newInstance(SysUserEntity.class,1)
-                .inc(SysUserEntity::getAge,1)
-                .submit();
-        EntityCounter.newInstance(SysUserEntity.class,2)
-                .inc(SysUserEntity::getAge,1)
-                .execute();
+        ModelSelectWrapper.newInstance(SysUserEntity.class)
+                        .orderByDesc(SysUserEntity::getVersion)
+                                .selectList();
+
         Thread.sleep(110*1000);
 
 

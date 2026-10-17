@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
+import java.nio.charset.StandardCharsets;
+
 @ControllerAdvice
 public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object> {
 
@@ -93,11 +95,11 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         try {
             Object result;
             if (body instanceof CryptoDataResponse dataResponse) {
-                String ciphertext = crypto.encryptBase64(objectMapper.writeValueAsBytes(dataResponse.getData()));
+                String ciphertext = crypto.encryptBase64(plaintext(dataResponse.getData()));
                 dataResponse.onCryptAfter(ciphertext);
                 result = body;
             } else {
-                String ciphertext = crypto.encryptBase64(objectMapper.writeValueAsBytes(body));
+                String ciphertext = crypto.encryptBase64(plaintext(body));
                 result = stringResponse ? objectMapper.writeValueAsString(ciphertext) : ciphertext;
             }
             HttpHeaders headers = response.getHeaders();
@@ -109,6 +111,12 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         } catch (JsonProcessingException error) {
             throw new CryptoException("Cannot encrypt response", error);
         }
+    }
+
+    private byte[] plaintext(Object value) throws JsonProcessingException {
+        return value instanceof String text
+                ? text.getBytes(StandardCharsets.UTF_8)
+                : objectMapper.writeValueAsBytes(value);
     }
 
     private boolean isJson(MediaType mediaType) {

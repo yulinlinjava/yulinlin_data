@@ -2591,8 +2591,11 @@ public class UserController {
 
 - 普通 Java 对象：整个对象序列化后加密，响应 JSON 是一个 Base64 字符串。
 - `R<E>`：只加密非 null 的 `data`，保留 `code`、`msg`、`ok` 和 `timestamp`，并设置 `crypt=true`。
+- 返回值或 `R.data` 是 `String` 时，直接加密该字符串的 UTF-8 字节，不先增加 JSON 双引号；其他类型仍先序列化为 JSON。
 - `R.data == null`：不生成无意义密文，`crypt` 保持 `false`。
 - `ResponseVo<E>`：仅保留废弃兼容，行为与 `R<E>` 相同。
+
+因此客户端必须按接口约定选择解密方法：字符串使用 `decryptText()`，对象、集合、数字和布尔值使用 `decryptJson()`。密文自身不能可靠判断原始 Java 类型。
 
 `R<E>` 加密响应示例：
 
@@ -2670,13 +2673,17 @@ async function encryptJson(value, keyText, ivText) {
   return bytesToBase64(encrypted);
 }
 
-async function decryptJson(ciphertext, keyText, ivText) {
+async function decryptText(ciphertext, keyText, ivText) {
   const key = await importCbcKey(keyText);
   const plaintext = await crypto.subtle.decrypt(
       {name: "AES-CBC", iv: cbcIv(ivText)},
       key,
       base64ToBytes(ciphertext.trim()));
-  return JSON.parse(decoder.decode(plaintext));
+  return decoder.decode(plaintext);
+}
+
+async function decryptJson(ciphertext, keyText, ivText) {
+  return JSON.parse(await decryptText(ciphertext, keyText, ivText));
 }
 
 const deviceType = "web";
@@ -2697,8 +2704,16 @@ const responseBody = await response.json();
 const result = responseBody?.crypt === true
     ? {...responseBody, data: await decryptJson(responseBody.data, key, iv)}
     : typeof responseBody === "string"
-        ? await decryptJson(responseBody, key, iv)
+        ? await decryptText(responseBody, key, iv)
         : responseBody;
+```
+
+上例接口返回的是 `R<UserVO>`，所以 `data` 使用 `decryptJson()`；如果接口返回 `R<String>`，对应代码应改为：
+
+```javascript
+const result = responseBody?.crypt === true
+    ? {...responseBody, data: await decryptText(responseBody.data, key, iv)}
+    : responseBody;
 ```
 
 跨域调用时，业务 CORS 配置必须允许请求头 `Device-Type`，并暴露响应头 `Device-Type` 和 `X-Yulinlin-Crypto`。密钥不得直接硬编码在公开源码中；上述浏览器代码只用于说明协议对接。

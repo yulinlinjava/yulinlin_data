@@ -30,10 +30,14 @@ public class AdminApplicationTests {
 
         SysUserEntity sysUserEntity = new SysUserEntity();
         sysUserEntity.setId("1");
-        sysUserEntity.setAge(11);
 
-        sysUserEntity.setEnabled(false);
+
+        sysUserEntity.setEnabled(true);
         sysUserEntity.createUpdateWrapper().execute();
+
+        SysUserEntity sysUserEntity1 = ModelSelectWrapper.newInstance(SysUserEntity.class)
+                .selectOne();
+
 
         int a = 0;
 

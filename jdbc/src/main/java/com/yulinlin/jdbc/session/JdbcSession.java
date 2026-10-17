@@ -83,7 +83,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
                 int index = 1;
                 preparedStatement.clearParameters();
                 if (node.getList() != null) for (Object row : node.getList()) {
-                    preparedStatement.setObject(index, row);
+                    bindValue(preparedStatement, index, row);
                     index++;
                 }
                 preparedStatement.addBatch();
@@ -115,6 +115,11 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         return total;
     }
 
+    /** Database modules may preserve a different physical representation for encoded values. */
+    protected void bindValue(PreparedStatement statement, int index, Object value) throws SQLException {
+        statement.setObject(index, value);
+    }
+
 
 
 
@@ -134,7 +139,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
               int index = 1;
               for (Object row : node.getList()) {
 
-                  preparedStatement.setObject(index, row);
+                  bindValue(preparedStatement, index, row);
                   index++;
 
               }

@@ -6,6 +6,7 @@ import com.yulinlin.data.core.anno.JoinField;
 import com.yulinlin.data.core.anno.JoinIndex;
 import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.anno.JoinWhere;
+import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.data.lang.util.ListString;
 
 import lombok.Data;
@@ -16,7 +17,7 @@ import java.util.Date;
 
 @Data
 @JoinIndex(fields = "username",unique = true)
-@JoinTable(value = "obj2ka", autoSchema = true)
+@JoinTable(value = "ojbk", autoSchema = true)
 public class SysUserEntity extends SuperEntity<SysUserEntity>  {
 
 
@@ -33,6 +34,8 @@ public class SysUserEntity extends SuperEntity<SysUserEntity>  {
         private Integer age;
 
         private Integer version;
+
+        private DateTime crtValue;
 
         public Object getO(){
                 return 1;

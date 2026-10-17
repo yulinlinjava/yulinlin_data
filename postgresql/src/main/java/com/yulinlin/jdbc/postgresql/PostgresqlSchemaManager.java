@@ -13,6 +13,7 @@ import com.yulinlin.data.core.anno.TextTypeEnum;
 import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
+import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
@@ -28,6 +29,9 @@ import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -45,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PostgresqlSchemaManager {
     private enum StorageType {
         BOOLEAN("BOOLEAN"), INTEGER("INTEGER"), BIGINT("BIGINT"), REAL("DOUBLE PRECISION"),
+        DATE("DATE"), TIME("TIME WITHOUT TIME ZONE"), DATETIME("TIMESTAMP WITHOUT TIME ZONE"),
         STRING("VARCHAR(255)"), TEXT("TEXT");
         private final String ddl;
         StorageType(String ddl) { this.ddl = ddl; }
@@ -218,8 +223,12 @@ public final class PostgresqlSchemaManager {
         if (type == float.class || type == Float.class || type == double.class || type == Double.class) {
             return StorageType.REAL;
         }
-        if (type == String.class || type == char.class || type == Character.class
-                || java.util.Date.class.isAssignableFrom(type) || type.isEnum()
+        if (type == LocalDate.class) return StorageType.DATE;
+        if (type == LocalTime.class) return StorageType.TIME;
+        if (java.util.Date.class.isAssignableFrom(type) || type == DateTime.class || type == LocalDateTime.class) {
+            return StorageType.DATETIME;
+        }
+        if (type == String.class || type == char.class || type == Character.class || type.isEnum()
                 || type == BigDecimal.class || type == BigInteger.class) return StorageType.STRING;
         return StorageType.TEXT;
     }
@@ -521,6 +530,9 @@ public final class PostgresqlSchemaManager {
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> StorageType.INTEGER;
             case Types.BIGINT -> StorageType.BIGINT;
             case Types.REAL, Types.FLOAT, Types.DOUBLE -> StorageType.REAL;
+            case Types.DATE -> StorageType.DATE;
+            case Types.TIME -> StorageType.TIME;
+            case Types.TIMESTAMP -> StorageType.DATETIME;
             case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR,
                     Types.LONGNVARCHAR -> StorageType.STRING;
             case Types.CLOB, Types.NCLOB -> StorageType.TEXT;

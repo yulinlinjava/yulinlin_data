@@ -27,11 +27,6 @@ public class AdminApplicationTests {
     @Test
     public void go() throws Exception{
 
-        ModelSelectWrapper.newInstance(SysUserEntity.class)
-                        .orderByDesc(SysUserEntity::getVersion)
-                                .selectList();
-
-        Thread.sleep(110*1000);
 
 
         int a = 0;

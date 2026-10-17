@@ -13,6 +13,7 @@ import com.yulinlin.data.core.anno.TextTypeEnum;
 import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
+import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
@@ -23,6 +24,10 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.Date;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -39,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class H2SchemaManager {
     private enum StorageType {
         BOOLEAN("BOOLEAN"), INTEGER("INTEGER"), BIGINT("BIGINT"), REAL("DOUBLE PRECISION"),
+        DATE("DATE"), TIME("TIME"), DATETIME("TIMESTAMP"),
         STRING("CHARACTER VARYING"), TEXT("CHARACTER LARGE OBJECT");
         private final String ddl;
         StorageType(String ddl) { this.ddl = ddl; }
@@ -178,7 +184,12 @@ public final class H2SchemaManager {
         if (type == float.class || type == Float.class || type == double.class || type == Double.class) {
             return StorageType.REAL;
         }
-        // Dates, enums, BigDecimal/BigInteger, byte[] and JSON values retain the shared text codecs.
+        if (type == LocalDate.class) return StorageType.DATE;
+        if (type == LocalTime.class) return StorageType.TIME;
+        if (Date.class.isAssignableFrom(type) || type == DateTime.class || type == LocalDateTime.class) {
+            return StorageType.DATETIME;
+        }
+        // Enums, BigDecimal/BigInteger, byte[] and JSON values retain the shared text codecs.
         return StorageType.STRING;
     }
 
@@ -415,6 +426,9 @@ public final class H2SchemaManager {
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> StorageType.INTEGER;
             case Types.BIGINT -> StorageType.BIGINT;
             case Types.REAL, Types.FLOAT, Types.DOUBLE, Types.NUMERIC, Types.DECIMAL -> StorageType.REAL;
+            case Types.DATE -> StorageType.DATE;
+            case Types.TIME -> StorageType.TIME;
+            case Types.TIMESTAMP -> StorageType.DATETIME;
             case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR,
                     Types.LONGNVARCHAR -> StorageType.STRING;
             case Types.CLOB, Types.NCLOB -> StorageType.TEXT;

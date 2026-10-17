@@ -4,7 +4,6 @@ import com.yulinlin.data.core.exception.NoticeException;
 
 import com.yulinlin.data.lang.reflection.GenericUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
-import com.yulinlin.data.lang.util.DateTime;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
@@ -87,8 +86,6 @@ public abstract class AbstractDataBuffer implements IDataBuffer {
             }
             else if(type == Double.class){
                 return   new BigDecimal(object.toString()).doubleValue();
-            }  else if(type == DateTime.class){
-                return   DateTime.parse(object.toString());
             } else if(type == BigDecimal.class){
                 return   new BigDecimal(object.toString());
             } else if(type == BigInteger.class){

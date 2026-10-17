@@ -13,6 +13,7 @@ import com.yulinlin.data.core.anno.TextTypeEnum;
 import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
+import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
@@ -24,6 +25,9 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -41,6 +45,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class MysqlSchemaManager {
     private enum StorageType {
         BOOLEAN("TINYINT(1)"), INTEGER("INT"), BIGINT("BIGINT"), REAL("DOUBLE"),
+        DATE("DATE"), TIME("TIME"), DATETIME("DATETIME"),
         STRING("VARCHAR(255)"), TEXT("LONGTEXT");
         private final String ddl;
         StorageType(String ddl) { this.ddl = ddl; }
@@ -176,7 +181,12 @@ public final class MysqlSchemaManager {
         if (type == float.class || type == Float.class || type == double.class || type == Double.class) {
             return StorageType.REAL;
         }
-        if (type == String.class || type == char.class || type == Character.class || Date.class.isAssignableFrom(type)
+        if (type == LocalDate.class) return StorageType.DATE;
+        if (type == LocalTime.class) return StorageType.TIME;
+        if (Date.class.isAssignableFrom(type) || type == DateTime.class || type == LocalDateTime.class) {
+            return StorageType.DATETIME;
+        }
+        if (type == String.class || type == char.class || type == Character.class
                 || type.isEnum() || type == BigDecimal.class || type == BigInteger.class) return StorageType.STRING;
         return StorageType.TEXT;
     }
@@ -414,6 +424,9 @@ public final class MysqlSchemaManager {
             case Types.SMALLINT, Types.INTEGER -> StorageType.INTEGER;
             case Types.BIGINT -> StorageType.BIGINT;
             case Types.REAL, Types.FLOAT, Types.DOUBLE -> StorageType.REAL;
+            case Types.DATE -> StorageType.DATE;
+            case Types.TIME -> StorageType.TIME;
+            case Types.TIMESTAMP -> StorageType.DATETIME;
             case Types.CHAR, Types.VARCHAR, Types.NCHAR, Types.NVARCHAR -> StorageType.STRING;
             case Types.LONGVARCHAR, Types.LONGNVARCHAR, Types.CLOB, Types.NCLOB -> StorageType.TEXT;
             default -> null;

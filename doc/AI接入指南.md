@@ -2652,6 +2652,68 @@ location /api/ {
 | `device-id-header` | `Device-Id` | `LimitBy.DEVICE` 使用的请求头 |
 | `trusted-proxies` | `127.0.0.1`、`::1` | 可以提供真实 IP 请求头的代理地址或 CIDR |
 
+### 登录用户模型
+
+`security` 模块只定义最小登录用户协议，不规定用户表、登录流程、密码校验、Token 或权限实现。业务用户模型按需实现 `IUserDetails`：
+
+```java
+import com.yulinlin.security.auth.IUserDetails;
+
+import java.util.Set;
+
+public class LoginUser implements IUserDetails {
+    private String userId;
+    private String username;
+    private Set<String> roles;
+    private Set<String> permissions;
+    private String tenantId;
+
+    @Override
+    public String getUserId() {
+        return userId;
+    }
+
+    @Override
+    public String getUsername() {
+        return username;
+    }
+
+    @Override
+    public Set<String> getRoles() {
+        return roles;
+    }
+
+    @Override
+    public Set<String> getPermissions() {
+        return permissions;
+    }
+
+    @Override
+    public Object getAttribute(String name) {
+        return switch (name) {
+            case "tenantId" -> tenantId;
+            default -> null;
+        };
+    }
+}
+```
+
+`roles` 和 `permissions` 使用 `Set` 表达唯一集合。接口自带 `hasRole(role)` 和 `hasPermission(permission)`，执行精确且区分大小写的集合判断；参数、角色集合或权限集合为 `null` 时返回 `false`。框架不自动增加 `ROLE_` 前缀，也不解释通配符。
+
+```java
+if (loginUser.hasRole("admin")) {
+    // 当前用户具有 admin 角色
+}
+
+if (loginUser.hasPermission("video:update")) {
+    // 当前用户可以修改视频
+}
+```
+
+`getAttribute(name)` 只提供按名称读取，不暴露可修改的元数据 Map，也不强制业务使用 Map 存储。未知属性返回 `null`。
+
+该模型不应包含密码、密码哈希、AES 密钥、Token、签发时间、过期时间、IP 或设备 ID。密码和 Token 属于认证凭证，IP 和设备属于单次登录或请求上下文，不属于用户本身。
+
 ### 配置项与默认值
 
 | 配置 | 默认值 | 说明 |

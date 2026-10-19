@@ -4,7 +4,9 @@ import com.yulinlin.admin.rbac.domain.UserStatus;
 import com.yulinlin.common.domain.po.PagePo;
 import com.yulinlin.data.core.anno.ConditionEnum;
 import com.yulinlin.data.core.anno.JoinWhere;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -23,6 +25,11 @@ public final class RbacRequests {
             @Size(max = 32) String code) { }
 
     public record Id(@NotBlank @Size(max = 128) String id) { }
+
+    public record Ids(@NotEmpty @Size(max = 100)
+                      List<@NotBlank @Size(max = 128) String> ids) { }
+
+    public record Batch<T>(@NotEmpty @Size(max = 100) List<@NotNull @Valid T> items) { }
 
     public record CreateUser(
             @NotBlank @Pattern(regexp = "[A-Za-z0-9_.-]{3,64}") String username,
@@ -65,5 +72,17 @@ public final class RbacRequests {
 
         @JoinWhere
         private UserStatus status;
+    }
+
+    @Data
+    @EqualsAndHashCode(callSuper = true)
+    public static class RolePage extends PagePo {
+        @Size(max = 64)
+        @JoinWhere
+        private String code;
+
+        @Size(max = 64)
+        @JoinWhere(condition = ConditionEnum.like)
+        private String name;
     }
 }

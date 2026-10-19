@@ -1,4 +1,4 @@
-### 启用 dev,rbac profile，并设置 ADMIN_RBAC_PASSWORD。将下面的值改为同一个密码。
+### 正常启动 AdminApplication，并设置 ADMIN_RBAC_PASSWORD。将下面的值改为同一个密码。
 @baseUrl = http://localhost:8083
 @adminPassword = replace-with-your-admin-password
 
@@ -23,6 +23,20 @@ Authorization: Bearer {{adminToken}}
 
 > {% client.global.set("readerRoleId", response.body.data); %}
 
+### 3a. 角色分页，支持编码等值、名称 LIKE 和白名单排序
+POST {{baseUrl}}/rbac/roles/page
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"pageNumber":1,"pageSize":15,"name":"只读","orderList":[{"name":"code","asc":true}]}
+
+### 3b. 角色详情
+POST {{baseUrl}}/rbac/roles/detail
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerRoleId}}"}
+
 ### 4. 创建用户，角色编码直接保存在集合中
 POST {{baseUrl}}/rbac/users/create
 Content-Type: application/json
@@ -31,6 +45,20 @@ Authorization: Bearer {{adminToken}}
 {"username":"reader01","password":"Example-Password-2026","nickname":"只读示例","roleCodes":["reader"]}
 
 > {% client.global.set("readerUserId", response.body.data); %}
+
+### 4a. 用户列表（当前页、脱敏，最多100条）
+POST {{baseUrl}}/rbac/users/list
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"pageNumber":1,"pageSize":15,"username":"reader"}
+
+### 4b. 用户详情
+POST {{baseUrl}}/rbac/users/detail
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerUserId}}"}
 
 ### 5. 枚举状态过滤与分页排序
 POST {{baseUrl}}/rbac/users/page
@@ -109,6 +137,52 @@ Authorization: Bearer {{adminToken}}
 POST {{baseUrl}}/rbac/auth/refresh
 Authorization: Bearer {{adminToken}}
 
-### 18. 注销当前管理员 Token
+### 18. 批量创建角色，返回ID顺序与items一致
+POST {{baseUrl}}/rbac/roles/createBatch
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"items":[{"code":"example-editor","name":"编辑示例","permissions":["user:query"]},{"code":"example-auditor","name":"审核示例","permissions":["role:query"]}]}
+
+> {% client.global.set("batchRoleId1", response.body.data[0]); client.global.set("batchRoleId2", response.body.data[1]); %}
+
+### 19. 批量修改角色，同一Service事务提交后刷新权限
+POST {{baseUrl}}/rbac/roles/updateBatch
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"items":[{"id":"{{batchRoleId1}}","name":"编辑示例-新名称","permissions":["user:query","role:query"]},{"id":"{{batchRoleId2}}","name":"审核示例-新名称","permissions":["role:query"]}]}
+
+### 20. 批量创建用户，仍用明文请求密码，由服务端生成密码哈希（实际部署必须使用HTTPS）
+POST {{baseUrl}}/rbac/users/createBatch
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"items":[{"username":"batch01","password":"Example-Password-2026","nickname":"批量用户1","roleCodes":["example-editor"]},{"username":"batch02","password":"Example-Password-2026","nickname":"批量用户2","roleCodes":["example-auditor"]}]}
+
+> {% client.global.set("batchUserId1", response.body.data[0]); client.global.set("batchUserId2", response.body.data[1]); %}
+
+### 21. 批量修改用户昵称，不允许借此修改角色、状态或密码
+POST {{baseUrl}}/rbac/users/updateBatch
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"items":[{"id":"{{batchUserId1}}","nickname":"批量用户1-新昵称"},{"id":"{{batchUserId2}}","nickname":"批量用户2-新昵称"}]}
+
+### 22. 批量删除用户，不能包含当前登录账号
+POST {{baseUrl}}/rbac/users/deleteBatch
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"ids":["{{batchUserId1}}","{{batchUserId2}}"]}
+
+### 23. 批量删除角色，同样不能包含内置admin角色
+POST {{baseUrl}}/rbac/roles/deleteBatch
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"ids":["{{batchRoleId1}}","{{batchRoleId2}}"]}
+
+### 24. 注销当前管理员 Token
 POST {{baseUrl}}/rbac/auth/logout
 Authorization: Bearer {{adminToken}}

@@ -9,7 +9,6 @@ import com.yulinlin.admin.rbac.repository.UserRepository;
 import com.yulinlin.security.auth.ISecurityManager;
 import com.yulinlin.security.auth.LoginException;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -26,7 +25,6 @@ import java.util.regex.Pattern;
 
 /** 单机登录示例：Token 只表示服务端会话，不把权限信息交给客户端决定。 */
 @Service
-@Profile("rbac")
 public class AdminSecurityManager implements ISecurityManager {
     private static final String REQUEST_TOKEN = AdminSecurityManager.class.getName() + ".token";
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[A-Za-z0-9_-]{43}");

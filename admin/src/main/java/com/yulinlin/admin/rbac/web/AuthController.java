@@ -2,14 +2,14 @@ package com.yulinlin.admin.rbac.web;
 
 import com.yulinlin.admin.rbac.auth.AdminSecurityManager;
 import com.yulinlin.admin.rbac.auth.AdminUserDetails;
-import com.yulinlin.admin.rbac.auth.Anonymous;
 import com.yulinlin.admin.rbac.domain.UserStatus;
 import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.annotation.ApiLimit;
+import com.yulinlin.security.annotation.ApiLogin;
+import com.yulinlin.security.annotation.ApiPublic;
 import com.yulinlin.starter.domain.R;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -19,13 +19,13 @@ import org.springframework.web.server.ResponseStatusException;
 
 @RestController("rbacAuthController")
 @RequestMapping("/rbac/auth")
-@Profile("rbac")
 @ApiCrypto(false)
+@ApiLogin
 @RequiredArgsConstructor
 public class AuthController {
     private final AdminSecurityManager security;
 
-    @Anonymous
+    @ApiPublic
     @ApiLimit(count = 10, interval = "1m")
     @PostMapping("/login")
     public R<AdminSecurityManager.LoginResponse> login(@Valid @RequestBody RbacRequests.Login request) {

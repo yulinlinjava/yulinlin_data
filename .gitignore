@@ -34,7 +34,7 @@
 !/admin/src/main/java/com/yulinlin/admin/rbac/
 !/admin/src/main/java/com/yulinlin/admin/rbac/**
 !/admin/src/main/resources/
-!/admin/src/main/resources/application-rbac.yml
+!/admin/src/main/resources/application.yml
 !/admin/src/test/
 !/admin/src/test/**
 # 保留历史本地手工调试脚本的忽略行为。

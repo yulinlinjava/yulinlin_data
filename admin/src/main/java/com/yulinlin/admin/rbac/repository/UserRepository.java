@@ -4,10 +4,8 @@ import com.yulinlin.admin.rbac.domain.UserEntity;
 import com.yulinlin.common.model.ModelSelectWrapper;
 import com.yulinlin.data.core.anno.JoinRepository;
 import com.yulinlin.repository.dao.BaseRepository;
-import org.springframework.context.annotation.Profile;
 
 /** 认证信息直接查库；这里不对密码和账号状态使用查询缓存。 */
-@Profile("rbac")
 @JoinRepository("rbacUserRepository")
 public interface UserRepository extends BaseRepository<UserEntity> {
     UserEntity findByUsernameEq(String username);

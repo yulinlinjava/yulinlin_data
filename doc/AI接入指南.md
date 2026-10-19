@@ -2540,9 +2540,9 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 <!-- source: doc/06-接口安全.md -->
 ## 接口安全
 
-`security` 模块为 Spring MVC JSON 接口提供请求体解密、响应体加密和本机接口限流。默认协议是 `AES/CBC/PKCS5Padding + UTF-8 key + UTF-8 IV + 标准 Base64`；每种设备可以使用独立密钥，也可以单独切换为 AES-GCM。接口限流由 Caffeine 保存短期计数，不依赖 Spring Security、Redis 或 ORM。
+`security` 模块提供 Spring MVC JSON 接口加解密、本机接口限流，以及基于公共注解的登录、角色和权限检查。默认加密协议是 `AES/CBC/PKCS5Padding + UTF-8 key + UTF-8 IV + 标准 Base64`；每种设备可以使用独立密钥，也可以单独切换为 AES-GCM。限流由 Caffeine 保存短期计数，鉴权使用 Spring AOP，不依赖 Spring Security、Redis 或 ORM。
 
-阅读顺序：[完整配置](#完整主配置) · [接口限流](#接口限流) · [配置规则](#配置项与默认值) · [接口注解](#接口注解) · [CBC 前端对接](#默认-cbc-前端对接) · [排除路径](#明文排除路径) · [GCM](#可选-aes-gcm) · [手动 API](#手动使用) · [安全边界](#安全边界与限制)
+阅读顺序：[完整配置](#完整主配置) · [接口限流](#接口限流) · [鉴权声明](#鉴权声明注解) · [配置规则](#配置项与默认值) · [接口注解](#接口注解) · [CBC 前端对接](#默认-cbc-前端对接) · [排除路径](#明文排除路径) · [GCM](#可选-aes-gcm) · [手动 API](#手动使用) · [安全边界](#安全边界与限制)
 
 ### 引入模块
 
@@ -2555,6 +2555,8 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 ```
 
 模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice、响应加密 Advice 和接口限流拦截器；多设备模式缺少 `unknown`、密钥或 CBC IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
+
+鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。只使用加密、限流的项目不需要提供业务 ISecurityManager；没有鉴权注解的方法不检查登录，也没有额外的 auth.enabled 开关。
 
 ### 完整主配置
 
@@ -2765,7 +2767,7 @@ location /api/ {
 
 需要完整实现时，参考第九专题的 [Admin 两表 RBAC 与登录案例](09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)：在 admin 层实现本节协议，使用集合存储角色/权限、用户状态枚举及独立 Caffeine Token 会话。源码与 HTTP 请求文件都已提供，security 模块的协议仍可被其他业务自行实现。
 
-`security` 模块只定义最小登录用户协议，不规定用户表、登录流程、密码校验、Token 或权限实现。业务用户模型按需实现 `IUserDetails`：
+登录用户模型只约束最小身份、角色和权限协议，不规定用户表、登录流程、密码校验、Token，以及权限数据如何存储、加载。业务用户模型按需实现 `IUserDetails`：
 
 ```java
 import com.yulinlin.security.auth.IUserDetails;
@@ -2827,7 +2829,7 @@ if (loginUser.hasPermission("video:update")) {
 
 #### 安全管理器
 
-业务项目实现 `ISecurityManager`，提供登录、注销、获取当前登录用户和强制刷新四个入口。框架只定义协议，不注册虚假的默认业务实现，也不规定账号保存在哪里：
+需要登录功能的业务项目实现 `ISecurityManager`，提供登录、注销、获取当前登录用户和强制刷新四个入口。框架默认注册 AnonymousSecurityManager，不伪造登录用户，也不规定账号保存在哪里；用户提供自己的 ISecurityManager Bean 后，默认实现自动退出：
 
 ```java
 import com.yulinlin.security.auth.ISecurityManager;
@@ -2898,6 +2900,69 @@ IUserDetails specified = securityManager.refresh("10001");
 ```
 
 刷新用于重新加载最新角色、权限和扩展属性。传入其他用户 ID 时只刷新并返回该用户信息，不能把当前请求身份切换成该用户。刷新不等于重新输入密码登录，也不改变 Token 的签发时间和有效期。
+
+### 鉴权声明注解
+
+`com.yulinlin.security.annotation` 提供以下四个公共注解，与 ApiCrypto、ApiLimit 命名统一。由自动注册的 ApiAuthAspect 统一执行，直接调用业务 ISecurityManager.getUserDetails() 获取当前用户，使用 IUserDetails.hasRole/hasPermission 校验；不自行解析 Token、查询账号表或刷新登录会话。
+
+| 注解 | 声明含义 | 参数 |
+| --- | --- | --- |
+| `@ApiLogin` | 调用方必须登录 | 无 |
+| `@ApiRole("admin")` | 调用方必须登录并拥有指定角色 | 必填 `String[] value`；`any` 默认 false |
+| `@ApiPerm("user:query")` | 调用方必须登录并拥有指定权限 | 必填 `String[] value`；`any` 默认 false |
+| `@ApiPublic` | 允许匿名访问 | 无 |
+
+四个注解均可放在 Controller 或 Service 的类、接口和公共方法上。解析支持接口声明、实现类、父类、重写方法、泛型桥接和继承的 default 方法。角色和权限默认按大小写精确匹配，不解释通配符或 SpEL，也没有 admin 自动越权；`any=false` 表示全部满足，`any=true` 表示满足任意一个。
+
+通过 Spring Bean 代理调用时生效，例如：
+
+```java
+import com.yulinlin.security.annotation.ApiLogin;
+import com.yulinlin.security.annotation.ApiPerm;
+import com.yulinlin.security.annotation.ApiPublic;
+import com.yulinlin.security.annotation.ApiRole;
+
+@ApiLogin
+public class UserApi {
+    @ApiPublic
+    public void login() { }
+
+    @ApiPerm("user:query")
+    public void page() { }
+
+    @ApiRole(value = {"admin", "operator"}, any = true)
+    @ApiPerm({"user:query", "user:export"})
+    public void export() { }
+}
+```
+
+鉴权规则：
+
+- ApiRole、ApiPerm 本身要求登录，不需要重复添加 ApiLogin。
+- 类、父类、接口和方法上的要求叠加，都必须满足；方法上的同类注解不会覆盖类级要求。
+- 方法 ApiPublic 可豁免类级 ApiLogin；不能绕过类级角色、权限要求，也不能与方法自身的鉴权要求共存。类上的 ApiPublic 不能与类级鉴权要求共存；但公开类中的方法可用 ApiLogin/ApiRole/ApiPerm 单独收紧访问。
+- 空数组、空白编码、编码首尾空白或冲突声明会抛出明确的配置异常，不静默放行。
+- 未登录抛出 HTTP 401；登录后缺少角色或权限抛出 HTTP 403。实现使用 ResponseStatusException；搭配 starter 时由现有异常处理器包装为 R，security 不依赖 starter。
+- 获取当前用户时发生的数据库、Redis 或业务异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
+- ApiPublic 只影响鉴权，不关闭 ApiCrypto、ApiLimit 或 IP 黑名单。
+
+#### 默认匿名安全管理器
+
+| 场景或方法 | 默认行为 |
+| --- | --- |
+| 无业务 ISecurityManager Bean | 自动提供 AnonymousSecurityManager，正常启动 |
+| `getUserDetails()`、`getUserDetails(userId)`、`refresh(userId)` | 返回 null，不查库、不生成身份 |
+| `logout()` | 空操作 |
+| `login(...)` 两个重载 | 抛出 IllegalStateException，提示未配置业务安全管理器 |
+| 无鉴权注解或允许匿名的方法 | 不读取管理器，不影响加密和限流 |
+| 默认匿名实现访问受保护方法 | 401，不会因为没有业务实现而放行 |
+| 自定义 ISecurityManager Bean | 自动替换默认实现；多个实现需用 Primary 明确选择 |
+
+业务实现只需注册为普通 Bean，不需要额外的启用注解或配置。切面只在受保护的调用中解析管理器，每次调用只获取一次当前用户；注解策略按目标类和方法缓存，不缓存用户与校验结果。通过 ClassValue 保存解析结果，避免使用长期全局 Class/Method Map。
+
+ApiAuthAspect 使用 Spring 原生 Advisor/MethodInterceptor 做方法匹配，而不是叠加多个重复执行的切面；order 为 9990，早于框架同步代理的 9998 和事务的 9999。没有鉴权声明的 Bean 不为此创建代理。当前只支持经 Spring 代理调用的 public、非 final 方法；受保护的 final 类或 final 方法明确拒绝配置。Object 基础方法不作为业务鉴权入口。private/static 方法、手动 new 对象和同类 this 调用不受 AOP 保护，不能将这些调用当成安全边界；异步线程也不会自动继承当前请求身份。Spring Boot 默认启用 AOP，不要设置 spring.aop.auto=false；非 Boot 容器需自行配置 AOP 基础设施。
+
+Admin RBAC 案例已改为公共 ApiLogin、ApiPerm、ApiPublic，移除了本地 RequirePermission、Anonymous 和 RbacInterceptor，避免同一入口再执行两套权限检查。回归用例统一放在 admin/src/test/java；本轮未执行编译、测试或打包。
 
 ### 配置项与默认值
 
@@ -4457,7 +4522,7 @@ public int importUsers(List<UserEntity> users) {
 
 #### 启动方式与完整配置
 
-在 IDEA 中运行 `AdminApplication`，Program arguments 配置为 `--spring.profiles.active=dev,rbac`。`dev` 提供你自己的 MySQL 连接，`rbac` 提供 [application-rbac.yml](../admin/src/main/resources/application-rbac.yml) 中的案例设置；也可替换成 `prod,rbac`。MySQL 数据库本身应提前创建，框架启动扫描负责创建两张表及索引。
+在 IDEA 中正常运行 `AdminApplication` 即可，RBAC 组件和 Repository 默认注册，不需要额外激活 `rbac` profile。案例设置已合并到 [application.yml](../admin/src/main/resources/application.yml)，数据库连接继续由自己的 `dev` 或 `prod` 环境配置提供。MySQL 数据库本身应提前创建，框架启动扫描负责创建两张表及索引；如果环境配置覆盖了 `schema-packages` 或 Repository 的 `scan-packages`，应确保其扫描范围包含 RBAC 对应包。
 
 启动环境设置 `ADMIN_RBAC_PASSWORD`，长度为 12–128 字符；可选设置 `ADMIN_RBAC_USERNAME`，默认 `admin`。不设置密码时跳过初始账号创建，接口不会变成免登录。初始账号已存在时，重启不会覆盖其密码、状态或角色。
 
@@ -4497,7 +4562,7 @@ yulinlin:
         - "::1"
 ```
 
-所有 RBAC 组件和 Repository 通过 `rbac` profile 启用，不会改动旧 `SysUserEntity` 的表。Profile 使用全局默认 group；如果业务同时使用多个 group，应按第一专题添加明确的 `@JoinSession` 路由和对应 Schema 扫描。
+RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按第一专题添加明确的 `@JoinSession` 路由和对应 Schema 扫描。
 
 `security` 当前即使关闭加密，也需要 `unknown` 设备配置来兼容客户端密文。Admin 的基础配置使用运行时随机的 32 字符密钥，案例 Controller 标记 `@ApiCrypto(false)`，便于直接执行 JSON 请求。要与真实客户端联调加密，按第六专题配置双方一致的设备密钥、启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`；随机密钥不作为客户端协议使用。报文加密不替代 HTTPS。
 
@@ -4559,7 +4624,9 @@ HTTP 登录通过具体实现的 `signIn(...)` 获得 `LoginResponse`，其中�
 
 用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。`code` 参数保留既有协议，但本例未实现验证码，传入非空值会明确拒绝，不能把它当作已经完成验证码验证。
 
-`RbacInterceptor` 只保护 `/rbac/**`：登录方法通过 `@Anonymous` 放行，其他方法默认需要登录；管理方法用枚举声明权限，例如 `@RequirePermission(Permission.USER_UPDATE)`。权限精确匹配，无角色名自动越权或通配符解释。未登录/Token 失效为 HTTP 401，缺少权限为 HTTP 403。
+案例复用 security 公共鉴权 AOP：三个 Controller 类使用 `@ApiLogin`，登录方法通过 `@ApiPublic` 放行，其他方法默认需要登录；管理方法使用 `@ApiPerm("user:update")` 等权限声明。AdminSecurityManager 作为业务 ISecurityManager Bean 自动替换框架默认匿名实现。原本的 RequirePermission、Anonymous 和 RbacInterceptor 已移除，不再按 URL 前缀执行另一套校验。
+
+Permission 枚举仍是业务权限字典，角色集合和用户详情按原有规则加载；公共注解使用字符串编码，也可使用业务定义的 public static final String 常量，不能在注解参数中调用枚举 getCode()。权限精确匹配，无角色名自动越权或通配符解释。未登录/Token 失效为 HTTP 401，缺少权限为 HTTP 403；完整规则和 AOP 边界见[接口安全专题](06-接口安全.md#鉴权声明注解)。Service 仍负责业务事务、内置管理员保护和提交后刷新，不把登录检查加到 ISecurityManager 自己的身份加载路径上。
 
 | 写操作 | 提交成功后的会话处理 |
 | --- | --- |
@@ -4572,7 +4639,45 @@ HTTP 登录通过具体实现的 `signIn(...)` 获得 `LoginResponse`，其中�
 
 #### 业务写法与 HTTP 调用
 
-Controller 全部使用 `@PostMapping`，参数对象集中在 `RbacRequests`，开启 `@Valid`，返回 `R<E>`；Entity、PO、VO 分开。`UserPage extends PagePo` 用 `@JoinWhere` 解析用户名 LIKE 与状态等值条件；页码、每页条数和排序字段在 Service 校验，每页最多 100 条。
+Controller 全部使用 `@PostMapping`，参数对象集中在 `RbacRequests`，开启 `@Valid`，返回 `R<E>`；Entity、PO、VO 分开。`UserPage extends PagePo` 用 `@JoinWhere` 解析用户名 LIKE 与状态等值条件；`RolePage` 支持角色编码等值、名称 LIKE。页码、每页条数和排序字段在 Service 校验，每页最多 100 条；HTTP 查询不接受继承自 PagePo 的任意 `and/or` 字段条件，避免访问密码等内部字段。
+
+#### Service 完整 CRUD 与对外边界
+
+两个业务 Service 直接实现框架的 `ISuperService`，不再是只提供几个自定义方法的普通类，也不继承已经弃用的 ServiceImpl：
+
+```java
+@Service("rbacRoleService")
+@Transactional
+@RequiredArgsConstructor
+public class RoleService implements ISuperService<RoleEntity> {
+    // 通用 CRUD + 角色校验、会话刷新等业务增强
+}
+
+@Service("rbacUserService")
+@Transactional
+@RequiredArgsConstructor
+public class UserService implements ISuperService<UserEntity> {
+    // 通用 CRUD + 密码、状态、角色分配等业务增强
+}
+```
+
+服务端可直接调用 `findById`、`findByIdIn`、`all`、`page(PagePo)`、`insertOne/insertList`、`updateOne/updateList`、`save/saveList`、`deleteById/deleteByIdIn`。必须通过注入的 Spring Service Bean 调用，才能建立事务。案例显式声明默认写方法的转发入口，并在批量写方法统一校验；单条和 save 分支也经过相同规则，不能绕过内置管理员角色保护、用户名/角色编码不可变和提交后会话刷新。服务端直接插入 UserEntity 时，passwordHash 必须先通过 `PasswordHash.encode` 生成，不能保存明文。
+
+HTTP 同样提供完整的列表、详情、分页、单条/批量增删改，但保留请求 DTO 与响应 VO，不直接继承 `RESTfulController` 的实体 `put/puts` 接口。原因是用户密码、角色、状态各有独立权限，直接开放 Entity 更新会绕过这些边界。普通无敏感字段的业务仍可按前文继承通用 Controller；RBAC 案例通过安全的 DTO 接口展示业务扩展。
+
+批量创建/修改使用 `{"items":[...]}`，批量删除使用 `{"ids":[...]}`，每次 1–100 条；删除 ID 去重，返回实际处理条数。在一个 Service 事务内执行，数据库写入阶段失败会整体回滚，提交成功后才刷新或撤销登录会话。批量新增和修改调用 Repository 的批量写入；删除角色先合并全部待删编码，对每个用户的角色集合只修改一次，再批量删除角色，避免同一用户关联多个待删角色时修改互相覆盖。`/users/list` 接收 UserPage，按页返回脱敏列表、最多 100 条，不是无界全表导出。用户普通更新（含批量）只修改昵称，授权、状态和密码仍走对应专用接口。
+
+例如批量创建角色：
+
+```http
+POST /rbac/roles/createBatch
+Authorization: Bearer <管理员Token>
+Content-Type: application/json
+
+{"items":[{"code":"reader","name":"只读人员","permissions":["user:query"]},{"code":"auditor","name":"审核人员","permissions":["user:query","role:query"]}]}
+```
+
+成功返回 `R<List<String>>`，data 中的 ID 顺序与 items 一致；批量修改/删除返回 `R<Integer>`，表示处理条数。请求明细与返回处理可参考 [rbac.http](../admin/rbac.http)。
 
 修改业务由外部 Spring Bean 调用 Service，示例采用：
 
@@ -4596,19 +4701,28 @@ public void assignRoles(RbacRequests.AssignRoles request) {
 | `/auth/login` | `{"username":"admin","password":"你配置的密码"}` | 匿名 |
 | `/auth/me`、`/auth/refresh`、`/auth/logout` | 当前用户、刷新资料、注销；无需请求体 | 已登录 |
 | `/users/page` | `{"pageNumber":1,"pageSize":15,"username":"reader","status":"enabled"}` | `user:query` |
+| `/users/list` | 与 `/users/page` 相同条件，只返回当前页的列表 | `user:query` |
 | `/users/detail` | `{"id":"用户ID"}` | `user:query` |
 | `/users/statuses` | 状态字典；无需请求体 | `user:query` |
 | `/users/create` | `{"username":"reader01","password":"Example-Password-2026","nickname":"只读示例","roleCodes":["reader"]}` | `user:create` |
+| `/users/createBatch` | items 数组内放置 `/users/create` 请求对象，返回用户 ID 列表 | `user:create` |
 | `/users/update` | `{"id":"用户ID","nickname":"新昵称"}` | `user:update` |
+| `/users/updateBatch` | `{"items":[{"id":"用户ID","nickname":"新昵称"}]}` | `user:update` |
 | `/users/status` | `{"id":"用户ID","status":"disabled"}` | `user:update` |
 | `/users/roles` | `{"id":"用户ID","roleCodes":["reader"]}` | `user:assign` |
 | `/users/password` | `{"id":"用户ID","password":"Another-Password-2026"}` | `user:password` |
 | `/users/delete` | `{"id":"用户ID"}` | `user:delete` |
+| `/users/deleteBatch` | `{"ids":["用户ID1","用户ID2"]}`；不能删除当前登录账号 | `user:delete` |
 | `/roles/list`、`/roles/permissions` | 角色列表、可分配权限字典；无需请求体 | `role:query` |
+| `/roles/page` | `{"pageNumber":1,"pageSize":15,"name":"只读"}`，可选 code、orderList | `role:query` |
+| `/roles/detail` | `{"id":"角色ID"}` | `role:query` |
 | `/roles/create` | `{"code":"reader","name":"只读人员","permissions":["user:query"]}` | `role:create` |
+| `/roles/createBatch` | items 数组内放置 `/roles/create` 请求对象，返回角色 ID 列表 | `role:create` |
 | `/roles/update` | `{"id":"角色ID","name":"新名称","permissions":["user:query","role:query"]}` | `role:update` |
+| `/roles/updateBatch` | items 数组内放置 `/roles/update` 请求对象 | `role:update` |
 | `/roles/delete` | `{"id":"角色ID"}` | `role:delete` |
+| `/roles/deleteBatch` | `{"ids":["角色ID1","角色ID2"]}`；同样禁止删除 admin | `role:delete` |
 
 推荐按 [rbac.http](../admin/rbac.http) 顺序执行：管理员登录 → 创建只读角色 → 创建用户 → 用户登录 → 验证 403 → 修改角色权限 → 用原 Token 验证新增权限 → 停用账号 → 验证原 Token 返回 401。请求文件有演示密码和占位管理员密码，使用前替换；重复创建同名用户或角色会被唯一约束拒绝。
 
-本案例在 2026-10-19 增加了密码哈希、会话刷新/撤销的独立单元用例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。
+本案例在 2026-10-19 增加了密码哈希、会话刷新/撤销、通用 CRUD 保护和 HTTP 入口契约的独立单元用例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。

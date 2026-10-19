@@ -11,6 +11,7 @@ import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionContext;
 import com.yulinlin.data.core.transaction.TransactionListenerManager;
 import com.yulinlin.data.core.wrapper.IUpdateWrapper;
+import com.yulinlin.data.core.wrapper.factory.UpdatePatchFactory;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.GenericUtil;
 import com.yulinlin.data.lang.reflection.ProxyUtil;

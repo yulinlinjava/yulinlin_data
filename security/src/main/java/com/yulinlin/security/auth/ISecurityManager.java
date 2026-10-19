@@ -1,8 +1,8 @@
 package com.yulinlin.security.auth;
 
 /**
- * Application-provided authentication contract.
- * The security module defines the lifecycle API but does not prescribe account storage or credential validation.
+ * Authentication lifecycle contract implemented by the application.
+ * The framework supplies an anonymous fallback, but does not prescribe account storage or credential validation.
  */
 public interface ISecurityManager {
 
@@ -19,6 +19,7 @@ public interface ISecurityManager {
      * @param code optional verification code; {@code null} when unused
      * @return the authenticated user; never {@code null}
      * @throws LoginException when the account, password, code or account state rejects the login
+     * @throws IllegalStateException when only the default anonymous manager is installed
      */
     IUserDetails login(String username, String password, String code);
 

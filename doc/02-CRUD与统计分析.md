@@ -692,6 +692,53 @@ yulinlin:
 
 队列不会为每个入队对象打印日志。开启 `com.yulinlin.data.core.queue.WriteQueueManager=DEBUG` 后，每个非空刷新快照输出一条摘要，包括触发方式、Session/分组/Node 数、影响行数、耗时和剩余积压；失败、重试和最终丢弃仍分别使用 WARN/ERROR。
 
+## 请求与结果增强（过滤器）
+
+实现 `IFilter` 或 `IRequestFilter` 并注册成 Spring Bean，即可自动加入过滤链。`order()` 从小到大执行，同序保留注册顺序。过滤器是共享实例，不要将当前用户、请求或分表名存入实例字段。
+
+增强统一由 RouteSession 执行，具体 Session 和 JdbcSessionFactory 不再注入过滤器管理器：
+
+```text
+RouteSession.before → 最终 Request/数据源 → Session 解析、缓存/数据库、解码/代理 → RouteSession.after
+```
+
+`before` 在 SQL 解析和缓存 Key 构造之前执行，可以原地修改节点，也可以返回新的同类 Request，用于动态表名、租户条件或数据源选择。查询仍须返回 QueryRequest，写入仍须返回 ExecuteRequest，允许将删除转换为逻辑更新，不能返回 null。以下为配置方法片段，DemoUser 是本文示例实体，固定后缀仅演示可信的业务分表规则：
+
+```java
+@Bean
+public com.yulinlin.data.core.filter.IRequestFilter userTableFilter() {
+    return new com.yulinlin.data.core.filter.IRequestFilter() {
+        @Override
+        public QueryRequest selectBefore(String group, QueryRequest<?> request) {
+            if (request.getFromClass() != DemoUser.class) return request;
+            var node = request.getWrapper();
+            if (node instanceof com.yulinlin.data.core.wrapper.ICountWrapper count) {
+                node = count.getWrapper();
+            }
+            if (node instanceof com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper<?, ?, ?, ?> select) {
+                select.table("demo_user_202610");
+            }
+            return request;
+        }
+    };
+}
+```
+
+表名必须来自服务端可信规则，不能直接拼接客户端输入。改表名不改变 `fromClass`，它仍负责实体映射和编解码。插入、更新、删除、聚合同样修改各自的节点，批量请求须处理全部节点。替换查询节点优先使用 `request.copy(newWrapper)`，保留模型、fromClass、参数、路由、缓存和代理选项。最终请求改变 group 或 master/slave 时重新选库；后续 SQL、Key 和失效范围使用最终请求。
+
+| 入口 | `IFilter.after` 收到/返回 | `IRequestFilter` 默认分发 |
+| --- | --- | --- |
+| select、group | List | 调用一次 selectAfter |
+| page | Page | 对 Page.list 调用一次 selectAfter；替换列表时保留 total、extra |
+| count | Integer | 保持计数不变；需要增强时覆盖普通 IFilter.after |
+| insert、update、delete | Integer | 调用 updateAfter |
+
+`after` 的新结果会真正返回给调用者；普通 IFilter 可以替换整个 Page。返回值须符合入口类型，计数和影响行数不能为 null；不要伪造乐观锁校验依赖的影响行数。分页内部 count/select 不重复增强。缓存命中同样执行 after，基础缓存不会保存后处理结果或事务代理；分页过滤当前页列表不重算数据库 total。
+
+延迟队列入队前执行一次 before 并保存增强后节点，后台刷新不再次改表名或选库；after 只在实际执行后调用。后台写后过滤器的 RuntimeException 只记录中文日志，保留实际执行结果，不因此重试已经执行的 Node。普通写入后处理失败则向外传播，并标记路由事务回滚。
+
+after 不代表事务已经提交，提交成功通知使用 `TransactionUtil.afterCommit`。路由作用域按实际入栈次数清理，复用 Request 或过滤器异常不会通过旧 `sessionChange` 标记误弹外层路由。
+
 ## 事务使用
 
 ### 框架路由事务
@@ -717,7 +764,9 @@ SessionUtil.route().transaction(() -> {
 });
 ```
 
-没有外层事务时，一次 CRUD 自己开始并结束事务；多个独立请求不自动合成一个业务事务。RouteSession 按实际访问加入参与者，逐个提交/回滚，只结束自己加入的事务层；不会替调用方结束独立 Session 预先开启的外层事务。
+`RouteSession` 是业务 CRUD 和事务的唯一入口。没有外层事务时，一次写请求由 RouteSession 自动开始并结束事务；普通查询不主动开启事务，多个独立请求不自动合成一个业务事务。RouteSession 定义边界并登记参与者，`TransactionListenerManager` 统一维护当前线程的业务上下文，各 Session 只管理自己的连接资源。
+
+同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
 
 ### Spring 事务
 
@@ -725,24 +774,58 @@ SessionUtil.route().transaction(() -> {
 
 框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性。已有 Spring 拦截器处理自身语义，不代表框架路由实现了完整 REQUIRES_NEW、NESTED 或保存点。不要默认叠加两个事务注解，也不要将业务异步线程视为自动继承事务。
 
-### 独立 Session
+### 提交成功回调
 
-以下方法体片段中 jdbcSession 已由工厂配置，request 是已构造 Request：
+业务需要在数据库提交成功后刷新权限、清理业务缓存或发送进程内通知时，使用 `com.yulinlin.data.core.transaction.TransactionUtil.afterCommit(Runnable)`：
 
 ```java
-jdbcSession.startTransaction();
-try {
-    jdbcSession.insert(insertRequest);
-    jdbcSession.update(updateRequest);
-    jdbcSession.commitTransaction();
-} catch (Exception | Error error) {
-    try { jdbcSession.rollbackTransaction(); }
-    catch (Exception | Error cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
-    throw error;
+@Transactional
+@JoinSync
+public void changeRole(String id, List<String> permissions) {
+    RoleEntity role = roleRepository.findByIdEq(id);
+    role.setPermissions(permissions);
+    String code = role.getCode();
+    TransactionUtil.afterCommit(() -> security.refreshRole(code));
 }
 ```
 
-所在方法须允许传播异常。独立能力指执行不依赖路由，不等于裸 new 就已初始化所有组件。事务在开始它的同一线程结束。
+上例是方法片段，`roleRepository` 和 `security` 为业务注入对象。`@Transactional` 经框架切面接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不再提供纯 Spring `TransactionTemplate` 的回调兜底。
+
+| 场景 | 行为 |
+| --- | --- |
+| 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
+| 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
+| 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
+| Spring 持有实际事务 | 同时等待框架参与者完成与 Spring 的实际提交成功，不提前触发或重复执行 |
+| 仅有 Spring 事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
+| 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
+| 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
+| 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
+
+回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
+
+Spring 管理实际连接时，框架内部仍保留提交结果确认，避免数据库尚未提交就提前通知。这不等于实现了新事务传播：如果业务额外把路由包在外部 Spring 事务内，提交通知阶段的 Spring 资源可能尚未释放，不能依赖再次调用框架 `transaction()` 来挂起旧 Spring 连接或实现 `REQUIRES_NEW`。通常只在回调里做快照读取、缓存刷新和通知。
+
+提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
+
+具体 Session 的 `startTransaction/commitTransaction/rollbackTransaction` 是管理器调用的资源生命周期，不再转发管理器，也不维护业务嵌套深度。业务代码不得手动调用它们，否则会绕过统一的代理写回、跨数据源协调、缓存失效和回调；JDBC 无活动资源的写操作会报错。
+
+### 路由是唯一业务入口
+
+以下为方法体片段，两个 Request 已构造，并明确指定各自的数据源组：
+
+```java
+insertRequest.setSession("mysql");
+updateRequest.setSession("sqlite");
+RouteSession route = SessionUtil.route();
+route.transaction(() -> {
+    route.insert(insertRequest);
+    route.update(updateRequest);
+    return null;
+});
+```
+
+`route.isOpenTransaction()` 表示当前线程是否存在业务事务；具体 Session 的同名方法只表示自身资源是否已开启，不等于新的业务事务。业务事务必须在开启它的同一线程结束。
 
 嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
 

@@ -7,13 +7,11 @@ import com.yulinlin.data.core.loadbalan.LoadBalance;
 import com.yulinlin.data.core.wrapper.IWrapperFactory;
 import lombok.SneakyThrows;
 
-import java.util.HashMap;
 import java.util.LinkedList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-public class RegisterSession extends BaseTransactionSession{
+public class RegisterSession {
 
 
     private LoadBalance loadBalance;
@@ -27,16 +25,10 @@ public class RegisterSession extends BaseTransactionSession{
         return wrapperFactory;
     }
 
-    private final ThreadLocal<HashMap<String,EntitySession>> cacheSession= ThreadLocal.withInitial(()  -> {
-        return  new HashMap<>();
-    });
-
+    // 无事务时也可使用的选库作用域，不是事务上下文。
     private final ThreadLocal<LinkedList<EntitySession>> threadLocal= ThreadLocal.withInitial(()  -> {
         return  new LinkedList<>();
     });
-
-    private final ThreadLocal<Set<EntitySession>> participants = ThreadLocal.withInitial(LinkedHashSet::new);
-
 
     public  void registerSession(List<EntitySession> list){
         for (EntitySession session : list) {
@@ -57,71 +49,13 @@ public class RegisterSession extends BaseTransactionSession{
         return queryCache;
     }
 
-    @Override
-    public void commitTransaction() {
-        boolean ok = isOpenTransaction();
-        boolean rollback = isRollbackOnly();
-        super.commitTransaction();
-        if(ok && !isOpenTransaction()){
-            finishParticipants(rollback);
-            if (rollback) throw new IllegalStateException("Route transaction was marked rollback-only");
-        }
-
-    }
-
-    @Override
-    public void rollbackTransaction() {
-        boolean ok = isOpenTransaction();
-        setRollbackOnly();
-        super.rollbackTransaction();
-        if(ok && !isOpenTransaction()){
-            finishParticipants(true);
-        }
-
-    }
-
-    @Override
-    public void setRollbackOnly() {
-        super.setRollbackOnly();
-        for (EntitySession session : participants.get()) session.setRollbackOnly();
-    }
-
-    @Override
-    public boolean isRollbackOnly() {
-        return super.isRollbackOnly() || participants.get().stream().anyMatch(EntitySession::isRollbackOnly);
-    }
-
     protected EntitySession enlist(EntitySession session) {
-        if (isOpenTransaction() && !participants.get().contains(session)) {
-            // Nest once even when an independently started session transaction already exists.
-            session.startTransaction();
-            participants.get().add(session);
-            if (isRollbackOnly()) session.setRollbackOnly();
-        }
         return session;
     }
 
-    @SneakyThrows
-    private void finishParticipants(boolean rollback) {
-        Throwable failure = null;
-        try {
-            for (EntitySession session : participants.get()) {
-                try {
-                    if (rollback || failure != null) session.rollbackTransaction();
-                    else session.commitTransaction();
-                } catch (Throwable error) {
-                    if (failure == null) failure = error;
-                    else if (failure != error) failure.addSuppressed(error);
-                    // A third-party participant may leave resources open after commit fails.
-                    try { session.rollbackTransaction(); }
-                    catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
-                }
-            }
-        } finally {
-            participants.remove();
-            clear();
-        }
-        if (failure != null) throw failure;
+    /** 基础注册器只选库；RouteSession 覆盖此入口维护事务内的节点亲和性。 */
+    protected EntitySession resolveSession(String group, JoinCluster cluster) {
+        return loadBalance.loadBalance(group, cluster);
     }
 
     @SneakyThrows
@@ -146,7 +80,6 @@ public class RegisterSession extends BaseTransactionSession{
     }
 
     public  void clear(){
-        cacheSession.remove();
     }
 
 
@@ -172,16 +105,7 @@ public class RegisterSession extends BaseTransactionSession{
             tag = JoinCluster.master;
         }
 
-        String group  = code;
-        JoinCluster cluster = tag;
-        EntitySession session;
-        if (isOpenTransaction()) {
-            session = cacheSession.get().computeIfAbsent(code + ":" + cluster.name(),
-                    key -> loadBalance.loadBalance(group, cluster));
-        } else {
-            // Do not retain an old node indefinitely after weights or health snapshots change.
-            session = loadBalance.loadBalance(group, cluster);
-        }
+        EntitySession session = resolveSession(code, tag);
 
         return enlist(session);
 

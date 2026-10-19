@@ -1,16 +1,16 @@
 package com.yulinlin.data.core.proxy;
 
-import com.yulinlin.data.core.transaction.TransactionListener;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.session.DataProperties;
 import com.yulinlin.data.core.session.SessionUtil;
 
 import java.util.List;
 
-public class EntityProxyService implements TransactionListener {
+public class EntityProxyService {
 
     private final EntityProxyFactory factory;
     private final DataProperties properties;
+    /** 注解方法的作用域开关，不保存事务上下文或代理修改记录。 */
     private final ThreadLocal<Integer> autoUpdateDepth = ThreadLocal.withInitial(() -> 0);
 
     private EntityProxyService(EntityProxyFactory factory, DataProperties properties) {
@@ -77,22 +77,23 @@ public class EntityProxyService implements TransactionListener {
                 EntityProxyFactory.CacheContext.DISABLED);
     }
 
-    @Override
+    /** @deprecated 生命周期由 TransactionListenerManager 统一控制。 */
+    @Deprecated
     public void startTransaction() {
         factory.startTransaction();
 
     }
 
-    @Override
+    @Deprecated
     public void commitTransaction() {
         factory.commitTransaction();
     }
 
-    @Override
+    @Deprecated
     public void rollbackTransaction() {
         factory.rollbackTransaction();
     }
 
-    @Override public void afterCompletion() { factory.afterCompletion(); }
+    @Deprecated public void afterCompletion() { factory.afterCompletion(); }
 }
 

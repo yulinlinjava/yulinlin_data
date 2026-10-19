@@ -22,7 +22,23 @@
 *.db
 **/target
 
-/admin/
+# admin 的历史本地文件继续忽略，放行公开的 RBAC 案例和集中维护的测试。
+/admin/**
+!/admin/rbac.http
+!/admin/src/
+!/admin/src/main/
+!/admin/src/main/java/
+!/admin/src/main/java/com/
+!/admin/src/main/java/com/yulinlin/
+!/admin/src/main/java/com/yulinlin/admin/
+!/admin/src/main/java/com/yulinlin/admin/rbac/
+!/admin/src/main/java/com/yulinlin/admin/rbac/**
+!/admin/src/main/resources/
+!/admin/src/main/resources/application-rbac.yml
+!/admin/src/test/
+!/admin/src/test/**
+# 保留历史本地手工调试脚本的忽略行为。
+/admin/src/test/java/com/yulinlin/admin/A.java
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/

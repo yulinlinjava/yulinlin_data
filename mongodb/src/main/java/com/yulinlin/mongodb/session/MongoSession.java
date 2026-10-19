@@ -214,19 +214,4 @@ public class MongoSession extends AbstractSession  {
 
     }
 
-    @Override
-    public void startTransaction() {
-
-    }
-
-    @Override
-    public void commitTransaction() {
-
-    }
-
-    @Override
-    public void rollbackTransaction() {
-
-    }
-
 }

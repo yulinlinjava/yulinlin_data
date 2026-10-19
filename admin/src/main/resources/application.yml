@@ -56,6 +56,17 @@ management:
       exposure:
         include: "*"
 
+# 引入 security 后需要 unknown 设备配置。示例默认关闭接口报文加密，运行时随机生成本次启动的密钥。
+# 接入真实客户端时应设置 ADMIN_CRYPTO_KEY，并按接口安全专题配置双方约定的设备密钥。
+yulinlin:
+  security:
+    crypto:
+      enabled: false
+      devices:
+        unknown:
+          algorithm: AES/GCM/NoPadding
+          key: ${ADMIN_CRYPTO_KEY:${random.value}}
+
 
 
 

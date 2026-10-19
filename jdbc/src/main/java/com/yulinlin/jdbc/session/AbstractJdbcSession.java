@@ -170,15 +170,14 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     protected Integer executeUpdate(List<ParseResult> list,RequestType requestType) {
 
 
-            ConnectionPool pool = isOpenTransaction() ? transactionConnections() : null;
-            Connection connection = pool == null ? DataSourceUtils.getConnection(dataSource) : pool.getConnection();
+            ConnectionPool pool = transactionConnections();
+            Connection connection = pool.getConnection();
 
             try {
                 Integer value =  executeUpdateNode(connection,list);
                 return value;
             }finally {
-                if (pool == null) DataSourceUtils.releaseConnection(connection, dataSource);
-                else pool.releaseConnection(connection);
+                pool.releaseConnection(connection);
             }
 
 
@@ -228,55 +227,43 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     public void startTransaction() {
-        super.startTransaction();
-
+        if (transactionPools.get() == null)
+            transactionPools.set(new ConnectionPool(dataSource, parallelConnections));
     }
 
     @Override
     public void commitTransaction() {
-        finishTransaction(false);
+        finishTransactionResource(false);
     }
 
     @Override
     public void rollbackTransaction() {
-        finishTransaction(true);
+        finishTransactionResource(true);
     }
 
-    private void finishTransaction(boolean rollback) {
-        if (!isOpenTransaction()) return;
-        if (rollback) setRollbackOnly();
-        boolean mustRollback = isRollbackOnly();
-        if (rollback) super.rollbackTransaction(); else super.commitTransaction();
-        if (isOpenTransaction()) return;
+    private void finishTransactionResource(boolean rollback) {
         ConnectionPool pool = transactionPools.get();
         transactionPools.remove();
-        if (pool != null) {
-            if (mustRollback) pool.setRollbackOnly();
-            pool.finish(rollback);
-        } else if (!rollback && mustRollback) {
-            throw new IllegalStateException("JDBC transaction was marked rollback-only");
-        }
+        if (pool != null) pool.finish(rollback);
     }
 
+    @Override public boolean isOpenTransaction() { return transactionPools.get() != null; }
+
     @Override public void setRollbackOnly() {
-        super.setRollbackOnly();
         ConnectionPool pool = transactionPools.get();
         if (pool != null) pool.setRollbackOnly();
     }
 
     @Override public boolean isRollbackOnly() {
         ConnectionPool pool = transactionPools.get();
-        return super.isRollbackOnly() || (pool != null && pool.isRollbackOnly());
+        return pool != null && pool.isRollbackOnly();
     }
 
     protected final ConnectionPool transactionConnections() {
-        if (!isOpenTransaction()) throw new IllegalStateException("No JDBC session transaction is active");
         ConnectionPool pool = transactionPools.get();
-        if (pool == null) {
-            pool = ConnectionUtil.createPool(dataSource, parallelConnections);
-            transactionPools.set(pool);
-        }
-        return pool;
+        if (pool == null) throw new IllegalStateException("JDBC 事务资源尚未开启，请通过 RouteSession 执行写操作");
+        // 只在真正执行 SQL 时借连接，并在交给批处理工作线程前由原线程初始化。
+        return pool.initialize();
     }
 
     @Override protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results) {

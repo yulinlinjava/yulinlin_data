@@ -13,6 +13,7 @@ import lombok.Data;
 
 
 import java.util.Date;
+import java.util.Map;
 
 
 @Data
@@ -38,6 +39,8 @@ public class SysUserEntity extends SuperEntity<SysUserEntity>  {
         private DateTime crtValue;
 
         private Boolean enabled;
+
+        private Map data;
 
         public Object getO(){
                 return 1;

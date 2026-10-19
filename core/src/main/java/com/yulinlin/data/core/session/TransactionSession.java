@@ -1,7 +1,8 @@
 package com.yulinlin.data.core.session;
 
 
-public interface TransactionSession   {
+/** RouteSession 定义业务事务边界；具体 EntitySession 的同名方法仅管理本地连接资源。 */
+public interface TransactionSession {
 
     //开启事务
     void startTransaction();

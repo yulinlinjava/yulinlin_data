@@ -32,7 +32,8 @@ public final class CacheNamespaceResolver {
                                               Collection<String> explicitResources) {
         LinkedHashSet<String> resources = new LinkedHashSet<>();
         if (nodes != null) for (INode node : nodes) collectNode(node, resources);
-        collectAnnotations(fromClass, resources);
+        // 动态分表以最终节点为准，不能再混入实体注解中的原始表名。
+        if (resources.isEmpty()) collectAnnotations(fromClass, resources);
         if (explicitResources != null) {
             for (String resource : explicitResources) if (resource != null && !resource.isBlank()) resources.add(resource);
         }

@@ -52,6 +52,7 @@ public class ConnectionPool {
             springManaged = DataSourceUtils.isConnectionTransactional(connection, dataSource);
             if (springManaged && TransactionSynchronizationManager.getResource(dataSource) instanceof ConnectionHolder holder) {
                 springHolder = holder;
+                if (rollbackOnly) holder.setRollbackOnly();
             }
             boolean autoCommit = connection.getAutoCommit();
             if (springManaged) limit = 1;

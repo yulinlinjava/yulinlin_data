@@ -3,7 +3,7 @@ package com.yulinlin.data.core.filter;
 import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
-import com.yulinlin.data.core.session.RequestType;
+import com.yulinlin.data.lang.util.Page;
 
 import java.util.List;
 
@@ -32,10 +32,18 @@ public interface IRequestFilter  extends IFilter{
             return updateAfter(session,request,data);
         }
         if(request instanceof QueryRequest) {
-            if(data instanceof Number){
-                return data;
+            if (data instanceof Page<?> page) {
+                Object value = selectAfter(session, request, (List) page.getList());
+                if (value == page.getList()) return page;
+                if (!(value instanceof List<?> rows))
+                    throw new IllegalStateException("分页 selectAfter 必须返回 List");
+                Page<?> replacement = new Page<>(rows, page.getTotal());
+                if (page.getExtra() != null) page.getExtra().forEach(replacement::putValue);
+                return replacement;
             }
-            return selectAfter(session, request, (List) data);
+            if (data instanceof List) return selectAfter(session, request, (List) data);
+            // count/null 不属于列表结果；普通 IFilter.after 仍可单独处理统计值。
+            return data;
 
         }
         return data;
@@ -47,7 +55,7 @@ public interface IRequestFilter  extends IFilter{
         return request;
     }
 
-    //查询监听
+    /** select/group 的列表或分页中的列表；替换分页列表时保留 total 与 extra。 */
     default Object selectAfter(String session, BaseRequest<?> request, List<Object> coll){
         return coll;
     }

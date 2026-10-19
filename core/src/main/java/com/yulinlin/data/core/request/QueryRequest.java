@@ -45,6 +45,20 @@ public class QueryRequest<E> extends BaseRequest<E> {
         return request;
     }
 
+    /** 过滤器替换节点时保留调用者的路由、缓存、参数与代理选项；实体映射由新请求明确描述。 */
+    public void inheritExecutionOptions(QueryRequest<?> source) {
+        if (source == null || source == this) return;
+        if (source.getCacheMode() != CacheMode.NONE) {
+            setCacheMode(source.getCacheMode());
+            setCacheTtl(source.getCacheTtl());
+        }
+        if (source.autoUpdate != null) autoUpdate = source.autoUpdate;
+        addCacheNamespaces(source.getCacheNamespaces().toArray(String[]::new));
+        if (getSession() == null || getSession().isBlank()) setSession(source.getSession());
+        if (getCluster() == null) setCluster(source.getCluster());
+        if (getRoot() == null) setRoot(source.getRoot());
+    }
+
     public QueryRequest<E> autoUpdate() {
         return autoUpdate(true);
     }

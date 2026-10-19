@@ -9,6 +9,7 @@ import com.yulinlin.data.lang.util.Page;
 import java.util.Collection;
 import java.util.List;
 
+/** 数据源执行与资源协议；业务 CRUD 和事务必须通过 RouteSession，不作为独立业务入口。 */
 public interface EntitySession extends LoadBalanceNode,TransactionSession {
 
     /** Installs the optional query cache selected by the application. */

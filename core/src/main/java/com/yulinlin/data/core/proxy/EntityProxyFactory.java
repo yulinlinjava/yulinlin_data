@@ -8,9 +8,9 @@ import com.yulinlin.data.core.model.BaseModelSelectWrapper;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
-import com.yulinlin.data.core.transaction.TransactionListener;
+import com.yulinlin.data.core.transaction.TransactionContext;
+import com.yulinlin.data.core.transaction.TransactionListenerManager;
 import com.yulinlin.data.core.wrapper.IUpdateWrapper;
-import com.yulinlin.data.core.wrapper.factory.UpdatePatchFactory;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.GenericUtil;
 import com.yulinlin.data.lang.reflection.ProxyUtil;
@@ -18,7 +18,6 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import org.springframework.cglib.proxy.MethodInterceptor;
 import org.springframework.cglib.proxy.MethodProxy;
-import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Array;
@@ -31,7 +30,7 @@ import java.util.*;
  * One CGLIB proxy per entity combines lazy association loading and transaction-scoped dirty tracking.
  * Metadata is parsed once per user class; per-object dirty arrays are allocated only after the first setter.
  */
-public final class EntityProxyFactory implements IProxyFactory, TransactionListener {
+public final class EntityProxyFactory implements IProxyFactory {
     private static final Object UNSET = new Object();
 
     public record CacheContext(CacheMode mode, Duration ttl) {
@@ -119,8 +118,6 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
         }
     };
 
-    private final ThreadLocal<Changes> local = new ThreadLocal<>();
-
     public boolean supportsAutoUpdate(Class<?> type) {
         return type != null && type != Object.class && !Map.class.isAssignableFrom(type)
                 && PLANS.get(ProxyUtil.getProxyClass(type)).manageable();
@@ -180,10 +177,11 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
                 throw new NoticeException("关联查询列表必须包含同一种非空实体类型");
         }
 
-        RouteSession route = Objects.requireNonNull(SessionUtil.route(), "Entity proxy requires a RouteSession");
+        RouteSession route = SessionUtil.route();
         boolean managed = autoUpdate && plan.manageable();
-        if (managed && !route.isOpenTransaction()) throw transactionRequired();
-        boolean lazy = plan.hasLazyRelations() && route.isOpenTransaction();
+        boolean active = TransactionListenerManager.currentContext() != null;
+        if (managed && !active) throw transactionRequired();
+        boolean lazy = plan.hasLazyRelations() && active;
         List<?> beans = data;
         LazyBatch batch = null;
         if (managed || lazy) {
@@ -207,94 +205,83 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
         return ProxyUtil.getProxyClass(value instanceof Class<?> type ? type : value.getClass());
     }
 
-    private final class Changes {
+    /** 现有修改跟踪状态，按需存入管理器的事务上下文，不持有独立 ThreadLocal。 */
+    public final class ProxyChanges {
         final RouteSession route;
-        final Object transaction;
+        final TransactionContext context;
         final Thread owner = Thread.currentThread();
         final Map<String, IdentityHashMap<Object, EntityProxy>> sources = new LinkedHashMap<>();
         final List<EntityProxy> tracked = new ArrayList<>();
         boolean flushing;
         boolean finished;
-        boolean springRegistered;
-        boolean springCompleted;
-
-        Changes(RouteSession route) {
+        ProxyChanges(RouteSession route, TransactionContext context) {
             this.route = route;
-            this.transaction = route.transactionIdentity();
+            this.context = context;
         }
 
         void check() {
-            if (finished || springCompleted || Thread.currentThread() != owner || SessionUtil.route() != route
-                    || route.transactionIdentity() != transaction)
+            if (finished || Thread.currentThread() != owner || !context.allowsChanges())
                 throw new NoticeException("自动更新 setter 必须在创建代理的线程及原始事务内执行");
         }
 
         void joinSpring() {
-            if (springRegistered || !TransactionSynchronizationManager.isActualTransactionActive()
-                    || !TransactionSynchronizationManager.isSynchronizationActive()) return;
-            springRegistered = true;
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void beforeCommit(boolean readOnly) {
-                    if (finished || route.transactionIdentity() != transaction) return;
-                    if (readOnly && tracked.stream().anyMatch(EntityProxy::hasDirty))
-                        throw new NoticeException("只读事务不能执行自动更新");
-                    if (!route.isRollbackOnly()) EntityProxyFactory.this.flush(Changes.this);
-                }
+            context.manager().synchronize();
+        }
 
-                @Override
-                public void afterCompletion(int status) {
-                    springCompleted = true;
-                    if (status != STATUS_COMMITTED && route.transactionIdentity() == transaction)
-                        route.setRollbackOnly();
-                }
-            });
+        public boolean hasDirty() { return tracked.stream().anyMatch(EntityProxy::hasDirty); }
+        public void flush() { check(); EntityProxyFactory.this.flush(this); }
+        public void rollback() { for (EntityProxy proxy : tracked) proxy.clearDirty(); }
+        public void close() {
+            finished = true;
+            rollback();
+            tracked.clear();
+            sources.clear();
         }
     }
 
-    private Changes changes() {
+    private ProxyChanges changes() {
         RouteSession route = SessionUtil.route();
-        if (route == null || !route.isOpenTransaction()) throw transactionRequired();
-        Changes changes = local.get();
-        if (changes == null || changes.finished || changes.transaction != route.transactionIdentity()
-                || changes.route != route) {
-            changes = new Changes(route);
-            local.set(changes);
+        TransactionContext context = TransactionListenerManager.currentContext();
+        if (context == null) throw transactionRequired();
+        if (route == null) throw new IllegalStateException("实体代理需要配置 RouteSession，并通过路由事务使用");
+        ProxyChanges changes = context.proxyChanges();
+        if (changes == null) {
+            changes = new ProxyChanges(route, context);
+            context.proxyChanges(changes);
         }
         changes.check();
         changes.joinSpring();
         return changes;
     }
 
-    @Override
+    /** 兼容手动调用；正常生命周期由 TransactionListenerManager 统一处理。 */
+    @Deprecated
     public void startTransaction() {
         changes();
     }
 
-    @Override
+    @Deprecated
     public void commitTransaction() {
-        Changes changes = local.get();
-        if (changes != null && !changes.finished && changes.route.isOutermostTransaction()) flush(changes);
+        TransactionContext context = TransactionListenerManager.currentContext();
+        if (context != null && context.depth() == 1 && context.proxyChanges() != null) context.proxyChanges().flush();
     }
 
-    @Override
+    @Deprecated
     public void rollbackTransaction() {
-        Changes changes = local.get();
-        if (changes != null && changes.route.isOutermostTransaction())
-            for (EntityProxy proxy : changes.tracked) proxy.clearDirty();
+        TransactionContext context = TransactionListenerManager.currentContext();
+        if (context != null && context.depth() == 1 && context.proxyChanges() != null) context.proxyChanges().rollback();
     }
 
-    @Override
+    @Deprecated
     public void afterCompletion() {
-        Changes changes = local.get();
-        if (changes != null) changes.finished = true;
-        local.remove();
+        TransactionContext context = TransactionListenerManager.currentContext();
+        if (context != null && context.proxyChanges() != null) context.proxyChanges().close();
     }
 
     private record Group(String source, Class<?> type) { }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private void flush(Changes changes) {
+    private void flush(ProxyChanges changes) {
         if (changes.flushing) return;
         changes.flushing = true;
         try {
@@ -316,8 +303,6 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
                     if (request.getRoot() == null) request.setRoot(proxy.target);
                 }
                 if (!updated.isEmpty()) {
-                    if (changes.springCompleted)
-                        throw new NoticeException("原始 Spring 事务已经结束，不能继续自动更新");
                     int affected = changes.route.update(request);
                     if (updated.stream().anyMatch(row -> !row.versions.isEmpty()) && affected != updated.size())
                         throw new NoticeException("自动更新乐观锁失败: " + group.getKey().type().getName());
@@ -330,7 +315,7 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
         }
     }
 
-    private EntityProxy proxy(Changes changes, String source, Object value, boolean managed, LazyBatch batch) {
+    private EntityProxy proxy(ProxyChanges changes, String source, Object value, boolean managed, LazyBatch batch) {
         IdentityHashMap<Object, EntityProxy> cache = changes.sources.computeIfAbsent(source,
                 ignored -> new IdentityHashMap<>());
         EntityProxy existing = cache.get(value);
@@ -347,7 +332,7 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
     }
 
     private final class EntityProxy implements MethodInterceptor {
-        final Changes changes;
+        final ProxyChanges changes;
         final String source;
         final Object target;
         final Object proxy;
@@ -360,7 +345,7 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
         Object[] dirtyValues;
         Object[] originals;
 
-        EntityProxy(Changes changes, String source, Object target, boolean managed, LazyBatch batch) {
+        EntityProxy(ProxyChanges changes, String source, Object target, boolean managed, LazyBatch batch) {
             this.changes = changes;
             this.source = Objects.requireNonNull(source, "session");
             this.target = target;
@@ -504,12 +489,12 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
         LazyBatch(RouteSession route, String source, CacheContext cache, boolean autoUpdate,
                   Plan plan, List<?> values) {
             this.route = route;
-            this.transaction = route.transactionIdentity();
+            this.transaction = TransactionListenerManager.currentContext();
             this.source = source;
             this.cache = cache == null ? CacheContext.DISABLED : cache;
             this.autoUpdate = autoUpdate;
             this.plan = plan;
-            Changes changes = changes();
+            ProxyChanges changes = changes();
             for (Object value : values) {
                 EntityProxy handler = proxy(changes, source, value, autoUpdate && plan.manageable(), this);
                 targets.add(handler.target);
@@ -525,9 +510,9 @@ public final class EntityProxyFactory implements IProxyFactory, TransactionListe
         void load(Field field, Object target) {
             if (states.get(field) == LoadState.LOADED
                     || assigned.getOrDefault(field, Set.of()).contains(target)) return;
-            if (Thread.currentThread() != owner || SessionUtil.route() != route
-                    || route.transactionIdentity() != transaction)
+            if (Thread.currentThread() != owner || TransactionListenerManager.currentContext() != transaction)
                 throw new NoticeException("懒加载必须在创建代理的线程及原始事务内执行: " + field.getName());
+            if (route == null) throw new NoticeException("关联懒加载需要配置 RouteSession");
             if (states.get(field) == LoadState.LOADING)
                 throw new NoticeException("循环懒加载关联: " + field.getName());
             states.put(field, LoadState.LOADING);

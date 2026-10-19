@@ -3,7 +3,6 @@ package com.yulinlin.jdbc.session;
 import com.yulinlin.data.core.cache.NoOpQueryCache;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCaches;
-import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -26,8 +25,6 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
     private QueryCache queryCache = NoOpQueryCache.INSTANCE;
 
-    @Autowired
-    IFilterManager filterManager;
     @Autowired
     EntityProxyService entityProxyService;
 
@@ -97,7 +94,6 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         sqlSession.setLogManager(logManager);
         if (parseManager != null) sqlSession.setParseManager(parseManager);
 
-        sqlSession.setFilterManager(filterManager);
         sqlSession.setProxyService(entityProxyService);
         return sqlSession;
     }

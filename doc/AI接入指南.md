@@ -541,7 +541,7 @@ public class MixedSessionConfig {
 
 MySQL 与 SQLite 共存时，保留原主库配置即可，SQLite 使用内部池和独立 sqlite 组。多个主 DataSource 没有唯一候选时，全部会话显式创建，不任意猜测。
 
-手动 new JdbcSessionFactory 后不能立即假定可用：当前工厂需要容器注入编码器、过滤器和日志等。缓存由 RouteSession 注册 Session 时统一注入；`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
+手动 new JdbcSessionFactory 后不能立即假定可用：当前工厂需要容器注入编码器、代理服务和日志等；过滤器只注入 RouteSession，不再交给具体 Session。缓存由 RouteSession 注册 Session 时统一注入；`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
 
 ### 默认会话组
 
@@ -1328,6 +1328,53 @@ yulinlin:
 
 队列不会为每个入队对象打印日志。开启 `com.yulinlin.data.core.queue.WriteQueueManager=DEBUG` 后，每个非空刷新快照输出一条摘要，包括触发方式、Session/分组/Node 数、影响行数、耗时和剩余积压；失败、重试和最终丢弃仍分别使用 WARN/ERROR。
 
+### 请求与结果增强（过滤器）
+
+实现 `IFilter` 或 `IRequestFilter` 并注册成 Spring Bean，即可自动加入过滤链。`order()` 从小到大执行，同序保留注册顺序。过滤器是共享实例，不要将当前用户、请求或分表名存入实例字段。
+
+增强统一由 RouteSession 执行，具体 Session 和 JdbcSessionFactory 不再注入过滤器管理器：
+
+```text
+RouteSession.before → 最终 Request/数据源 → Session 解析、缓存/数据库、解码/代理 → RouteSession.after
+```
+
+`before` 在 SQL 解析和缓存 Key 构造之前执行，可以原地修改节点，也可以返回新的同类 Request，用于动态表名、租户条件或数据源选择。查询仍须返回 QueryRequest，写入仍须返回 ExecuteRequest，允许将删除转换为逻辑更新，不能返回 null。以下为配置方法片段，DemoUser 是本文示例实体，固定后缀仅演示可信的业务分表规则：
+
+```java
+@Bean
+public com.yulinlin.data.core.filter.IRequestFilter userTableFilter() {
+    return new com.yulinlin.data.core.filter.IRequestFilter() {
+        @Override
+        public QueryRequest selectBefore(String group, QueryRequest<?> request) {
+            if (request.getFromClass() != DemoUser.class) return request;
+            var node = request.getWrapper();
+            if (node instanceof com.yulinlin.data.core.wrapper.ICountWrapper count) {
+                node = count.getWrapper();
+            }
+            if (node instanceof com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper<?, ?, ?, ?> select) {
+                select.table("demo_user_202610");
+            }
+            return request;
+        }
+    };
+}
+```
+
+表名必须来自服务端可信规则，不能直接拼接客户端输入。改表名不改变 `fromClass`，它仍负责实体映射和编解码。插入、更新、删除、聚合同样修改各自的节点，批量请求须处理全部节点。替换查询节点优先使用 `request.copy(newWrapper)`，保留模型、fromClass、参数、路由、缓存和代理选项。最终请求改变 group 或 master/slave 时重新选库；后续 SQL、Key 和失效范围使用最终请求。
+
+| 入口 | `IFilter.after` 收到/返回 | `IRequestFilter` 默认分发 |
+| --- | --- | --- |
+| select、group | List | 调用一次 selectAfter |
+| page | Page | 对 Page.list 调用一次 selectAfter；替换列表时保留 total、extra |
+| count | Integer | 保持计数不变；需要增强时覆盖普通 IFilter.after |
+| insert、update、delete | Integer | 调用 updateAfter |
+
+`after` 的新结果会真正返回给调用者；普通 IFilter 可以替换整个 Page。返回值须符合入口类型，计数和影响行数不能为 null；不要伪造乐观锁校验依赖的影响行数。分页内部 count/select 不重复增强。缓存命中同样执行 after，基础缓存不会保存后处理结果或事务代理；分页过滤当前页列表不重算数据库 total。
+
+延迟队列入队前执行一次 before 并保存增强后节点，后台刷新不再次改表名或选库；after 只在实际执行后调用。后台写后过滤器的 RuntimeException 只记录中文日志，保留实际执行结果，不因此重试已经执行的 Node。普通写入后处理失败则向外传播，并标记路由事务回滚。
+
+after 不代表事务已经提交，提交成功通知使用 `TransactionUtil.afterCommit`。路由作用域按实际入栈次数清理，复用 Request 或过滤器异常不会通过旧 `sessionChange` 标记误弹外层路由。
+
 ### 事务使用
 
 #### 框架路由事务
@@ -1353,7 +1400,9 @@ SessionUtil.route().transaction(() -> {
 });
 ```
 
-没有外层事务时，一次 CRUD 自己开始并结束事务；多个独立请求不自动合成一个业务事务。RouteSession 按实际访问加入参与者，逐个提交/回滚，只结束自己加入的事务层；不会替调用方结束独立 Session 预先开启的外层事务。
+`RouteSession` 是业务 CRUD 和事务的唯一入口。没有外层事务时，一次写请求由 RouteSession 自动开始并结束事务；普通查询不主动开启事务，多个独立请求不自动合成一个业务事务。RouteSession 定义边界并登记参与者，`TransactionListenerManager` 统一维护当前线程的业务上下文，各 Session 只管理自己的连接资源。
+
+同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
 
 #### Spring 事务
 
@@ -1361,24 +1410,58 @@ SessionUtil.route().transaction(() -> {
 
 框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性。已有 Spring 拦截器处理自身语义，不代表框架路由实现了完整 REQUIRES_NEW、NESTED 或保存点。不要默认叠加两个事务注解，也不要将业务异步线程视为自动继承事务。
 
-#### 独立 Session
+#### 提交成功回调
 
-以下方法体片段中 jdbcSession 已由工厂配置，request 是已构造 Request：
+业务需要在数据库提交成功后刷新权限、清理业务缓存或发送进程内通知时，使用 `com.yulinlin.data.core.transaction.TransactionUtil.afterCommit(Runnable)`：
 
 ```java
-jdbcSession.startTransaction();
-try {
-    jdbcSession.insert(insertRequest);
-    jdbcSession.update(updateRequest);
-    jdbcSession.commitTransaction();
-} catch (Exception | Error error) {
-    try { jdbcSession.rollbackTransaction(); }
-    catch (Exception | Error cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
-    throw error;
+@Transactional
+@JoinSync
+public void changeRole(String id, List<String> permissions) {
+    RoleEntity role = roleRepository.findByIdEq(id);
+    role.setPermissions(permissions);
+    String code = role.getCode();
+    TransactionUtil.afterCommit(() -> security.refreshRole(code));
 }
 ```
 
-所在方法须允许传播异常。独立能力指执行不依赖路由，不等于裸 new 就已初始化所有组件。事务在开始它的同一线程结束。
+上例是方法片段，`roleRepository` 和 `security` 为业务注入对象。`@Transactional` 经框架切面接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不再提供纯 Spring `TransactionTemplate` 的回调兜底。
+
+| 场景 | 行为 |
+| --- | --- |
+| 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
+| 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
+| 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
+| Spring 持有实际事务 | 同时等待框架参与者完成与 Spring 的实际提交成功，不提前触发或重复执行 |
+| 仅有 Spring 事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
+| 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
+| 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
+| 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
+
+回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
+
+Spring 管理实际连接时，框架内部仍保留提交结果确认，避免数据库尚未提交就提前通知。这不等于实现了新事务传播：如果业务额外把路由包在外部 Spring 事务内，提交通知阶段的 Spring 资源可能尚未释放，不能依赖再次调用框架 `transaction()` 来挂起旧 Spring 连接或实现 `REQUIRES_NEW`。通常只在回调里做快照读取、缓存刷新和通知。
+
+提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
+
+具体 Session 的 `startTransaction/commitTransaction/rollbackTransaction` 是管理器调用的资源生命周期，不再转发管理器，也不维护业务嵌套深度。业务代码不得手动调用它们，否则会绕过统一的代理写回、跨数据源协调、缓存失效和回调；JDBC 无活动资源的写操作会报错。
+
+#### 路由是唯一业务入口
+
+以下为方法体片段，两个 Request 已构造，并明确指定各自的数据源组：
+
+```java
+insertRequest.setSession("mysql");
+updateRequest.setSession("sqlite");
+RouteSession route = SessionUtil.route();
+route.transaction(() -> {
+    route.insert(insertRequest);
+    route.update(updateRequest);
+    return null;
+});
+```
+
+`route.isOpenTransaction()` 表示当前线程是否存在业务事务；具体 Session 的同名方法只表示自身资源是否已开启，不等于新的业务事务。业务事务必须在开启它的同一线程结束。
 
 嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
 
@@ -1519,9 +1602,9 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 | 配置/注解 | 加载 | 修改 |
 | --- | --- | --- |
 | JoinQuery | 查询结果增强时立即查询关联 | 普通对象，不因此自动写库 |
-| JoinQuery + JoinLazy | 路由事务内首次访问 getter 时加载 | 仅延迟读取 |
+| JoinQuery + JoinLazy | 框架业务事务内首次访问 getter 时加载 | 仅延迟读取；关联选库仍需要路由 |
 | 查询 `.autoUpdate()` | 主对象与关联对象使用同一层代理 | setter 的非 null 修改在提交前写回 |
-| 方法/类 `@JoinSync` | 作用域内所有查询等同 `.autoUpdate()` | 必须同时存在路由事务 |
+| 方法/类 `@JoinSync` | 作用域内所有查询等同 `.autoUpdate()` | 必须同时存在框架业务事务 |
 | `yulinlin.data.auto-update=true` | 全局查询默认自动更新 | 可由单次 `.autoUpdate(false)` 覆盖 |
 
 ORM 查询得到的模型统一由 EntityProxyFactory 增强。一个实体最多只有一层代理；同一拦截器处理 JoinLazy getter 与持久化 setter，不再叠加 LazyProxy/SyncProxy。自己 new 出来的 DTO 仍需调用 RouteSession 的兼容代理入口。
@@ -1723,7 +1806,7 @@ private List<SysRoleEntity> roles;
 private List<SysMenuEntity> menus;
 ```
 
-在创建它的同一线程、同一路由事务中读取所需字段：
+在创建它的同一线程、同一框架业务事务中读取所需字段：
 
 ```java
 SessionUtil.route().transaction(() ->
@@ -1738,9 +1821,9 @@ SessionUtil.route().transaction(() ->
         }));
 ```
 
-也可在 Spring Service public 方法上用 JoinTransaction，经代理调用。独立 JdbcSession 的物理事务不会自动使 RouteSession 的事务状态开启。
+也可在 Spring Service public 方法上用 JoinTransaction，经代理调用。业务事务统一通过 RouteSession 开启，事务注解也接入同一入口。具体 JdbcSession 只处理自己的连接资源，不再反向调用管理器或独立创建业务上下文；关联查询与代理写回均通过 RouteSession 解析来源组和执行。
 
-- 没有路由事务时，JoinLazy 字段会被跳过，不自动改成立即查询。
+- 没有框架业务事务时，JoinLazy 字段会被跳过，不自动改成立即查询。
 - getter 才触发加载，直接访问字段或原始对象不是等价调用。
 - 未加载字段在事务外、其他线程或新事务读取会报错；已加载数据可在事务后读取。
 - 不直接把未加载代理交给 Controller JSON 序列化或异步任务。
@@ -1772,7 +1855,7 @@ SessionUtil.route().transaction(() ->
 
 ### 自动更新
 
-自动更新捕获事务内的 setter 修改，在提交前统一更新数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。单次查询开启：
+自动更新捕获事务内的 setter 修改，在提交前统一更新数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。现有 `ProxyChanges` 按需保存在管理器的统一 `TransactionContext` 中，代理工厂不再维护独立事务 ThreadLocal；主对象和懒加载出的关联代理共用这份记录。单次查询开启：
 
 ```java
 SessionUtil.route().transaction(() ->
@@ -1787,7 +1870,7 @@ SessionUtil.route().transaction(() ->
         }));
 ```
 
-没有路由事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。正常提交写回，异常回滚丢弃待更新记录；回滚不会还原 Java 对象的内存值。
+没有框架业务事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。setter 只保存脏字段的最终非 null 值，不为每次修改创建 Runnable；最外层提交前按数据源和实体类型批量写回，保留主键校验和乐观锁。内层提交不写回，回滚丢弃修改记录；回滚不会还原 Java 对象的内存值。这些更新不能放进 `afterCommitTasks`。
 
 全局开启：
 
@@ -1851,7 +1934,7 @@ LocalUserEntity 与 localUserId 由业务提供。未指定时关联上下文保
 - 未调用的 setter 不产生部分更新，未修改的 0/false/初始化值不会被全部覆盖到数据库；设回原值不会产生更新。
 - setter 捕获对象引用，不是深快照；setter 后原地修改同一对象可能改变最终编码值。
 - 支持的 Integer/int、Long/long 版本字段按原始版本条件递增；写入数不匹配视为乐观锁失败，不承诺全部 Wrapper 都具备相同版本机制。
-- 代理绑定原始线程与路由事务，结束后不能继续 setter 修改。缓存保存未增强数据，读取时复制并创建当前查询代理，不能复用旧事务代理。
+- 代理绑定原始线程与统一业务事务上下文，结束后不能继续 setter 修改。缓存保存未增强数据，读取时复制并创建当前查询代理，不能复用旧事务代理。
 
 Spring 绑定事务中的同步写回在物理提交前处理，只读事务禁止同步 setter；高级传播与分布式一致性仍按 [第二专题](02-CRUD与统计分析.md#事务使用)的边界理解。
 
@@ -1860,7 +1943,7 @@ Spring 绑定事务中的同步写回在物理提交前处理，只读事务禁�
 | 问题 | 检查 |
 | --- | --- |
 | 关联没有数据 | ${...}、源属性、泛型、键类型、目标表与会话 |
-| 懒字段一直为 null | 是否经过代理入口，是否有路由事务，是否访问 getter |
+| 懒字段一直为 null | 是否经过代理入口、配置路由并处于框架业务事务中，是否访问 getter |
 | 提示原始事务不一致 | 是否跨线程、事务外读取或把旧代理带进新事务 |
 | 列表查询仍很多 | 是否同批入口，是否使用复杂 wheres/model 分支 |
 | setter 后没更新 | 是否同步代理、原始事务、非 null 值与可靠主键 |
@@ -2679,6 +2762,8 @@ location /api/ {
 | `trusted-proxies` | `127.0.0.1`、`::1` | 可以提供真实 IP 请求头的代理地址或 CIDR |
 
 ### 登录用户模型
+
+需要完整实现时，参考第九专题的 [Admin 两表 RBAC 与登录案例](09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)：在 admin 层实现本节协议，使用集合存储角色/权限、用户状态枚举及独立 Caffeine Token 会话。源码与 HTTP 请求文件都已提供，security 模块的协议仍可被其他业务自行实现。
 
 `security` 模块只定义最小登录用户协议，不规定用户表、登录流程、密码校验、Token 或权限实现。业务用户模型按需实现 `IUserDetails`：
 
@@ -3566,7 +3651,7 @@ List<SysUser> alice = ModelSelectWrapper.newInstance("mysql", SysUser.class)
 
 分区 Key 仍保留完整查询信息，因此不同分页、排序、投影和 TTL 不会错误命中；分区版本只负责让同一个条件值下的这些条目一起失效。没有引入缓存模块，或第三方 Provider 未实现分区能力时，会安全回退为现有整表失效。
 
-实体写入会从 `INode`、From/Join/Store、`@JoinTable` 和 `@JoinTableList` 提取相关表。自定义 SQL 没有实体或节点表信息时，框架无法可靠猜测涉及的表；启用清理时会退化为清理全部 ORM 查询缓存并输出警告：
+实体查询和写入优先从过滤器增强后的 `INode`、From/Join/Store 提取实际表名，节点无法识别表时才回退到 `@JoinTable`、`@JoinTableList`。动态分表不会同时混入注解中的原始逻辑表，Key、表级 TTL 和失效范围使用最终物理表；显式 `cacheNamespaces(...)` 始终追加。原始 SQL 不做表名猜测，有动态表或隐藏依赖时须显式声明实际命名空间。自定义 SQL 没有实体或节点表信息时，启用清理会退化为清理全部 ORM 查询缓存并输出警告：
 
 ```java
 ExecuteRequest<Object> write = ExecuteRequest.newInstance(
@@ -3622,7 +3707,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 
 本文先说明 `common` 提供给业务代码直接复用的实体、分页查询模型和 Service 接口，再给出推荐的 Spring Boot 项目结构与完整业务案例。它负责回答“已有公共能力怎么用、业务代码应该放在哪里”；SQL 条件的完整解析规则仍以[CRUD 与统计](02-CRUD与统计分析.md)、[关联查询与代理](03-关联查询与代理.md)和[查询缓存](08-查询缓存.md)为准。
 
-阅读导航：[核心规则](#核心规则) · [目录结构](#推荐目录结构) · [公共业务模型](#公共业务模型) · [基础实体](#基础实体选择) · [通用 Service](#通用-service-接口) · [完整案例](#完整业务案例) · [事务与代理](#事务与自动更新) · [缓存](#缓存规范) · [日志](#日志规范) · [多数据源](#多数据源规范) · [批量写入](#批量写入规范) · [反例](#常见反例) · [评审清单](#上线前评审清单)
+阅读导航：[核心规则](#核心规则) · [目录结构](#推荐目录结构) · [公共业务模型](#公共业务模型) · [基础实体](#基础实体选择) · [通用 Service](#通用-service-接口) · [完整案例](#完整业务案例) · [Admin 两表 RBAC 与登录](#admin-两表-rbac-与登录案例) · [事务与代理](#事务与自动更新) · [缓存](#缓存规范) · [日志](#日志规范) · [多数据源](#多数据源规范) · [批量写入](#批量写入规范) · [反例](#常见反例) · [评审清单](#上线前评审清单)
 
 ### 核心规则
 
@@ -4363,3 +4448,165 @@ public int importUsers(List<UserEntity> users) {
 - [ ] 测试至少覆盖成功提交、异常回滚、缓存未命中/失效、批量失败和多数据源路由。
 
 如果项目不使用 Repository，保留相同的分层和事务规则，在 Service 中使用 Model Wrapper 即可。Repository 是声明式入口，不是使用事务、缓存或自动更新的强制前提。
+
+### Admin 两表 RBAC 与登录案例
+
+完整源码位于 [admin/rbac](../admin/src/main/java/com/yulinlin/admin/rbac)，可顺序执行的请求位于 [admin/rbac.http](../admin/rbac.http)。本案例使用 JDK 25、MySQL、现有 `IUserDetails`/`ISecurityManager` 协议和 Caffeine 单机登录会话，未引入 Spring Security。案例只有 `rbac_user`、`rbac_role` 两张业务表。
+
+#### 启动方式与完整配置
+
+在 IDEA 中运行 `AdminApplication`，Program arguments 配置为 `--spring.profiles.active=dev,rbac`。`dev` 提供你自己的 MySQL 连接，`rbac` 提供 [application-rbac.yml](../admin/src/main/resources/application-rbac.yml) 中的案例设置；也可替换成 `prod,rbac`。MySQL 数据库本身应提前创建，框架启动扫描负责创建两张表及索引。
+
+启动环境设置 `ADMIN_RBAC_PASSWORD`，长度为 12–128 字符；可选设置 `ADMIN_RBAC_USERNAME`，默认 `admin`。不设置密码时跳过初始账号创建，接口不会变成免登录。初始账号已存在时，重启不会覆盖其密码、状态或角色。
+
+```yaml
+admin:
+  rbac:
+    token-ttl: 2h
+    maximum-sessions: 10000
+    bootstrap-username: ${ADMIN_RBAC_USERNAME:admin}
+    bootstrap-password: ${ADMIN_RBAC_PASSWORD:}
+
+yulinlin:
+  datasource:
+    default-group: mysql
+  data:
+    auto-update: false
+  repository:
+    scan-packages:
+      - com.yulinlin.admin.rbac.repository
+  mysql:
+    schema-mode: CREATE
+    schema-packages:
+      - com.yulinlin.admin.rbac.domain
+    log-params: false
+  security:
+    crypto:
+      enabled: false
+      devices:
+        unknown:
+          algorithm: AES/GCM/NoPadding
+          key: ${ADMIN_CRYPTO_KEY:${random.value}}
+    limit:
+      enabled: true
+      ip-header: X-Real-IP
+      trusted-proxies:
+        - 127.0.0.1
+        - "::1"
+```
+
+所有 RBAC 组件和 Repository 通过 `rbac` profile 启用，不会改动旧 `SysUserEntity` 的表。Profile 使用全局默认 group；如果业务同时使用多个 group，应按第一专题添加明确的 `@JoinSession` 路由和对应 Schema 扫描。
+
+`security` 当前即使关闭加密，也需要 `unknown` 设备配置来兼容客户端密文。Admin 的基础配置使用运行时随机的 32 字符密钥，案例 Controller 标记 `@ApiCrypto(false)`，便于直接执行 JSON 请求。要与真实客户端联调加密，按第六专题配置双方一致的设备密钥、启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`；随机密钥不作为客户端协议使用。报文加密不替代 HTTPS。
+
+登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
+
+#### 两表模型与状态枚举
+
+| 实体 | 表 | 存储字段 |
+| --- | --- | --- |
+| `UserEntity` | `rbac_user` | ID、用户名、密码哈希、昵称、状态、`List<String> roleCodes`、审计时间 |
+| `RoleEntity` | `rbac_role` | ID、角色编码、名称、`List<String> permissions`、审计时间 |
+
+两个集合都由 JDBC 集合编码器自动保存为 JSON 文本，业务直接调用 getter/setter，不手动 JSON 转换。用户名和角色编码有唯一索引。权限字典在 `Permission` 枚举中维护，没有权限表和两张关系表。内置 `admin` 角色持有字典中的全部权限，管理接口禁止修改或删除它；其他角色的编码创建后不可变。
+
+`UserStatus implements SuperEnum<String>` 为状态的唯一业务定义：
+
+| Java 枚举 | 数据库与接口编码 | 中文说明 | 可登录 |
+| --- | --- | --- | --- |
+| `ENABLED` | `enabled` | 正常 | 是 |
+| `DISABLED` | `disabled` | 停用 | 否 |
+| `LOCKED` | `locked` | 锁定 | 否 |
+
+新建用户显式赋值 `ENABLED`。`@JsonValue`/`@JsonCreator` 与 ORM `IEnum` 编码器分别保证 HTTP 和数据库都使用稳定编码；`locked` 是管理员控制的状态，不代表已经实现自动失败锁定。用户响应同时给出 `status` 和 `statusLabel`，`/rbac/users/statuses` 可用于前端下拉选项。
+
+用户实体直接表达集合到角色编码的关联：
+
+```java
+@JoinField(textType = TextTypeEnum.text, description = "角色编码集合")
+private List<String> roleCodes;
+
+@JoinField(exist = false)
+@JoinQuery(primary = "code", value = "roleCodes")
+private List<RoleEntity> roles;
+```
+
+查询用户时，框架汇总 `roleCodes`，通过 `code IN (...)` 批量查角色并分配。`roles` 只负责关联结果，不重复保存到用户表。`AdminUserDetails.from(user)` 将角色编码、权限编码分别合并成不可变 `Set`，只采纳真实存在的角色。角色表中的权限集合示例为 `["user:query", "user:update"]`。
+
+`UserRoleProjection` 是同一用户表的部分投影，仅选择主键、审计时间和角色集合，保持 `autoSchema=false`。删除普通角色时先按 JSON 文本 LIKE 缩小范围，再通过集合 `contains` 确认，使用 setter 移除对应编码，和删除角色在同一事务提交。这样不会因以后重新创建同名角色而自动恢复旧授权；JSON 集合查询没有关系表索引，这种模型适合角色数量较少的后台。
+
+#### 登录、权限和会话生命周期
+
+`AdminSecurityManager` 实现以下既有协议：
+
+```java
+securityManager.login(username, password);
+securityManager.login(username, password, null);
+securityManager.logout();
+securityManager.getUserDetails();
+securityManager.getUserDetails(userId);
+securityManager.refresh();
+securityManager.refresh(userId);
+```
+
+HTTP 登录通过具体实现的 `signIn(...)` 获得 `LoginResponse`，其中含 `accessToken`、`tokenType`、`expiresAt`、用户信息。Token 由 `SecureRandom` 生成 32 字节随机值并进行 Base64URL 编码；角色和权限保存在服务端快照中，客户端不能通过修改 Token 内容自定权限。
+
+前端后续请求携带 `Authorization: Bearer <accessToken>`。会话按固定 `token-ttl` 过期，查询和刷新资料不续期；默认允许同一用户多次登录，注销只撤销当前 Token。达到 `maximum-sessions` 上限时 Caffeine 可能淘汰已有会话；进程重启会话丢失，需要重新登录。它是独立登录会话缓存，不是 ORM 的可选查询缓存 Provider。
+
+密码使用 JDK `PBKDF2WithHmacSHA256`，每次生成独立 16 字节随机盐、600000 次迭代和 256 位校验值；通过 `MessageDigest.isEqual` 比较。参数参考 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)。数据库只保存版本、迭代数、盐和哈希组成的字符串，用户 VO、`IUserDetails` 以及日志不包含密码哈希。登录查库不加 `@JoinCache`，SQL 参数日志也默认关闭。
+
+用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。`code` 参数保留既有协议，但本例未实现验证码，传入非空值会明确拒绝，不能把它当作已经完成验证码验证。
+
+`RbacInterceptor` 只保护 `/rbac/**`：登录方法通过 `@Anonymous` 放行，其他方法默认需要登录；管理方法用枚举声明权限，例如 `@RequirePermission(Permission.USER_UPDATE)`。权限精确匹配，无角色名自动越权或通配符解释。未登录/Token 失效为 HTTP 401，缺少权限为 HTTP 403。
+
+| 写操作 | 提交成功后的会话处理 |
+| --- | --- |
+| 修改昵称、替换用户角色集合 | 刷新该用户所有现有会话的资料与权限，Token 不变 |
+| 修改角色权限、删除角色 | 刷新持有该角色的在线用户会话 |
+| 用户状态变更、重置密码、删除用户 | 撤销该用户的所有 Token |
+| 写事务回滚 | 不触发会话刷新或撤销 |
+
+刷新账号或权限时如果查库失败，撤销相关用户会话并保留原始异常，避免继续沿用旧权限。直接手工修改数据库不触发业务回调，需要主动 `refresh(userId)` 或重新登录；多实例部署则需要将会话存储和撤销通知改为共享实现。
+
+#### 业务写法与 HTTP 调用
+
+Controller 全部使用 `@PostMapping`，参数对象集中在 `RbacRequests`，开启 `@Valid`，返回 `R<E>`；Entity、PO、VO 分开。`UserPage extends PagePo` 用 `@JoinWhere` 解析用户名 LIKE 与状态等值条件；页码、每页条数和排序字段在 Service 校验，每页最多 100 条。
+
+修改业务由外部 Spring Bean 调用 Service，示例采用：
+
+```java
+@Transactional
+@JoinSync
+public void assignRoles(RbacRequests.AssignRoles request) {
+    UserEntity user = requireUser(request.id());
+    user.setRoleCodes(validRoles(request.roleCodes()));
+    user.setUptTime(DateTime.now());
+    TransactionUtil.afterCommit(() -> security.refresh(request.id()));
+}
+```
+
+必须通过集合 setter 替换；`user.getRoleCodes().add(...)` 不会触发 setter 跟踪。传 `[]` 清空角色或权限集合，不能用 `null` 清空列。`TransactionUtil` 从 `com.yulinlin.data.core.transaction` 导入，只向当前框架事务注册；`@Transactional` 由现有切面接入，最外层实际提交成功、旧框架上下文清理后执行回调，无框架事务直接报错。已替换案例原有的临时 `AfterCommit` 类。Repository 只声明普通查询和 CRUD，不放业务事务、不使用类级缓存覆盖认证查询。提交后的权限刷新通过 `findSnapshotById` 显式 `.autoUpdate(false)` 读取普通快照，不继续使用已经完成的原事务代理。
+
+全部接口前缀为 `/rbac`：
+
+| 路径（全部 POST） | 请求示例或用途 | 所需权限 |
+| --- | --- | --- |
+| `/auth/login` | `{"username":"admin","password":"你配置的密码"}` | 匿名 |
+| `/auth/me`、`/auth/refresh`、`/auth/logout` | 当前用户、刷新资料、注销；无需请求体 | 已登录 |
+| `/users/page` | `{"pageNumber":1,"pageSize":15,"username":"reader","status":"enabled"}` | `user:query` |
+| `/users/detail` | `{"id":"用户ID"}` | `user:query` |
+| `/users/statuses` | 状态字典；无需请求体 | `user:query` |
+| `/users/create` | `{"username":"reader01","password":"Example-Password-2026","nickname":"只读示例","roleCodes":["reader"]}` | `user:create` |
+| `/users/update` | `{"id":"用户ID","nickname":"新昵称"}` | `user:update` |
+| `/users/status` | `{"id":"用户ID","status":"disabled"}` | `user:update` |
+| `/users/roles` | `{"id":"用户ID","roleCodes":["reader"]}` | `user:assign` |
+| `/users/password` | `{"id":"用户ID","password":"Another-Password-2026"}` | `user:password` |
+| `/users/delete` | `{"id":"用户ID"}` | `user:delete` |
+| `/roles/list`、`/roles/permissions` | 角色列表、可分配权限字典；无需请求体 | `role:query` |
+| `/roles/create` | `{"code":"reader","name":"只读人员","permissions":["user:query"]}` | `role:create` |
+| `/roles/update` | `{"id":"角色ID","name":"新名称","permissions":["user:query","role:query"]}` | `role:update` |
+| `/roles/delete` | `{"id":"角色ID"}` | `role:delete` |
+
+推荐按 [rbac.http](../admin/rbac.http) 顺序执行：管理员登录 → 创建只读角色 → 创建用户 → 用户登录 → 验证 403 → 修改角色权限 → 用原 Token 验证新增权限 → 停用账号 → 验证原 Token 返回 401。请求文件有演示密码和占位管理员密码，使用前替换；重复创建同名用户或角色会被唯一约束拒绝。
+
+本案例在 2026-10-19 增加了密码哈希、会话刷新/撤销的独立单元用例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。

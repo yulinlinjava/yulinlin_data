@@ -29,14 +29,12 @@ public class AdminApplicationTests {
 
 
         SysUserEntity sysUserEntity = new SysUserEntity();
-        sysUserEntity.setId("1");
-
+        sysUserEntity.setId("2");
+        sysUserEntity.setData(Map.of(1,1));
 
         sysUserEntity.setEnabled(true);
-        sysUserEntity.createUpdateWrapper().execute();
+        sysUserEntity.createInsertWrapper().execute();
 
-        SysUserEntity sysUserEntity1 = ModelSelectWrapper.newInstance(SysUserEntity.class)
-                .selectOne();
 
 
         int a = 0;

@@ -14,37 +14,36 @@ import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.transaction.TransactionListenerManager;
+import com.yulinlin.data.core.transaction.TransactionContext;
+import com.yulinlin.data.core.transaction.TransactionContext.CacheInvalidation;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
-import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.data.lang.util.Page;
 import com.yulinlin.data.lang.util.StringUtil;
 import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.function.BiFunction;
 
 @Builder
 @Slf4j
-public class RouteSession  extends  RegisterSession{
+public class RouteSession extends RegisterSession implements TransactionSession {
 
 
     private EntityProxyService proxyService;
 
 
-    private IFilterManager filterManager;
+    @Builder.Default
+    private IFilterManager filterManager = IFilterManager.NONE;
 
-    private  TransactionListenerManager transactionListenerManager;
+    @Builder.Default
+    private TransactionListenerManager transactionListenerManager = new TransactionListenerManager();
 
     private WriteQueueManager writeQueueManager;
 
@@ -52,42 +51,36 @@ public class RouteSession  extends  RegisterSession{
     @Builder.Default
     private boolean clearOnWrite = true;
 
-    private final ThreadLocal<PendingInvalidation> pendingInvalidation =
-            ThreadLocal.withInitial(PendingInvalidation::new);
     private final ThreadLocal<Integer> annotatedSessionDepth = ThreadLocal.withInitial(() -> 0);
-    private final Object springInvalidationResource = new Object();
 
-    private static final class PendingInvalidation {
-        boolean all;
-        final Set<CacheNamespace> namespaces = new LinkedHashSet<>();
-        final Set<CachePartition> partitions = new LinkedHashSet<>();
-        final Set<CacheNamespace> partitionTables = new LinkedHashSet<>();
-
-        void addPartition(CachePartition partition) {
-            if (!partitionTables.contains(partition.namespace())) partitions.add(partition);
-        }
-
-        void addPartitionTable(CacheNamespace namespace) {
-            partitionTables.add(namespace);
-            partitions.removeIf(partition -> partition.namespace().equals(namespace));
-        }
-
-        void merge(PendingInvalidation other) {
-            all |= other.all;
-            if (all) {
-                namespaces.clear();
-                partitions.clear();
-                partitionTables.clear();
-                return;
-            }
-            namespaces.addAll(other.namespaces);
-            other.partitionTables.forEach(this::addPartitionTable);
-            other.partitions.forEach(this::addPartition);
-        }
-        boolean empty() { return !all && namespaces.isEmpty(); }
+    public TransactionListenerManager getTransactionListenerManager() {
+        return java.util.Objects.requireNonNull(transactionListenerManager, "transactionListenerManager");
     }
 
-    private record PreparedWrite(EntitySession session, ExecuteRequest<?> request, int routeDepth) {
+    @Override public void startTransaction() { getTransactionListenerManager().startTransaction(); }
+    @Override public void commitTransaction() { getTransactionListenerManager().commitTransaction(); }
+    @Override public void rollbackTransaction() { getTransactionListenerManager().rollbackTransaction(); }
+    @Override public boolean isOpenTransaction() { return getTransactionListenerManager().isOpenTransaction(); }
+    @Override public void setRollbackOnly() { getTransactionListenerManager().setRollbackOnly(); }
+    @Override public boolean isRollbackOnly() { return getTransactionListenerManager().isRollbackOnly(); }
+    protected int transactionDepth() { return getTransactionListenerManager().transactionDepth(); }
+    public final Object transactionIdentity() { return TransactionListenerManager.currentContext(); }
+    public final boolean isOutermostTransaction() { return transactionDepth() == 1; }
+
+    @Override protected EntitySession enlist(EntitySession session) {
+        return getTransactionListenerManager().enlist(session);
+    }
+
+    @Override protected EntitySession resolveSession(String group, JoinCluster cluster) {
+        return getTransactionListenerManager().resolveSession(this, group + ":" + cluster.name(),
+                () -> super.resolveSession(group, cluster));
+    }
+
+    @Override public void clear() { getTransactionListenerManager().clearSelections(this); }
+
+    public void afterCommit(Runnable action) { getTransactionListenerManager().afterCommit(action); }
+
+    private record PreparedRequest(EntitySession session, BaseRequest<?> request, int routeDepth) {
     }
 
     private void applyEntityRoute(BaseRequest request) {
@@ -103,59 +96,53 @@ public class RouteSession  extends  RegisterSession{
     }
 
 
-    private EntitySession before(BaseRequest request){
-        applyEntityRoute(request);
-
-        EntitySession session = session(request);
-        pushSession(session);
-
-        try {
-            String name = session.group();
-            request = filterManager.before(name, request);
-            if (!name.equals(request.getSession())) {
-                session = session(request);
-                pushSession(session);
-            }
-            return session;
-        } catch (RuntimeException | Error error) {
-            popSession(); // A failed filter must not leave its source on the route stack.
-            throw error;
-        }
-    }
-
-    private PreparedWrite beforeWrite(ExecuteRequest<?> original) {
+    /** SQL、缓存 Key 和失效范围都只读取过滤后的请求；不通过 Request 标记猜测入栈次数。 */
+    private PreparedRequest before(BaseRequest<?> original) {
+        Objects.requireNonNull(original, "request");
         applyEntityRoute(original);
         EntitySession session = session(original);
         pushSession(session);
         int routeDepth = 1;
         try {
-            String name = session.group();
-            BaseRequest<?> filtered = filterManager.before(name, original);
-            if (!(filtered instanceof ExecuteRequest<?> request)) {
-                throw new IllegalStateException("A write filter must return ExecuteRequest");
+            BaseRequest<?> request = Objects.requireNonNull(filterManager.before(session.group(), original),
+                    "before 过滤器不能返回 null 请求");
+            if (original instanceof ExecuteRequest<?> write) {
+                if (!(request instanceof ExecuteRequest<?> replacement))
+                    throw new IllegalStateException("写入过滤器必须返回 ExecuteRequest");
+                replacement.inheritExecutionOptions(write);
+            } else if (original instanceof QueryRequest<?> query) {
+                if (!(request instanceof QueryRequest<?> replacement))
+                    throw new IllegalStateException("查询过滤器必须返回 QueryRequest");
+                replacement.inheritExecutionOptions(query);
+            } else {
+                throw new IllegalArgumentException("不支持的请求类型: " + original.getClass().getName());
             }
-            request.inheritExecutionOptions(original);
-            if (!name.equals(request.getSession())) {
+            if (request.getSession() == null || request.getSession().isBlank()) request.setSession(session.group());
+            if (request.getCluster() == null) request.setCluster(session.cluster());
+            if (!Objects.equals(session.group(), request.getSession()) || session.cluster() != request.getCluster()) {
                 session = session(request);
                 pushSession(session);
                 routeDepth++;
             }
-            return new PreparedWrite(session, request, routeDepth);
+            return new PreparedRequest(session, request, routeDepth);
         } catch (RuntimeException | Error error) {
             while (routeDepth-- > 0) popSession();
             throw error;
         }
     }
 
-    private void after(PreparedWrite prepared) {
+    private void release(PreparedRequest prepared) {
         for (int i = 0; i < prepared.routeDepth(); i++) popSession();
     }
-    private void after(BaseRequest request){
 
-        if(request.isSessionChange()){
-            popSession();
-        }
-        popSession();
+    private Object after(EntitySession session, BaseRequest<?> request, Object data, Class<?> expectedType) {
+        Object result = filterManager.after(session.group(), request, data);
+        if (data != null && result == null && expectedType == Integer.class)
+            throw new IllegalStateException("after 过滤器不能将计数或影响行数替换为 null");
+        if (result != null && !expectedType.isInstance(result))
+            throw new IllegalStateException("after 过滤器返回类型错误，预期 " + expectedType.getSimpleName()
+                    + "，实际 " + result.getClass().getName());
+        return result;
     }
 
 
@@ -167,11 +154,13 @@ public class RouteSession  extends  RegisterSession{
             throw new NoticeException("Delayed write queue cannot be used inside an active transaction. 请在事务外调用 queue()。");
         }
 
-        PreparedWrite prepared = beforeWrite(original);
+        PreparedRequest prepared = before(original);
 
         try {
-            ExecuteRequest<?> req = prepared.request();
+            ExecuteRequest<?> req = (ExecuteRequest<?>) prepared.request();
             if (req.isQueued()) {
+                if (isOpenTransaction() || TransactionSynchronizationManager.isActualTransactionActive())
+                    throw new NoticeException("延迟写队列必须在事务外调用，请在事务外调用 queue()。");
                 if (prepared.session().isOpenTransaction()) {
                     throw new NoticeException("Delayed write queue cannot use a session with an active transaction. 请在事务外调用 queue()。");
                 }
@@ -183,39 +172,48 @@ public class RouteSession  extends  RegisterSession{
             return (E) executeNow(prepared.session(), req, false);
 
         }finally {
-            after(prepared);
+            release(prepared);
         }
 
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private Integer executeNow(EntitySession session, ExecuteRequest<?> request, boolean delayed) {
-        PendingInvalidation invalidation = resolveInvalidation(session, request);
-        Integer affected = switch (request.getRequestType()) {
-            case insert -> session.insert((ExecuteRequest) request);
-            case delete -> session.delete((ExecuteRequest) request);
-            case update -> session.update((ExecuteRequest) request);
-            default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
-        };
-
-        if (affected != null) {
-            if (delayed) {
-                try {
-                    scheduleInvalidation(invalidation);
-                } catch (RuntimeException error) {
-                    log.error("延迟写执行成功，但查询缓存失效处理失败", error);
-                }
-                try {
-                    filterManager.after(session.group(), request, affected);
-                } catch (RuntimeException error) {
-                    log.error("延迟写执行成功，但写后过滤器执行失败", error);
-                }
-            } else {
+        if (!isOpenTransaction()) return transaction(() -> executeNow(session, request, delayed));
+        TransactionContext context = TransactionListenerManager.currentContext();
+        try {
+            enlist(session);
+            CacheInvalidation invalidation = resolveInvalidation(session, request);
+            Integer affected = switch (request.getRequestType()) {
+                case insert -> session.insert((ExecuteRequest) request);
+                case delete -> session.delete((ExecuteRequest) request);
+                case update -> session.update((ExecuteRequest) request);
+                default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
+            };
+            if (affected == null) return null;
+            if (!delayed) {
                 scheduleInvalidation(invalidation);
-                filterManager.after(session.group(), request, affected);
+                return (Integer) after(session, request, affected, Integer.class);
             }
+            try {
+                scheduleInvalidation(invalidation);
+            } catch (RuntimeException error) {
+                log.error("延迟写执行成功，但查询缓存失效处理失败", error);
+            }
+            try {
+                return (Integer) after(session, request, affected, Integer.class);
+            } catch (RuntimeException error) {
+                // 不能仅因通知失败而重试已经执行的 Node，避免计数、自增等业务重复写入。
+                log.error("延迟写执行成功，但写后过滤器执行失败", error);
+                return affected;
+            }
+        } catch (RuntimeException | Error error) {
+            if (TransactionListenerManager.currentContext() == context) {
+                try { setRollbackOnly(); }
+                catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+            }
+            throw error;
         }
-        return affected;
     }
 
     private int executeQueued(EntitySession session, ExecuteRequest<?> request) {
@@ -236,9 +234,9 @@ public class RouteSession  extends  RegisterSession{
         this.clearOnWrite = clearOnWrite;
     }
 
-    private PendingInvalidation resolveInvalidation(EntitySession session, ExecuteRequest<?> request) {
+    private CacheInvalidation resolveInvalidation(EntitySession session, ExecuteRequest<?> request) {
         if (!queryCache().available() || !request.shouldClearCache(clearOnWrite)) return null;
-        PendingInvalidation pending = new PendingInvalidation();
+        CacheInvalidation pending = new CacheInvalidation();
         pending.namespaces.addAll(CacheNamespaceResolver.resolve(
                 session.getClass(), session.group(), request.getFromClass(),
                 request.getWrappers(), request.getCacheNamespaces()));
@@ -265,49 +263,8 @@ public class RouteSession  extends  RegisterSession{
         return pending;
     }
 
-    private void scheduleInvalidation(PendingInvalidation invalidation) {
-        if (invalidation == null || invalidation.empty()) return;
-        if (TransactionSynchronizationManager.isActualTransactionActive()
-                && TransactionSynchronizationManager.isSynchronizationActive()) {
-            PendingInvalidation springPending = (PendingInvalidation)
-                    TransactionSynchronizationManager.getResource(springInvalidationResource);
-            if (springPending == null) {
-                springPending = new PendingInvalidation();
-                TransactionSynchronizationManager.bindResource(springInvalidationResource, springPending);
-                PendingInvalidation registered = springPending;
-                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                    @Override public void afterCommit() { applyInvalidation(registered); }
-                    @Override public void afterCompletion(int status) {
-                        TransactionSynchronizationManager.unbindResourceIfPossible(springInvalidationResource);
-                    }
-                });
-            }
-            springPending.merge(invalidation);
-        } else if (isOpenTransaction()) {
-            pendingInvalidation.get().merge(invalidation);
-        } else {
-            applyInvalidation(invalidation);
-        }
-    }
-
-    private void applyPendingInvalidation() {
-        PendingInvalidation pending = pendingInvalidation.get();
-        pendingInvalidation.remove();
-        applyInvalidation(pending);
-    }
-
-    private void discardPendingInvalidation() {
-        pendingInvalidation.remove();
-    }
-
-    private void applyInvalidation(PendingInvalidation invalidation) {
-        if (invalidation == null || invalidation.empty()) return;
-        if (invalidation.all) queryCache().invalidateAll();
-        else {
-            queryCache().invalidate(Set.copyOf(invalidation.namespaces));
-            queryCache().invalidatePartitionTables(Set.copyOf(invalidation.partitionTables));
-            queryCache().invalidatePartitions(Set.copyOf(invalidation.partitions));
-        }
+    private void scheduleInvalidation(CacheInvalidation invalidation) {
+        getTransactionListenerManager().invalidate(queryCache(), invalidation);
     }
 
 
@@ -317,8 +274,6 @@ public class RouteSession  extends  RegisterSession{
 
     @SuppressWarnings("unchecked")
     private <E> E executeList(QueryRequest<?> req, RequestType requestType) {
-        if (proxyService != null && proxyService.requiresTransaction(req) && !isOpenTransaction())
-            throw new NoticeException("Entity auto-update query requires an active transaction. 请开启事务。");
         // Keep the recursion guard for raw SQL, without requiring an entity or changing the request.
         Class<?> depthKey = req.getFromClass() == null ? Object.class : req.getFromClass();
         LongAdder depth = mapThreadLocal.get().computeIfAbsent(depthKey, ignored -> new LongAdder());
@@ -326,21 +281,29 @@ public class RouteSession  extends  RegisterSession{
             throw new NoticeException("递归查询深度超过" + deep + ",请使用懒加载:"
                     + (depthKey == Object.class ? "自定义SQL" : depthKey.getName()));
         depth.increment();
-        boolean entered = false;
+        PreparedRequest prepared = null;
         try {
-            EntitySession session = before(req);
-            entered = true;
-            return (E) switch (requestType) {
-                case select -> session.select((QueryRequest) req);
-                case page -> session.page((QueryRequest) req);
-                case group -> session.group((QueryRequest) req);
+            prepared = before(req);
+            QueryRequest<?> request = (QueryRequest<?>) prepared.request();
+            if (requestType != RequestType.count && proxyService != null
+                    && proxyService.requiresTransaction(request) && !isOpenTransaction())
+                throw new NoticeException("Entity auto-update query requires an active transaction. 请开启事务。");
+            EntitySession session = prepared.session();
+            Object data = switch (requestType) {
+                case select -> session.select((QueryRequest) request);
+                case page -> session.page((QueryRequest) request);
+                case group -> session.group((QueryRequest) request);
+                case count -> session.count((QueryRequest) request);
                 default -> throw new IllegalArgumentException("Not a query: " + requestType);
             };
+            Class<?> expectedType = requestType == RequestType.page ? Page.class
+                    : requestType == RequestType.count ? Integer.class : List.class;
+            return (E) after(session, request, data, expectedType);
         } finally {
             depth.decrement();
             if (depth.intValue() == 0) mapThreadLocal.get().remove(depthKey);
             if (mapThreadLocal.get().isEmpty()) mapThreadLocal.remove();
-            if (entered) after(req);
+            if (prepared != null) release(prepared);
         }
     }
 
@@ -375,17 +338,7 @@ public class RouteSession  extends  RegisterSession{
 
 
     public <E> Integer count(QueryRequest<E> request) {
-        EntitySession session = before(request);
-
-        try {
-            Integer    call =  session.count(request);
-
-            return call;
-
-        }finally {
-            after(request);
-        }
-
+        return executeList(request, RequestType.count);
     }
 
 
@@ -438,113 +391,20 @@ public class RouteSession  extends  RegisterSession{
     public <V> V transaction(Callable<V> callable){
         int previousDepth = transactionDepth();
         startTransaction();
+        TransactionContext context = TransactionListenerManager.currentContext();
         try {
             V v =  callable.call();
             commitTransaction();
             return v;
         }catch (Throwable e){
-            setRollbackOnly();
-            try { if (transactionDepth() > previousDepth) rollbackTransaction(); }
+            try {
+                if (TransactionListenerManager.currentContext() == context && transactionDepth() > previousDepth) {
+                    rollbackTransaction();
+                }
+            }
             catch (Throwable cleanup) { if (e != cleanup) e.addSuppressed(cleanup); }
             throw e;
         }
-    }
-    @SneakyThrows
-    public void startTransaction(){
-        if (!isOpenTransaction()) discardPendingInvalidation();
-        super.startTransaction();
-        try {
-            if (transactionListenerManager != null) transactionListenerManager.startTransaction();
-        } catch (Throwable error) {
-            try { rollbackTransaction(); }
-            catch (Throwable cleanup) { if (error != cleanup) error.addSuppressed(cleanup); }
-            throw error;
-        }
-    }
-
-    @SneakyThrows
-    public void commitTransaction() {
-        if (!isOpenTransaction()) return;
-        if (transactionDepth() > 1) {
-            try {
-                if (transactionListenerManager != null) {
-                    if (isRollbackOnly()) transactionListenerManager.rollbackTransaction();
-                    else transactionListenerManager.commitTransaction();
-                }
-            }
-            catch (Throwable error) {
-                try { rollbackTransaction(); }
-                catch (Throwable cleanup) { if (error != cleanup) error.addSuppressed(cleanup); }
-                throw error;
-            }
-            super.commitTransaction();
-            return;
-        }
-        boolean commitRequested = !isRollbackOnly();
-        boolean dataFinished = false;
-        Throwable failure = null;
-        try {
-            if (transactionListenerManager != null) {
-                if (isRollbackOnly()) transactionListenerManager.rollbackTransaction();
-                else transactionListenerManager.commitTransaction();
-            }
-            super.commitTransaction();
-            dataFinished = true;
-            if (commitRequested) applyPendingInvalidation();
-            else discardPendingInvalidation();
-        } catch (Throwable error) {
-            failure = error;
-            if (isOpenTransaction()) {
-                setRollbackOnly();
-                try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
-                catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
-                try { super.rollbackTransaction(); }
-                catch (Throwable cleanup) { if (failure != cleanup) failure.addSuppressed(cleanup); }
-            }
-            if (!dataFinished) {
-                // A participant may already have committed before another one failed.  We cannot
-                // prove that nothing changed, so a harmless cache miss is safer than stale data.
-                try {
-                    if (commitRequested) applyPendingInvalidation();
-                    else discardPendingInvalidation();
-                } catch (Throwable cleanup) {
-                    if (failure != cleanup) failure.addSuppressed(cleanup);
-                }
-            }
-        } finally {
-            try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
-            catch (Throwable cleanup) {
-                if (failure == null) failure = cleanup;
-                else if (failure != cleanup) failure.addSuppressed(cleanup);
-            }
-        }
-        if (failure != null) throw failure;
-    }
-
-    @SneakyThrows
-    public void rollbackTransaction() {
-        if (!isOpenTransaction()) return;
-        if (transactionDepth() > 1) {
-            try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
-            finally { super.rollbackTransaction(); }
-            return;
-        }
-        Throwable failure = null;
-        try { if (transactionListenerManager != null) transactionListenerManager.rollbackTransaction(); }
-        catch (Throwable error) { failure = error; }
-        try { super.rollbackTransaction(); }
-        catch (Throwable cleanup) {
-            if (failure == null) failure = cleanup;
-            else if (failure != cleanup) failure.addSuppressed(cleanup);
-        } finally {
-            discardPendingInvalidation();
-            try { if (transactionListenerManager != null) transactionListenerManager.afterCompletion(); }
-            catch (Throwable cleanup) {
-                if (failure == null) failure = cleanup;
-                else if (failure != cleanup) failure.addSuppressed(cleanup);
-            }
-        }
-        if (failure != null) throw failure;
     }
 
     /** Enters a route selected by {@link JoinSession}; method-level routing outranks entity metadata. */
@@ -568,33 +428,6 @@ public class RouteSession  extends  RegisterSession{
     private boolean hasAnnotatedSession() {
         return annotatedSessionDepth.get() > 0;
     }
-/*
-
-    @Override
-    public EntitySession session(String code, JoinCluster tag) {
-        EntitySession session =  super.session(code, tag);
-        if(isOpenTransaction()){
-            if(!session.isOpenTransaction()){
-                session.startTransaction();
-            }
-        }
-        return session;
-    }
-
-    public  <E> E session(String code, Supplier<E> supplier){
-        return session(code,JoinCluster.master,supplier);
-    }
-    public  <E> E session(String code,JoinCluster tag, Supplier<E> supplier){
-
-        pushSession(code,tag);
-        try {
-            return supplier.get();
-        }finally {
-            popSession();
-
-        }
-    }
-*/
 
 
 

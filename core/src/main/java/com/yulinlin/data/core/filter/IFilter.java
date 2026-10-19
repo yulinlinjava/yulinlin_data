@@ -1,13 +1,11 @@
 package com.yulinlin.data.core.filter;
 
-import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.request.BaseRequest;
 
-import com.yulinlin.data.core.session.EntitySession;
 
 
 /**
- * 对请求增强
+ * 对请求和返回值增强；同一个过滤器实例可能同时处理多个线程，不能保存请求级状态。
  */
 public interface IFilter {
 

@@ -105,8 +105,8 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public IFilterManager filterManager(List<IFilter> filters){
-        SimpFilterManager manager = new SimpFilterManager(filters);
+    public IFilterManager filterManager(ObjectProvider<IFilter> filters){
+        SimpFilterManager manager = new SimpFilterManager(filters.orderedStream().toList());
         return manager;
     }
 
@@ -125,8 +125,8 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public TransactionListenerManager transactionListenerManager(List<TransactionListener> list){
-        TransactionListenerManager manager =  new TransactionListenerManager(list);
+    public TransactionListenerManager transactionListenerManager(ObjectProvider<TransactionListener> listeners){
+        TransactionListenerManager manager = new TransactionListenerManager(listeners.orderedStream().toList());
         return manager;
     }
 

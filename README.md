@@ -101,6 +101,8 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 
 [文档目录](doc/README.md)提供完整阅读导航。AI 能读取仓库时从 [llms.txt](llms.txt)进入；只能上传一个附件时用 [AI 接入指南](doc/AI接入指南.md)，其中包含七个使用专题。
 
+完整业务案例：[Admin 两表 RBAC 与登录](doc/09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)。用户直接保存角色编码集合，角色直接保存权限编码集合，展示枚举状态、集合编解码、JoinQuery、事务自动更新、Token 登录与权限校验；可从 [admin/rbac.http](admin/rbac.http) 执行请求。
+
 ## 快速选择
 
 - MySQL ORM：starter + mysql。

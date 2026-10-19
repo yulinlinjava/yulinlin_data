@@ -55,7 +55,7 @@ public abstract class BaseRequest<E> {
     }
 
     public void setSession(String session) {
-        if(this.session != null && !session.equals(this.session)){
+        if(this.session != null && !java.util.Objects.equals(session, this.session)){
             sessionChange=true;
         }
         this.session = session;

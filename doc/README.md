@@ -25,6 +25,7 @@
 - 自定义 SQL、统计报表：2，不把 QueryRequest、ModelGroupWrapper 换成其他 ORM 接口。
 - SQLite/H2 选型或复现跑分：1 → 7。
 - 查询缓存：2 → 8。
+- RBAC 与登录：9 的 [Admin 两表案例](09-项目开发最佳实践.md#admin-两表-rbac-与登录案例) → [admin/rbac.http](../admin/rbac.http)，用两张表复用集合、枚举、关联与自动更新。
 
 ## 给 AI 使用
 

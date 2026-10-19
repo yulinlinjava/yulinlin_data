@@ -15,7 +15,6 @@ import com.yulinlin.data.core.cache.OrmCacheKeyFactory;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.coder.IDataBuffer;
-import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.IParseManager;
@@ -67,7 +66,8 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     private EntityProxyService proxyService;
 
 
-    private IFilterManager filterManager;
+    /** 非 JDBC 后端的资源参与标记，不是业务事务上下文，也不表示具备服务端回滚能力。 */
+    private final ThreadLocal<Boolean> resourceRollbackOnly = new ThreadLocal<>();
 
     /** Non-relational or externally managed sessions have no automatic table DDL by default. */
     @Override
@@ -124,7 +124,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     protected  abstract  IDataBuffer executeCount(ParseResult request);
 
-    /** Runs inside the request transaction, only when the request actually reaches the backend. */
+    /** 仅在请求实际访问后端时运行；是否开启事务由 RouteSession 决定。 */
     protected void beforeExecute(BaseRequest<?> request) { }
 
     /** @deprecated Execution groups are now bounded by parallelWriteGroupCount(), not a row chunk size. */
@@ -219,11 +219,11 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     }
 
     @SneakyThrows
-    protected <E> E transaction(Callable<E> callable,ParseResult result){
+    protected <E> E executeOperation(Callable<E> callable,ParseResult result){
         long started = System.nanoTime();
 
         try {
-            E val =  transaction(callable);
+            E val = executeOperation(callable);
 
             if (logManager != null) logManager.success(elapsedMillis(started), result, this);
             return  val;
@@ -236,28 +236,13 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
     @SneakyThrows
-    protected <E> E transaction( Callable<E> callable){
-
-
-
-        boolean transaction = isOpenTransaction();
-        if(!transaction){
-            startTransaction();
-        }
-
+    protected <E> E executeOperation(Callable<E> callable){
         try {
-            E call = callable.call();
-            if(!transaction){
-                commitTransaction();
-            }
-
-            return call;
+            return callable.call();
         }catch (Throwable e){
-            setRollbackOnly();
-            if(!transaction){
-                try { rollbackTransaction(); }
-                catch (Throwable rollbackFailure) { e.addSuppressed(rollbackFailure); }
-            }
+            // 只标记自己的资源；是否整体回滚由最外层 RouteSession 决定。
+            try { setRollbackOnly(); }
+            catch (Throwable cleanup) { if (e != cleanup) e.addSuppressed(cleanup); }
             throw e;
         }
 
@@ -281,7 +266,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         Supplier<Integer> dataLoader = () -> {
             try {
 
-                return transaction(() -> {
+                return executeOperation(() -> {
                     beforeExecute(request);
                     IDataBuffer buffer = executeCount(result);
                     String value = buffer.getObject("total");
@@ -306,7 +291,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     public <E> Integer  execute(ExecuteRequest<E> request,RequestType requestType) {
 
-        Integer val = transaction(() -> {
+        Integer val = executeOperation(() -> {
             // Decide on the owner thread, inside the actual transaction context (including Spring).
             boolean parallel = request.isBatch() && threadPoolExecutor != null && supportsParallelWrites();
             List<List<ParseResult>> lists = parallel
@@ -470,7 +455,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
         Supplier<List<E>> dataLoader = () -> {
 
-                List<IDataBuffer> buffers = transaction(() -> {
+                List<IDataBuffer> buffers = executeOperation(() -> {
                     beforeExecute(request);
                     return executeSelect(result);
                 }, result);
@@ -517,7 +502,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
         Supplier<List<E>> dataLoader = () -> {
-            List<IDataBuffer> buffers  =    transaction(() -> {
+            List<IDataBuffer> buffers  =    executeOperation(() -> {
                 beforeExecute(request);
                 return executeGroup(result);
             },result);
@@ -534,7 +519,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         // Never cache transaction-bound proxies, loaded relations, or caller-owned mutable entities.
         if (request.isCache()) data = ReflectionUtil.deepClone(data);
         data = proxyService.enhance(group(), request, data);
-        filterManager.after(this.group(), request, data);
         return data;
     }
 
@@ -546,14 +530,18 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         return coderManager.createDecoderBuffer();
     }
 
-    private final TransactionScope transactions = new TransactionScope();
-
-    @Override public void startTransaction() { transactions.start(); }
-    @Override public void commitTransaction() { transactions.finish(false); }
-    @Override public void rollbackTransaction() { transactions.finish(true); }
-    @Override public boolean isOpenTransaction() { return transactions.isOpen(); }
-    @Override public void setRollbackOnly() { transactions.setRollbackOnly(); }
-    @Override public boolean isRollbackOnly() { return transactions.isRollbackOnly(); }
+    // 具体 Session 只处理自己的资源，不创建业务上下文，也不调用事务管理器。
+    // 非 JDBC 后端仅维护参与标记，确保事务内绕过查询缓存；不承诺服务端回滚能力。
+    @Override public void startTransaction() {
+        if (resourceRollbackOnly.get() == null) resourceRollbackOnly.set(false);
+    }
+    @Override public void commitTransaction() { resourceRollbackOnly.remove(); }
+    @Override public void rollbackTransaction() { resourceRollbackOnly.remove(); }
+    @Override public boolean isOpenTransaction() { return resourceRollbackOnly.get() != null; }
+    @Override public void setRollbackOnly() {
+        if (isOpenTransaction()) resourceRollbackOnly.set(true);
+    }
+    @Override public boolean isRollbackOnly() { return Boolean.TRUE.equals(resourceRollbackOnly.get()); }
 
     private void logBatch(List<ParseResult> results, long started, int affected, Throwable error) {
         if (logManager == null) return;
@@ -645,14 +633,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     public void setProxyService(EntityProxyService proxyService) {
         this.proxyService = proxyService;
-    }
-
-    public IFilterManager getFilterManager() {
-        return filterManager;
-    }
-
-    public void setFilterManager(IFilterManager filterManager) {
-        this.filterManager = filterManager;
     }
 
     public void setCore(int core) {

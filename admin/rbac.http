@@ -1,0 +1,114 @@
+### 启用 dev,rbac profile，并设置 ADMIN_RBAC_PASSWORD。将下面的值改为同一个密码。
+@baseUrl = http://localhost:8083
+@adminPassword = replace-with-your-admin-password
+
+### 1. 管理员登录，保存 Token
+POST {{baseUrl}}/rbac/auth/login
+Content-Type: application/json
+
+{"username":"admin","password":"{{adminPassword}}"}
+
+> {% client.global.set("adminToken", response.body.data.accessToken); %}
+
+### 2. 当前用户（角色编码和合并后的权限集合）
+POST {{baseUrl}}/rbac/auth/me
+Authorization: Bearer {{adminToken}}
+
+### 3. 创建只读角色，权限编码直接保存在集合中
+POST {{baseUrl}}/rbac/roles/create
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"code":"reader","name":"只读人员","permissions":["user:query"]}
+
+> {% client.global.set("readerRoleId", response.body.data); %}
+
+### 4. 创建用户，角色编码直接保存在集合中
+POST {{baseUrl}}/rbac/users/create
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"username":"reader01","password":"Example-Password-2026","nickname":"只读示例","roleCodes":["reader"]}
+
+> {% client.global.set("readerUserId", response.body.data); %}
+
+### 5. 枚举状态过滤与分页排序
+POST {{baseUrl}}/rbac/users/page
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"pageNumber":1,"pageSize":15,"username":"reader","status":"enabled","orderList":[{"name":"crtTime","asc":false}]}
+
+### 6. 普通用户登录
+POST {{baseUrl}}/rbac/auth/login
+Content-Type: application/json
+
+{"username":"reader01","password":"Example-Password-2026"}
+
+> {% client.global.set("readerToken", response.body.data.accessToken); %}
+
+### 7. 只读用户可以查询用户
+POST {{baseUrl}}/rbac/users/page
+Content-Type: application/json
+Authorization: Bearer {{readerToken}}
+
+{"pageNumber":1,"pageSize":15}
+
+### 8. 没有 role:query，应返回 HTTP 403
+POST {{baseUrl}}/rbac/roles/list
+Authorization: Bearer {{readerToken}}
+
+### 9. 管理员修改角色权限，事务提交后刷新现有会话
+POST {{baseUrl}}/rbac/roles/update
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerRoleId}}","name":"只读人员","permissions":["user:query","role:query"]}
+
+### 10. 原 Token 无需重新登录，现在可以查询角色
+POST {{baseUrl}}/rbac/roles/list
+Authorization: Bearer {{readerToken}}
+
+### 11. 替换用户的角色集合；[] 表示移除全部角色
+POST {{baseUrl}}/rbac/users/roles
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerUserId}}","roleCodes":[]}
+
+### 12. 当前 Token 仍然有效，但角色和权限为空
+POST {{baseUrl}}/rbac/auth/me
+Authorization: Bearer {{readerToken}}
+
+### 13. 停用用户，事务提交后撤销其全部 Token
+POST {{baseUrl}}/rbac/users/status
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerUserId}}","status":"disabled"}
+
+### 14. 原 Token 已撤销，应返回 HTTP 401
+POST {{baseUrl}}/rbac/auth/me
+Authorization: Bearer {{readerToken}}
+
+### 15. 重置密码，同样撤销该用户所有会话
+POST {{baseUrl}}/rbac/users/password
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerUserId}}","password":"Another-Password-2026"}
+
+### 16. 删除角色，同时移除用户集合内的对应编码
+POST {{baseUrl}}/rbac/roles/delete
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerRoleId}}"}
+
+### 17. 主动刷新用户资料，不延长 Token 过期时间
+POST {{baseUrl}}/rbac/auth/refresh
+Authorization: Bearer {{adminToken}}
+
+### 18. 注销当前管理员 Token
+POST {{baseUrl}}/rbac/auth/logout
+Authorization: Bearer {{adminToken}}

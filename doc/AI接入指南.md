@@ -541,7 +541,7 @@ public class MixedSessionConfig {
 
 MySQL 与 SQLite 共存时，保留原主库配置即可，SQLite 使用内部池和独立 sqlite 组。多个主 DataSource 没有唯一候选时，全部会话显式创建，不任意猜测。
 
-手动 new JdbcSessionFactory 后不能立即假定可用：当前工厂需要容器注入编码器、代理服务和日志等；过滤器只注入 RouteSession，不再交给具体 Session。缓存由 RouteSession 注册 Session 时统一注入；`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
+使用容器管理的 JdbcSessionFactory：`create(...)` 返回前已初始化编码器、解析器、代理服务、日志、配置、group 和缓存；未引入缓存实现时使用空缓存，不影响启动。RouteSession 注册时只登记节点，不再补充或覆盖 Session 配置；过滤器只由 RouteSession 执行。不要把手动 `new JdbcSessionFactory(...)` 当成已完成容器注入的工厂。`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
 
 ### 默认会话组
 
@@ -3698,7 +3698,9 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 
 第一种情况下不会创建 `QueryCacheProperties`，也不会因 `clearCache(true)` 解析表 namespace。这不是“空缓存执行一遍失效”，而是写路径直接跳过整套缓存失效逻辑。
 
-手动注册新的 Session 时，`RouteSession.registerSession` 会把当前缓存 Provider 注入 Session。第三方数据源继承 `AbstractSession` 即可获得相同行为；直接实现 `EntitySession` 时，需要实现 `setQueryCache` 才能接入查询缓存。
+Session 的缓存由对应工厂在 `create(...)` 内初始化，`RouteSession.registerSession` 只登记已配置完成的节点，不再注入或覆盖缓存。JDBC、Elasticsearch、MongoDB 工厂与 RouteSession 使用容器中的同一个 QueryCache：Session 负责查询缓存，路由负责协调写后失效；没有 Provider 时统一使用 NoOpQueryCache。
+
+第三方数据源继承 `AbstractSession` 时，由工厂调用其 `setQueryCache`；该初始化方法不属于 `EntitySession` 执行接口。直接实现 `EntitySession` 时，由自有工厂完成缓存集成，不要求额外实现缓存 setter。工厂和路由必须复用同一个缓存 Bean，不要各自创建 Provider，否则查询与失效可能操作不同的缓存。
 
 ---
 

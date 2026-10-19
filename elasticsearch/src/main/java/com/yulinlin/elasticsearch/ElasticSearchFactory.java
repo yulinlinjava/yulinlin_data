@@ -55,6 +55,7 @@ public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient>
         searchSession.setParseManager(parseManager);
 
         searchSession.setCoderManager(coderManager);
+        searchSession.setProxyService(entityProxyService);
 
 
         searchSession.setLogManager(logManager);

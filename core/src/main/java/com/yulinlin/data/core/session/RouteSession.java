@@ -6,6 +6,8 @@ import com.yulinlin.data.core.cache.CacheNamespace;
 import com.yulinlin.data.core.cache.CacheNamespaceResolver;
 import com.yulinlin.data.core.cache.CachePartition;
 import com.yulinlin.data.core.cache.CachePartitionResolver;
+import com.yulinlin.data.core.cache.NoOpQueryCache;
+import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.exception.NoticeException;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -46,6 +48,16 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     private TransactionListenerManager transactionListenerManager = new TransactionListenerManager();
 
     private WriteQueueManager writeQueueManager;
+
+    /** 路由只用它协调写后失效，不再为具体 Session 注入缓存。 */
+    @Builder.Default
+    private QueryCache queryCache = NoOpQueryCache.INSTANCE;
+
+    public void setQueryCache(QueryCache queryCache) {
+        this.queryCache = queryCache == null ? NoOpQueryCache.INSTANCE : queryCache;
+    }
+
+    protected QueryCache queryCache() { return queryCache; }
 
     /** Selected cache provider's write-clear policy; individual requests may override it. */
     @Builder.Default

@@ -79,6 +79,8 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
 
 
+    /** 返回已完成依赖初始化的节点；业务执行仍统一通过 RouteSession。 */
+    @Override
     public JdbcSession create(DataSource dataSource,String group){
         return create(dataSource, group, properties);
     }
@@ -98,6 +100,7 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         return sqlSession;
     }
 
+    /** 仅创建原始节点，公共组件由 create(...) 统一初始化。 */
     protected JdbcSession newSession(DataSource dataSource) {
         return sessionCreator.apply(dataSource);
     }

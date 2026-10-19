@@ -600,7 +600,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     }
 
 
-    @Override
+    /** 仅由工厂初始化缓存提供者，不属于 EntitySession 的执行协议。 */
     public void setQueryCache(QueryCache cacheManager) {
         this.cacheManager = cacheManager == null ? NoOpQueryCache.INSTANCE : cacheManager;
     }

@@ -22,6 +22,7 @@ import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.parse.SimpParamsContext;
 import com.yulinlin.data.core.proxy.EntityProxyService;
+import com.yulinlin.data.core.transaction.TransactionLog;
 import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
@@ -34,7 +35,6 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import lombok.SneakyThrows;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -220,6 +220,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     @SneakyThrows
     protected <E> E executeOperation(Callable<E> callable,ParseResult result){
+        if (result != null) result.setTransactionId(TransactionLog.current().id());
         long started = System.nanoTime();
 
         try {
@@ -292,7 +293,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     public <E> Integer  execute(ExecuteRequest<E> request,RequestType requestType) {
 
         Integer val = executeOperation(() -> {
-            // Decide on the owner thread, inside the actual transaction context (including Spring).
+            // Decide on the owner thread, inside the framework transaction context.
             boolean parallel = request.isBatch() && threadPoolExecutor != null && supportsParallelWrites();
             List<List<ParseResult>> lists = parallel
                     ? parseNodesAndGroup(requestType, request.getRoot(), request.getWrappers(), request.getFromClass())
@@ -302,9 +303,12 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             int total = 0;
             Throwable failure = null;
             List<CompletableFuture<Integer>> futures = new ArrayList<>();
+            String transactionId = TransactionLog.current().id();
             try {
                 for (List<ParseResult> results : lists) {
                     if (results.isEmpty()) continue;
+                    // 解析可能运行在 parallelStream，完成日志也可能在工作线程；统一由所属线程赋值。
+                    for (ParseResult result : results) result.setTransactionId(transactionId);
                     long started = System.nanoTime();
                     if (parallel && isOpenAsync(request, results)) {
                         CompletableFuture<Integer> future = executeUpdateAsync(results, requestType)
@@ -364,8 +368,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         boolean lockQuery = result.getType() == ParseType.select
                 && request.getWrapper() instanceof AbstractSelectWrapper<?, ?, ?, ?> select
                 && select.isLock();
-        boolean transactionActive = isOpenTransaction()
-                || TransactionSynchronizationManager.isActualTransactionActive();
+        boolean transactionActive = isOpenTransaction();
         if (lockQuery || transactionActive) {
             if (mode == CacheMode.CACHE_ONLY) {
                 throw new CacheMissException(lockQuery

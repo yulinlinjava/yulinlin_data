@@ -1,6 +1,9 @@
 package com.yulinlin.admin;
 
 
+import com.yulinlin.admin.rbac.domain.UserEntity;
+import com.yulinlin.admin.rbac.service.RoleService;
+import com.yulinlin.admin.rbac.service.UserService;
 import com.yulinlin.common.model.EntityCounter;
 import com.yulinlin.common.model.ModelInsertWrapper;
 import com.yulinlin.common.model.ModelSelectWrapper;
@@ -24,18 +27,18 @@ public class AdminApplicationTests {
     @Autowired
     RouteSession session;
 
+    @Autowired
+    UserService userService;
+
     @Test
     public void go() throws Exception{
 
 
-        SysUserEntity sysUserEntity = new SysUserEntity();
-        sysUserEntity.setId("2");
-        sysUserEntity.setData(Map.of(1,1));
-
-        sysUserEntity.setEnabled(true);
-        sysUserEntity.createInsertWrapper().execute();
-
-
+        UserEntity userEntity = new UserEntity();
+        userEntity.setNickname("2215546");
+        userEntity.setUsername("admi222121n");
+        userEntity.setPasswordHash("21213");
+        userService.insertOne(userEntity);
 
         int a = 0;
 

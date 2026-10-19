@@ -2,7 +2,6 @@ package com.yulinlin.jdbc.session;
 
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.datasource.DataSourceUtils;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -30,17 +29,29 @@ public class ConnectionUtil {
         return legacyPools.get().computeIfAbsent(source, key -> createPool(key, core));
     }
 
-    public static Connection getSpringConnection(DataSource source) {
+    @SneakyThrows
+    public static Connection getConnection(DataSource source) {
         if (legacyDepth.get() > 0 || legacyPools.get().containsKey(source)) {
             return pool(source).getConnection();
         }
-        return DataSourceUtils.getConnection(source);
+        return ConnectionPool.targetDataSource(source).getConnection();
     }
 
-    public static void releaseSpringConnection(DataSource source, Connection connection) {
+    @SneakyThrows
+    public static void releaseConnection(DataSource source, Connection connection) {
         ConnectionPool pool = legacyPools.get().get(source);
         if (pool != null) pool.releaseConnection(connection);
-        else DataSourceUtils.releaseConnection(connection, source);
+        else if (connection != null) connection.close();
+    }
+
+    /** @deprecated 使用 getConnection；不再获取 Spring 线程绑定连接。 */
+    @Deprecated
+    public static Connection getSpringConnection(DataSource source) { return getConnection(source); }
+
+    /** @deprecated 使用 releaseConnection；旧名称仅作兼容。 */
+    @Deprecated
+    public static void releaseSpringConnection(DataSource source, Connection connection) {
+        releaseConnection(source, connection);
     }
 
     public static void startTransaction() { legacyDepth.set(legacyDepth.get() + 1); }

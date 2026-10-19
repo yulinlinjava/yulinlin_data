@@ -16,7 +16,6 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
 import java.sql.Connection;
@@ -57,7 +56,7 @@ public final class SqliteSchemaManager {
                 if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("SQLite table is missing: " + table.name());
                 }
-                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                if (connection.isReadOnly()) {
                     throw new IllegalStateException("SQLite table " + table.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }
@@ -209,7 +208,7 @@ public final class SqliteSchemaManager {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
             if (expected.primary()) throw incompatibleColumn(table, expected, null);
             if (mode == SchemaMode.VALIDATE) throw incompatibleColumn(table, expected, null);
-            if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+            if (connection.isReadOnly()) {
                 throw new IllegalStateException("SQLite column " + table.name() + "." + expected.name()
                         + " is missing; initialize it outside a read-only transaction");
             }
@@ -282,7 +281,7 @@ public final class SqliteSchemaManager {
                 if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("SQLite index is missing: " + expected.name());
                 }
-                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                if (connection.isReadOnly()) {
                     throw new IllegalStateException("SQLite index " + expected.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }

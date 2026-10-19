@@ -1,10 +1,9 @@
 package com.yulinlin.jdbc.session;
 
 import com.zaxxer.hikari.HikariDataSource;
+import com.yulinlin.data.core.transaction.TransactionLog;
 import lombok.SneakyThrows;
-import org.springframework.jdbc.datasource.ConnectionHolder;
-import org.springframework.jdbc.datasource.DataSourceUtils;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -26,20 +25,36 @@ public class ConnectionPool {
     }
 
     private final DataSource dataSource;
+    private final TransactionLog transactionLog;
+    private final String group;
+    private final String cluster;
     private final List<Node> nodes = new ArrayList<>();
-    private int limit;
+    private final int limit;
     private boolean initialized;
     private int creating;
-    private volatile boolean springManaged;
-    private ConnectionHolder springHolder;
     private boolean closed;
     private volatile boolean rollbackOnly;
 
     public ConnectionPool(DataSource dataSource, int length) {
-        this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this(dataSource, length, "unknown", "unknown");
+    }
+
+    public ConnectionPool(DataSource dataSource, int length, String group, String cluster) {
+        this.dataSource = targetDataSource(Objects.requireNonNull(dataSource, "dataSource"));
+        this.transactionLog = TransactionLog.current();
+        this.group = group;
+        this.cluster = cluster;
         if (length < 1) throw new IllegalArgumentException("parallelConnections must be positive");
-        limit = dataSource instanceof HikariDataSource hikari
+        limit = this.dataSource instanceof HikariDataSource hikari
                 ? Math.min(length, Math.max(1, hikari.getMaximumPoolSize())) : length;
+    }
+
+    static DataSource targetDataSource(DataSource source) {
+        // 事务感知代理会复用线程连接；框架自管时必须能够取得独立连接。
+        while (source instanceof TransactionAwareDataSourceProxy proxy) {
+            source = Objects.requireNonNull(proxy.getTargetDataSource(), "targetDataSource");
+        }
+        return source;
     }
 
     /** Must be called on the owning thread, BEFORE handing the pool to asynchronous workers. */
@@ -47,36 +62,36 @@ public class ConnectionPool {
     public synchronized ConnectionPool initialize() {
         if (closed) throw new IllegalStateException("Transaction connections already closed");
         if (initialized) return this;
-        Connection connection = DataSourceUtils.getConnection(dataSource);
+        jdbcLog("JDBC事务开始获取连接", null, "", null);
+        Connection connection = null;
         try {
-            springManaged = DataSourceUtils.isConnectionTransactional(connection, dataSource);
-            if (springManaged && TransactionSynchronizationManager.getResource(dataSource) instanceof ConnectionHolder holder) {
-                springHolder = holder;
-                if (rollbackOnly) holder.setRollbackOnly();
-            }
+            connection = dataSource.getConnection();
             boolean autoCommit = connection.getAutoCommit();
-            if (springManaged) limit = 1;
-            else if (autoCommit) connection.setAutoCommit(false);
+            if (autoCommit) connection.setAutoCommit(false);
             nodes.add(new Node(connection, autoCommit));
             initialized = true;
+            if (transactionLog.isEnabled()) jdbcLog("JDBC事务连接已加入", connection,
+                    "originalAutoCommit=" + autoCommit + " autoCommit=false", null);
             return this;
         } catch (Throwable error) {
-            try { DataSourceUtils.doReleaseConnection(connection, dataSource); }
+            jdbcLog("JDBC事务连接初始化失败", connection, "", error);
+            try {
+                if (connection != null) connection.close();
+            }
             catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
             throw error;
         }
     }
 
     public synchronized int getLimit() { return limit; }
-    public synchronized boolean isSpringManaged() { return springManaged; }
+    /** @deprecated 连接现统一由框架管理；仅保留旧调用的兼容方法。 */
+    @Deprecated
+    public boolean isSpringManaged() { return false; }
     public boolean isRollbackOnly() { return rollbackOnly; }
     public void setRollbackOnly() {
+        boolean first = !rollbackOnly;
         rollbackOnly = true;
-        // Mark Spring immediately: its interceptor may finish BEFORE the route interceptor.
-        if (springManaged && springHolder != null
-                && TransactionSynchronizationManager.getResource(dataSource) == springHolder) {
-            springHolder.setRollbackOnly();
-        }
+        if (first) jdbcLog("JDBC事务已标记为只能回滚", null, "", null);
     }
 
     @SneakyThrows
@@ -107,14 +122,18 @@ public class ConnectionPool {
         // A depleted DataSource can block here. Do not hold the monitor needed by existing borrowers.
         Connection connection = null;
         try {
+            jdbcLog("JDBC并行事务开始获取连接", null, "", null);
             connection = dataSource.getConnection();
             boolean autoCommit = connection.getAutoCommit();
             if (autoCommit) connection.setAutoCommit(false);
             Node node = new Node(connection, autoCommit);
             node.available = false;
             synchronized (this) { nodes.add(node); }
+            if (transactionLog.isEnabled()) jdbcLog("JDBC并行事务连接已加入", connection,
+                    "originalAutoCommit=" + autoCommit + " autoCommit=false", null);
             return connection;
         } catch (Throwable error) {
+            jdbcLog("JDBC并行事务获取连接失败", connection, "", error);
             rollbackOnly = true;
             if (connection != null) {
                 try { connection.close(); }
@@ -147,6 +166,7 @@ public class ConnectionPool {
     @SneakyThrows
     public synchronized void finish(boolean rollback) {
         if (closed) return;
+        jdbcLog(rollback || rollbackOnly ? "JDBC事务准备回滚" : "JDBC事务准备提交", null, "", null);
         boolean interrupted = false;
         while (creating > 0 || nodes.stream().anyMatch(node -> !node.available)) {
             try { wait(); } catch (InterruptedException ignored) { interrupted = true; }
@@ -155,21 +175,25 @@ public class ConnectionPool {
         Throwable failure = null;
         boolean mustRollback = rollback || rollbackOnly;
         try {
-            if (springManaged) {
-                if (mustRollback && TransactionSynchronizationManager.getResource(dataSource) instanceof ConnectionHolder holder) {
-                    holder.setRollbackOnly();
-                }
-            } else {
-                for (Node node : nodes) {
-                    boolean doRollback = mustRollback || failure != null;
-                    try {
-                        if (doRollback) node.connection.rollback();
-                        else node.connection.commit();
-                    } catch (Throwable error) {
-                        failure = append(failure, error);
-                        if (!doRollback) {
-                            try { node.connection.rollback(); }
-                            catch (Throwable cleanup) { failure = append(failure, cleanup); }
+            if (nodes.isEmpty()) jdbcLog("JDBC事务未借用连接，无需物理提交或回滚", null, "", null);
+            for (Node node : nodes) {
+                boolean doRollback = mustRollback || failure != null;
+                try {
+                    jdbcLog(doRollback ? "JDBC连接开始回滚" : "JDBC连接开始提交", node.connection, "", null);
+                    if (doRollback) node.connection.rollback();
+                    else node.connection.commit();
+                    jdbcLog(doRollback ? "JDBC连接回滚成功" : "JDBC连接提交成功", node.connection, "", null);
+                } catch (Throwable error) {
+                    jdbcLog(doRollback ? "JDBC连接回滚失败" : "JDBC连接提交失败", node.connection, "", error);
+                    failure = append(failure, error);
+                    if (!doRollback) {
+                        try {
+                            node.connection.rollback();
+                            jdbcLog("JDBC提交失败后的回滚成功", node.connection, "", null);
+                        }
+                        catch (Throwable cleanup) {
+                            jdbcLog("JDBC提交失败后的回滚也失败", node.connection, "", cleanup);
+                            failure = append(failure, cleanup);
                         }
                     }
                 }
@@ -181,19 +205,22 @@ public class ConnectionPool {
             for (Node node : nodes) {
                 try {
                     // If completion failed, never switch autoCommit on (that could commit pending data).
-                    if (!springManaged && failure == null && node.connection.getAutoCommit() != node.originalAutoCommit) {
+                    if (failure == null && node.connection.getAutoCommit() != node.originalAutoCommit) {
                         node.connection.setAutoCommit(node.originalAutoCommit);
                     }
-                } catch (Throwable cleanup) { failure = append(failure, cleanup); }
+                } catch (Throwable cleanup) {
+                    jdbcLog("JDBC连接恢复自动提交状态失败", node.connection, "", cleanup);
+                    failure = append(failure, cleanup);
+                }
                 finally {
                     try {
-                        // An outer framework aspect may finish after Spring has already closed/unbound it.
-                        if (!springManaged || (springHolder != null
-                                && TransactionSynchronizationManager.getResource(dataSource) == springHolder)) {
-                            DataSourceUtils.doReleaseConnection(node.connection, dataSource);
-                        }
+                        node.connection.close();
+                        jdbcLog("JDBC框架连接已释放", node.connection, "", null);
                     }
-                    catch (Throwable cleanup) { failure = append(failure, cleanup); }
+                    catch (Throwable cleanup) {
+                        jdbcLog("JDBC连接释放失败", node.connection, "", cleanup);
+                        failure = append(failure, cleanup);
+                    }
                 }
             }
             nodes.clear();
@@ -205,6 +232,21 @@ public class ConnectionPool {
 
     /** Legacy cleanup entry point rolls back, rather than discarding uncommitted work. */
     public void clear() { finish(true); }
+
+    private void jdbcLog(String event, Connection connection, String extra, Throwable error) {
+        if (!transactionLog.isEnabled()) return;
+        int count;
+        synchronized (this) { count = nodes.size(); }
+        String details = "group=" + TransactionLog.token(group) + " cluster=" + TransactionLog.token(cluster)
+                + " dataSource=" + dataSource.getClass().getSimpleName() + "@"
+                + Integer.toHexString(System.identityHashCode(dataSource))
+                + " connection=" + (connection == null ? "none" : Integer.toHexString(System.identityHashCode(connection)))
+                + " owner=framework"
+                + " connections=" + count + " rollbackOnly=" + rollbackOnly;
+        if (!extra.isEmpty()) details += " " + extra;
+        if (error == null) transactionLog.info(event, details);
+        else transactionLog.error(event, details, error);
+    }
 
     private static Throwable append(Throwable failure, Throwable error) {
         if (failure == null) return error;

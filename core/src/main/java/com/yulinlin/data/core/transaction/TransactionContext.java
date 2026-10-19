@@ -12,6 +12,7 @@ import java.util.*;
 /** 当前线程的一次业务事务；所有 Session 共享，连接资源仍由各 Session 持有。 */
 public final class TransactionContext {
     final TransactionListenerManager manager;
+    private final TransactionLog transactionLog;
     int depth = 1;
     boolean rollbackOnly;
     boolean closing;
@@ -20,7 +21,6 @@ public final class TransactionContext {
     boolean committed;
     boolean completed;
     boolean notified;
-    int springStatus = TransactionListenerManager.NO_SPRING_TRANSACTION;
     Throwable failure;
     final Set<EntitySession> participants = new LinkedHashSet<>();
     final Map<Object, Map<String, EntitySession>> selections = new IdentityHashMap<>();
@@ -28,7 +28,12 @@ public final class TransactionContext {
     final List<Runnable> afterCommitTasks = new ArrayList<>();
     private ProxyChanges proxyChanges;
 
-    TransactionContext(TransactionListenerManager manager) { this.manager = manager; }
+    TransactionContext(TransactionListenerManager manager) {
+        this.manager = manager;
+        transactionLog = TransactionLog.start(manager.isTransactionLog());
+    }
+
+    public TransactionLog transactionLog() { return transactionLog; }
 
     public int depth() { return depth; }
     public TransactionListenerManager manager() { return manager; }
@@ -42,7 +47,7 @@ public final class TransactionContext {
 
     public boolean allowsChanges() {
         return TransactionListenerManager.currentContext() == this && !completed
-                && !beforeCommitDone && springStatus < 0;
+                && !beforeCommitDone;
     }
 
     void fail(Throwable error) {

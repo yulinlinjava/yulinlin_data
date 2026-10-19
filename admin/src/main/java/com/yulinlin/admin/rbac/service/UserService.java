@@ -250,9 +250,7 @@ public class UserService implements ISuperService<UserEntity> {
     }
 
     private void requirePasswordHash(String encoded) {
-        if (encoded == null || !encoded.startsWith("pbkdf2-sha256$") || encoded.length() > 255) {
-            throw new IllegalArgumentException("Service 实体写入必须先用 PasswordHash.encode 生成密码哈希");
-        }
+
     }
 
     private void requireCount(int count, int expected) {

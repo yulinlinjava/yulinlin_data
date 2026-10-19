@@ -5,7 +5,6 @@ import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.lang.util.ThreadUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -96,8 +95,7 @@ public final class EntityCounterManager implements AutoCloseable {
     void submit(Command command) {
         ensureOpen();
         if (command.deltas().isEmpty()) return;
-        if (routeSession.isOpenTransaction()
-                || TransactionSynchronizationManager.isActualTransactionActive()) {
+        if (routeSession.isOpenTransaction()) {
             throw new NoticeException("EntityCounter.submit() 不能加入当前事务，请改用 execute() 或在事务外提交。");
         }
 

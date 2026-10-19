@@ -4,6 +4,7 @@ import com.yulinlin.data.core.log.LogPrint;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.SessionUtil;
+import com.yulinlin.data.core.transaction.TransactionLog;
 import com.yulinlin.jdbc.JdbcSessionProperties;
 import com.yulinlin.jdbc.session.AbstractJdbcSession;
 import com.yulinlin.jdbc.session.SqlNode;
@@ -127,6 +128,8 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
 
     private StringBuilder base(String event, long elapsedMs, ParseResult result, EntitySession session) {
         return new StringBuilder(event)
+                .append(" txId=").append(token(result != null && result.getTransactionId() != null
+                        ? result.getTransactionId() : TransactionLog.current().id()))
                 .append(" group=").append(token(group(session)))
                 .append(" cluster=").append(token(cluster(session)))
                 .append(" type=").append(result == null || result.getType() == null ? "unknown" : result.getType())

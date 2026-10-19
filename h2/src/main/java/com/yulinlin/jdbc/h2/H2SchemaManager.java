@@ -17,7 +17,6 @@ import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Modifier;
 import java.sql.Connection;
@@ -82,7 +81,7 @@ public final class H2SchemaManager {
                 if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("H2 table is missing: " + table.name());
                 }
-                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                if (connection.isReadOnly()) {
                     throw new IllegalStateException("H2 table " + table.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }
@@ -260,7 +259,7 @@ public final class H2SchemaManager {
             if (expected.primary() || mode == SchemaMode.VALIDATE) {
                 throw incompatibleColumn(table, expected, null);
             }
-            if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+            if (connection.isReadOnly()) {
                 throw new IllegalStateException("H2 column " + table.name() + "." + expected.name()
                         + " is missing; initialize it outside a read-only transaction");
             }
@@ -342,7 +341,7 @@ public final class H2SchemaManager {
                 if (mode == SchemaMode.VALIDATE) {
                     throw new IllegalStateException("H2 index is missing: " + expected.name());
                 }
-                if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                if (connection.isReadOnly()) {
                     throw new IllegalStateException("H2 index " + expected.name()
                             + " is missing; initialize it outside a read-only transaction");
                 }

@@ -16,8 +16,6 @@ import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.JdbcProperties;
 import com.yulinlin.jdbc.JdbcSessionProperties;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.datasource.DataSourceUtils;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
@@ -43,7 +41,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     protected DataSource dataSource;
 
     public AbstractJdbcSession(DataSource dataSource) {
-        this.dataSource = dataSource;
+        this.dataSource = ConnectionPool.targetDataSource(java.util.Objects.requireNonNull(dataSource, "dataSource"));
 
     }
 
@@ -192,21 +190,23 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
         return executeSelect(request);
     }
 
+    @lombok.SneakyThrows
     @Override
     protected List<IDataBuffer> executeSelect(ParseResult request) {
         SqlNode sqlNode = (SqlNode)request.getRequest();
 
 
         ConnectionPool pool = isOpenTransaction() ? transactionConnections() : null;
-        Connection connection = pool == null ? DataSourceUtils.getConnection(dataSource) : pool.getConnection();
-
+        if (pool == null) {
+            try (Connection connection = dataSource.getConnection()) {
+                return executeSelectNode(connection, sqlNode);
+            }
+        }
+        Connection connection = pool.getConnection();
         try {
-            List<IDataBuffer> value =  executeSelectNode(connection,sqlNode);
-
-            return value;
-        }finally {
-            if (pool == null) DataSourceUtils.releaseConnection(connection, dataSource);
-            else pool.releaseConnection(connection);
+            return executeSelectNode(connection, sqlNode);
+        } finally {
+            pool.releaseConnection(connection);
         }
 
     }
@@ -228,7 +228,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     @Override
     public void startTransaction() {
         if (transactionPools.get() == null)
-            transactionPools.set(new ConnectionPool(dataSource, parallelConnections));
+            transactionPools.set(new ConnectionPool(dataSource, parallelConnections, group(), String.valueOf(cluster())));
     }
 
     @Override
@@ -268,17 +268,12 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results) {
         if (!super.isOpenAsync(request, results)) return false;
-        // Never send a Spring thread-bound Connection to workers or fork its transaction.
         ConnectionPool pool = transactionConnections();
-        return !pool.isSpringManaged() && pool.getLimit() > 1;
+        return pool.getLimit() > 1;
     }
 
     @Override public boolean supportsParallelWrites() {
-        if (parallelWriteGroupCount() <= 1) return false;
-        // A Spring-bound connection must never be shared with workers or forked into another transaction.
-        if (TransactionSynchronizationManager.hasResource(dataSource)) return false;
-        ConnectionPool pool = transactionPools.get();
-        return pool == null || !pool.isSpringManaged();
+        return parallelWriteGroupCount() > 1;
     }
 
     @Override protected int parallelWriteGroupCount() {

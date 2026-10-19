@@ -125,8 +125,10 @@ public class YulinlinCoreAutoConfig {
 
     @ConditionalOnMissingBean
     @Bean
-    public TransactionListenerManager transactionListenerManager(ObjectProvider<TransactionListener> listeners){
+    public TransactionListenerManager transactionListenerManager(ObjectProvider<TransactionListener> listeners,
+                                                                 DataProperties properties){
         TransactionListenerManager manager = new TransactionListenerManager(listeners.orderedStream().toList());
+        manager.setTransactionLog(properties.isTransactionLog());
         return manager;
     }
 

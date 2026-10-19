@@ -19,7 +19,6 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import org.springframework.cglib.proxy.MethodInterceptor;
 import org.springframework.cglib.proxy.MethodProxy;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
@@ -225,10 +224,6 @@ public final class EntityProxyFactory implements IProxyFactory {
                 throw new NoticeException("自动更新 setter 必须在创建代理的线程及原始事务内执行");
         }
 
-        void joinSpring() {
-            context.manager().synchronize();
-        }
-
         public boolean hasDirty() { return tracked.stream().anyMatch(EntityProxy::hasDirty); }
         public void flush() { check(); EntityProxyFactory.this.flush(this); }
         public void rollback() { for (EntityProxy proxy : tracked) proxy.clearDirty(); }
@@ -251,7 +246,6 @@ public final class EntityProxyFactory implements IProxyFactory {
             context.proxyChanges(changes);
         }
         changes.check();
-        changes.joinSpring();
         return changes;
     }
 
@@ -406,9 +400,6 @@ public final class EntityProxyFactory implements IProxyFactory {
             }
 
             changes.check();
-            changes.joinSpring();
-            if (TransactionSynchronizationManager.isCurrentTransactionReadOnly())
-                throw new NoticeException("只读事务不能执行自动更新");
             String name = setter.field().getName();
             if (primaryKeys.containsKey(name) && !Objects.equals(primaryKeys.get(name), args[0]))
                 throw new NoticeException("自动更新不允许修改主键: " + name);

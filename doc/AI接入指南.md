@@ -97,7 +97,51 @@ MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换
 - `slow-sql-threshold` 默认 `0`（关闭）。配置为 `1s` 后，框架侧耗时达到 1 秒的执行以 `WARN` 输出，即使 `log=false` 也会记录。
 - SQL 异常始终以单条 `ERROR` 输出，包含实际耗时并携带原始堆栈。批量写入按执行组打印一条摘要；摘要列出最多 5 种 SQL 模板及模板总数，不再为每一行打印 INFO。
 
-耗时是应用侧观察值，可能包含获取连接、JDBC 驱动和事务收尾时间，并不等同于数据库服务器内部的纯执行时间。查询缓存的 `HIT/MISS/REFRESH/BYPASS` 使用 `com.yulinlin.data.cache.QueryCache` 的 DEBUG 日志；延迟写队列刷新摘要使用 `com.yulinlin.data.core.queue.WriteQueueManager` 的 DEBUG 日志。需要排查缓存时可临时提高对应 logger 级别，或者使用 `.cache(CacheMode.REFRESH)` 强制访问数据库。
+耗时是应用侧观察值，可能包含获取连接、JDBC 驱动、参数绑定和结果读取，并不等同于数据库服务器内部的纯执行时间。写入成功日志在 JDBC 执行返回后打印，不代表外层事务已经提交；事务结果应查看下面的事务诊断日志。查询缓存的 `HIT/MISS/REFRESH/BYPASS` 使用 `com.yulinlin.data.cache.QueryCache` 的 DEBUG 日志；延迟写队列刷新摘要使用 `com.yulinlin.data.core.queue.WriteQueueManager` 的 DEBUG 日志。需要排查缓存时可临时提高对应 logger 级别，或者使用 `.cache(CacheMode.REFRESH)` 强制访问数据库。
+
+#### 事务诊断日志
+
+怀疑“SQL 返回影响行数，但数据未提交”时，临时开启全局开关。此配置对全部数据源生效，独立于 `yulinlin.mysql.log` 等 SQL 开关，默认 `false`：
+
+```yaml
+yulinlin:
+  data:
+    transaction-log: true
+
+# 项目根日志级别高于 INFO 时，需要同时放开此 logger。
+logging:
+  level:
+    com.yulinlin.data.core.transaction.TransactionLog: INFO
+```
+
+日志统一使用中文事件描述。同一个最外层框架事务使用相同 `txId`，SQL 日志、嵌套事务、多个数据源及 JDBC 批处理工作线程共享该 ID；ID 只用于当前进程内关联，不是订单 ID，也不是跨服务链路 ID。普通查询没有框架事务时显示 `txId=none`。事务日志的 `elapsedMs` 从最外层框架事务开启时计算，包含事务内业务耗时，与单条 SQL 的执行计时不同。
+
+框架层记录开启、嵌套深度 `depth`、参与者数量 `participants`、只回滚标记 `rollbackOnly`、资源提交/回滚和上下文清理。JDBC 层额外记录 `group`、`cluster`、DataSource 实例标识、连接标识、连接数量、原始/当前自动提交状态和提交归属 `owner`。不额外借连接、查询数据库元数据或打印账号密码；连接标识是当前 JDBC 连接对象的标识，不是数据库服务器的连接编号。
+
+| 事件 | 如何理解 |
+| --- | --- |
+| `内层事务提交返回，等待最外层提交` | 只减少嵌套深度，尚未提交连接 |
+| `JDBC连接开始提交` | 即将调用这个连接的 `commit()` |
+| `JDBC连接提交成功` | 这个连接的 `commit()` 已正常返回；多连接/多库仍需逐一核对其他资源 |
+| `JDBC连接回滚成功` | 对应连接已回滚，之前打印 SQL 成功不代表数据最终保留 |
+| `框架事务资源处理完成` | 所有参与 Session 的提交方法均已正常返回；JDBC 物理结果仍按连接核对 |
+| `框架事务上下文已清理` | 只代表线程状态清理，不代表数据库提交成功 |
+| `事务提交后回调开始` | 框架资源提交成功且旧上下文已清理，开始处理进程内通知 |
+
+例如，下列是同一笔单连接事务中实际提交的关键日志片段，省略了其他生命周期行：
+
+```text
+事务开启 txId=1 elapsedMs=0 depth=1 participants=0 rollbackOnly=false
+SQL批量执行成功 txId=1 group=mysql cluster=master type=insert elapsedMs=8 nodes=1 affected=1 templates=1 sqls=["insert into `pay_order` (`id`) values (?)"] params=[order-1]
+JDBC连接开始提交 txId=1 elapsedMs=28 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
+JDBC连接提交成功 txId=1 elapsedMs=31 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
+```
+
+排查时按 `txId` 找完整过程：只看到嵌套结束则检查最外层是否收尾；每个 JDBC 连接都应找到最终提交或回滚结果；出现提交失败、回滚失败或连接释放失败会记录 ERROR 与原始异常。只有 SQL 成功而没有最终结果时，不应直接下结论认为已提交或已回滚。ES/MongoDB 当前没有对应的物理事务，框架资源方法返回也不能证明其具备数据库回滚能力。
+
+关闭开关时不采集事务诊断计时、不输出生命周期日志，但仍生成轻量事务 ID，供 SQL 日志关联。SQL 普通、慢操作、异常和批量日志都包含 `txId`，是否输出仍遵守原有 SQL 日志配置；批处理 ID 在提交工作线程前捕获，不依赖工作线程的事务 ThreadLocal。手动声明 `TransactionListenerManager` Bean 的项目需自行调用 `setTransactionLog(true)`，默认自动配置会读取上述 YAML。
+
+JDBC 事务连接统一标记 `owner=framework`：直接向 DataSource 借连接，关闭自动提交，最终由框架提交/回滚、恢复连接状态并释放。不再复用 Spring 线程绑定连接，也不等待 Spring 的提交通知。DataSource 仍可由 Spring Boot、Druid 或 Hikari 配置和注入；`@Transactional` 仅通过注解适配器委托 RouteSession，不再交给原生 JDBC 事务管理器。多资源仍是多个本地事务，不提供跨库原子提交保证；原生 JdbcTemplate/MyBatis/JPA 与框架写入不共用事务。注解支持范围及多事务管理器选取见[Spring 事务注解兼容](02-CRUD与统计分析.md#spring-事务注解兼容)。
 
 #### 慢数据库监控
 
@@ -578,6 +622,7 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | yulinlin.datasource.default-group | 未设置 | 单组自动；多组指定默认 |
+| yulinlin.data.transaction-log | false | 全局事务诊断；记录嵌套、数据源连接提交/回滚以及 Spring 最终结果，独立于 SQL 日志 |
 | yulinlin.monitor.enabled | true | 是否启用数据库操作采集及内置监控接口和页面；关闭后不注册相关 Bean |
 | yulinlin.monitor.threshold | 1s | 慢操作明细保留阈值，同时作为 P1–P4 优先级的计算基准；异常始终保留 |
 | yulinlin.monitor.max-records | 1000 | 慢操作明细和 SQL 聚合组各自的内存上限；超出后淘汰最早或最久未访问的数据 |
@@ -1232,7 +1277,7 @@ yulinlin:
 
 这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接；调用 `.batch()` 时，把整批数据均匀分成最多 4 个大组，一组一个任务/连接。同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。
 
-只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite、单连接池或 Spring 绑定连接不拆组。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池会自动限制有效并发数，其他连接池应按其容量设置 parallel-connections。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
 
 executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
 
@@ -1275,7 +1320,7 @@ EntityCounter.newInstance(VideoEntity.class, videoId)
 
 | 方法 | 行为 | 返回值 | 事务 |
 | --- | --- | --- | --- |
-| `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 可加入当前 Route/Spring 事务 |
+| `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 加入当前路由事务，包括适配后的 `@Transactional` |
 | `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
 
 聚合键是“数据源选择器 + 实体类型 + 主键”，字段增量保存在该行下面。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
@@ -1404,11 +1449,32 @@ SessionUtil.route().transaction(() -> {
 
 同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
 
-#### Spring 事务
+#### Spring 事务注解兼容
 
-已接入 org.springframework.transaction.annotation.Transactional。原生 Spring 管理器为相同 DataSource 绑定连接时，框架在原线程复用它，提交/回滚/释放归 Spring；不把这个连接发给并发工作线程。
+继续使用 `org.springframework.transaction.annotation.Transactional`。JDBC 模块自动注册默认优先的 `yulinlinTransactionManager`，Spring 标准注解拦截器解析注解后，由这个轻量适配器调用 RouteSession。它不创建 Spring JDBC 事务、不绑定 Spring 连接、不注册 Spring 同步回调。原有重复的 `SpringTransactionAop` 已移除，默认 Boot JDBC 事务管理器自动配置会退让。
 
-框架切面本身不解析 propagation、isolation、rollbackFor、noRollbackFor 等属性。已有 Spring 拦截器处理自身语义，不代表框架路由实现了完整 REQUIRES_NEW、NESTED 或保存点。不要默认叠加两个事务注解，也不要将业务异步线程视为自动继承事务。
+```java
+import org.springframework.transaction.annotation.Transactional;
+
+@Transactional(rollbackFor = Exception.class)
+public void createOrder() throws Exception {
+    // 在 Service 中通过 Repository / Wrapper 执行业务；所有数据源加入同一路由事务。
+}
+```
+
+- 支持默认 `REQUIRED`：内层加入同一业务上下文，最外层才提交；内层回滚会标记整个事务 rollback-only。
+- `rollbackFor`、`noRollbackFor` 及其类名规则由 Spring 标准拦截器解析。默认对 `RuntimeException` / `Error` 回滚，对受检异常默认提交；业务需要受检异常也回滚时使用上例。已经发生 SQL 失败等导致 rollback-only 的事务不能被 `noRollbackFor` 强行提交。
+- 目前仅支持默认隔离级别、默认超时和 `readOnly=false`。非默认传播方式（包括 `REQUIRES_NEW` / `NESTED`）、隔离级别、超时或 `readOnly=true` 会在进入业务方法前明确报错，不静默假装支持。
+- 必须从 Spring 代理外部调用；不要叠加 `@JoinTransaction` 和 `@Transactional`，也不要认为业务异步线程会继承事务。框架 `.batch()` 由内部显式传递连接池，不等于自动传播业务线程上下文。
+- 数据源仍使用原来的 Spring Bean 配置，但连接由框架独立取得和管理。原生 JdbcTemplate、MyBatis、JPA 不会加入此事务；不能把混合使用当成统一提交。
+- 若项目另外指定了默认事务管理器、有其他 `@Primary` 管理器，或使用 `TransactionManagementConfigurer`，请明确使用 `@Transactional(transactionManager = "yulinlinTransactionManager", rollbackFor = Exception.class)`。显式指定其他管理器不进入本适配器，框架写请求会按自己的边界独立提交。
+- 不提供 Spring `TransactionSynchronizationManager` / `@TransactionalEventListener` 的同步生命周期。提交后业务使用 `TransactionUtil.afterCommit`；手动 `TransactionTemplate` 只有选择本适配器时才进入框架事务。
+
+迁移时更新配套的 core、jdbc 及所用数据库模块，移除业务手动注册的旧 `SpringTransactionAop`。不要同时保留另一套拦截相同 `@Transactional` 方法的自定义事务切面。
+
+#### 排查事务是否提交
+
+开启 `yulinlin.data.transaction-log: true`（默认关闭），按 SQL 日志里的同一个 `txId` 查看开启、嵌套深度、数据源参与和连接的最终处理。SQL 日志中的 `affected=1` 只表示 JDBC 执行影响一行，不代表事务已经提交；事务日志关闭时 SQL 仍保留 ID，没有框架事务的查询显示 `txId=none`。连接均由框架持有，最终查看每个连接的 `JDBC连接提交成功` 或回滚日志。`数据源事务提交方法已返回`、`框架事务上下文已清理` 都不是物理提交凭证，多库/多连接要逐一核对，不能凭一个资源成功推断全部成功。配置、字段和日志事件详见[事务诊断日志](01-接入与数据源.md#事务诊断日志)。
 
 #### 提交成功回调
 
@@ -1425,22 +1491,22 @@ public void changeRole(String id, List<String> permissions) {
 }
 ```
 
-上例是方法片段，`roleRepository` 和 `security` 为业务注入对象。`@Transactional` 经框架切面接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不再提供纯 Spring `TransactionTemplate` 的回调兜底。
+上例是方法片段，`roleRepository` 和 `security` 为业务注入对象。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
 
 | 场景 | 行为 |
 | --- | --- |
 | 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
 | 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
 | 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
-| Spring 持有实际事务 | 同时等待框架参与者完成与 Spring 的实际提交成功，不提前触发或重复执行 |
-| 仅有 Spring 事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
+| `@Transactional` 使用框架适配器 | 与路由事务完全一致，不等待其他 Spring 事务 |
+| 仅有其他 Spring 管理器的事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
 | 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
 | 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
 | 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
 
 回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
 
-Spring 管理实际连接时，框架内部仍保留提交结果确认，避免数据库尚未提交就提前通知。这不等于实现了新事务传播：如果业务额外把路由包在外部 Spring 事务内，提交通知阶段的 Spring 资源可能尚未释放，不能依赖再次调用框架 `transaction()` 来挂起旧 Spring 连接或实现 `REQUIRES_NEW`。通常只在回调里做快照读取、缓存刷新和通知。
+回调开始前，框架 JDBC 连接已完成提交与释放。因此回调中再次调用 `SessionUtil.route().transaction(...)` 会建立新的框架事务；这只是旧事务结束后的新事务，不代表支持活动事务内的 `REQUIRES_NEW`。若另外包在原生 Spring 事务中，两者完全独立，本回调不会等待该原生事务，也不能保证它提交成功。
 
 提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
 
@@ -1936,7 +2002,7 @@ LocalUserEntity 与 localUserId 由业务提供。未指定时关联上下文保
 - 支持的 Integer/int、Long/long 版本字段按原始版本条件递增；写入数不匹配视为乐观锁失败，不承诺全部 Wrapper 都具备相同版本机制。
 - 代理绑定原始线程与统一业务事务上下文，结束后不能继续 setter 修改。缓存保存未增强数据，读取时复制并创建当前查询代理，不能复用旧事务代理。
 
-Spring 绑定事务中的同步写回在物理提交前处理，只读事务禁止同步 setter；高级传播与分布式一致性仍按 [第二专题](02-CRUD与统计分析.md#事务使用)的边界理解。
+同步写回统一发生在框架物理提交前，不依赖 Spring 的提交回调。`@Transactional` 只适配到同一路由事务，目前 `readOnly=true` 会在进入业务方法前被拒绝；普通只读查询无需声明该属性。高级传播与分布式一致性仍按 [第二专题](02-CRUD与统计分析.md#事务使用)的边界理解。
 
 ### 常见问题
 
@@ -4381,7 +4447,8 @@ public void changeProfile(String id, String username) {
 }
 ```
 
-- `@Transactional` 定义事务，`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
+- `@Transactional` 经默认的 `yulinlinTransactionManager` 委托 RouteSession；连接由框架独立提交，不复用 Spring JDBC 事务。`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
+- 默认只对 RuntimeException/Error 回滚，受检异常也需回滚时写 `@Transactional(rollbackFor = Exception.class)`。目前只支持 REQUIRED 及默认隔离/超时、非只读语义，完整边界见[事务注解兼容](02-CRUD与统计分析.md#spring-事务注解兼容)。
 - 必须通过 Spring Bean 从外部调用 public 方法；`this.changeProfile(...)` 式自调用会绕过 Spring AOP。
 - 不要将代理 Entity 传给异步任务、虚拟线程或事务外的 Controller。它只能在创建它的原线程和原事务中 setter。
 - 业务失败让异常离开事务方法。如果必须捕获，应继续抛出或明确设置 rollback-only，不要吞掉后继提交。
@@ -4692,7 +4759,7 @@ public void assignRoles(RbacRequests.AssignRoles request) {
 }
 ```
 
-必须通过集合 setter 替换；`user.getRoleCodes().add(...)` 不会触发 setter 跟踪。传 `[]` 清空角色或权限集合，不能用 `null` 清空列。`TransactionUtil` 从 `com.yulinlin.data.core.transaction` 导入，只向当前框架事务注册；`@Transactional` 由现有切面接入，最外层实际提交成功、旧框架上下文清理后执行回调，无框架事务直接报错。已替换案例原有的临时 `AfterCommit` 类。Repository 只声明普通查询和 CRUD，不放业务事务、不使用类级缓存覆盖认证查询。提交后的权限刷新通过 `findSnapshotById` 显式 `.autoUpdate(false)` 读取普通快照，不继续使用已经完成的原事务代理。
+必须通过集合 setter 替换；`user.getRoleCodes().add(...)` 不会触发 setter 跟踪。传 `[]` 清空角色或权限集合，不能用 `null` 清空列。`TransactionUtil` 从 `com.yulinlin.data.core.transaction` 导入，只向当前框架事务注册；`@Transactional` 由默认事务适配器接入，最外层实际提交成功、旧框架上下文清理后执行回调，无框架事务直接报错。已替换案例原有的临时 `AfterCommit` 类。Repository 只声明普通查询和 CRUD，不放业务事务、不使用类级缓存覆盖认证查询。提交后的权限刷新通过 `findSnapshotById` 显式 `.autoUpdate(false)` 读取普通快照，不继续使用已经完成的原事务代理。
 
 全部接口前缀为 `/rbac`：
 

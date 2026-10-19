@@ -24,7 +24,6 @@ import com.yulinlin.data.lang.util.StringUtil;
 import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.HashMap;
 import java.util.List;
@@ -161,8 +160,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     @SneakyThrows
     private  <E> E execute(BaseRequest request){
         ExecuteRequest<?> original = (ExecuteRequest<?>) request;
-        if (original.isQueued() && (isOpenTransaction()
-                || TransactionSynchronizationManager.isActualTransactionActive())) {
+        if (original.isQueued() && isOpenTransaction()) {
             throw new NoticeException("Delayed write queue cannot be used inside an active transaction. 请在事务外调用 queue()。");
         }
 
@@ -171,7 +169,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
         try {
             ExecuteRequest<?> req = (ExecuteRequest<?>) prepared.request();
             if (req.isQueued()) {
-                if (isOpenTransaction() || TransactionSynchronizationManager.isActualTransactionActive())
+                if (isOpenTransaction())
                     throw new NoticeException("延迟写队列必须在事务外调用，请在事务外调用 queue()。");
                 if (prepared.session().isOpenTransaction()) {
                     throw new NoticeException("Delayed write queue cannot use a session with an active transaction. 请在事务外调用 queue()。");

@@ -13,6 +13,9 @@ public class DataProperties {
      */
     private boolean autoUpdate;
 
+    /** 全局事务诊断日志，独立于各数据源的 SQL 日志，默认关闭。 */
+    private boolean transactionLog;
+
     private final QueueProperties queue = new QueueProperties();
 
     public boolean isAutoUpdate() {
@@ -22,6 +25,10 @@ public class DataProperties {
     public void setAutoUpdate(boolean autoUpdate) {
         this.autoUpdate = autoUpdate;
     }
+
+    public boolean isTransactionLog() { return transactionLog; }
+
+    public void setTransactionLog(boolean transactionLog) { this.transactionLog = transactionLog; }
 
     public QueueProperties getQueue() {
         return queue;

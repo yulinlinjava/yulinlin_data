@@ -54,6 +54,7 @@ public final class SqlParamsContext implements IParamsContext {
         return value;
     }
     @Override public String putGetKey(Object value) { return delegate.putGetKey(value); }
+    @Override public String putNumberGetKey(Number value) { return delegate.putNumberGetKey(value); }
     @Override public void put(String key, Object value) { delegate.put(key, value); }
     @Override public IDataBuffer getDataBuffer() { return delegate.getDataBuffer(); }
     @Override public AliasContent getAliasContent() {

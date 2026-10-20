@@ -35,12 +35,23 @@ public class AdminApplicationTests {
     public void go() throws Exception{
 
 
-        UserEntity userEntity = new UserEntity();
-        userEntity.setNickname("2215546");
-        userEntity.setUsername(SnowflakeUtil.nextIdStr());
-        userEntity.setPasswordHash("21213");
-        userService.insertOne(userEntity);
+        NumberEntity number = new NumberEntity();
 
+
+  /*      number.setId("1");
+        number.setNum(1);
+
+
+        EntityCounter.update(number).submit();
+
+        number = new NumberEntity();
+
+
+        number.setId("1");
+        number.setNum(2);
+        EntityCounter.update(number).submit();*/
+
+        Thread.sleep(70*1000);
         int a = 0;
 
 

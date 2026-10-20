@@ -14,6 +14,9 @@ public interface IParamsContext {
 
     String putGetKey(Object value);
 
+    /** 算术参数保留数字类型，不使用实体存储编码（例如 BigDecimal 转文本）。 */
+    default String putNumberGetKey(Number value) { return putGetKey(value); }
+
     void put(String key,Object value);
 
     default void put(Map<String,Object> data){

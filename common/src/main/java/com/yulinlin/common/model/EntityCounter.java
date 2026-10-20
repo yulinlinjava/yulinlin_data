@@ -16,13 +16,62 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 通过 {@link #update(Class, Object)} 按主键原子增减，
+ * 通过 {@link #update(Class, Object)} 或 {@link #update(Object)} 按主键原子增减，
  * 或通过 {@link #insert(Object)} 按非数字维度聚合插入。
  * <p>
  * {@link #execute()} 立即写入数据库；{@link #submit()} 在进程内按数据源、实体和主键聚合后写入。
  * Builder 只能终结一次，也不应跨线程共享。
  */
 public final class EntityCounter<E> {
+
+    /** 模型中的数字是增量，不是目标值；只读取主键和可更新数字字段。 */
+    public static <E> Update<E> update(E model) {
+        return new Update<>(null, model);
+    }
+
+    public static <E> Update<E> update(String session, E model) {
+        if (session == null || session.isBlank()) throw new IllegalArgumentException("数据源名称不能为空");
+        return new Update<>(session, model);
+    }
+
+    /** 模型增量更新；与链式 inc/dec 共用按主键聚合区。 */
+    public static final class Update<E> {
+        private final String session;
+        private final E model;
+        private Boolean clearCache;
+        private boolean completed;
+
+        private Update(String session, E model) {
+            this.session = session;
+            this.model = Objects.requireNonNull(model, "model");
+        }
+
+        public Update<E> clearCache(boolean clearCache) {
+            ensureOpen();
+            this.clearCache = clearCache;
+            return this;
+        }
+
+        /** 立即按主键执行数字增量，可加入当前事务，不执行普通实体更新钩子。 */
+        public int execute() {
+            return EntityCounterManager.required().executeUpdate(complete());
+        }
+
+        /** 此刻读取模型快照，提交到聚合区；必须在事务外调用。 */
+        public void submit() {
+            EntityCounterManager.required().submit(complete());
+        }
+
+        private EntityCounterManager.Command complete() {
+            ensureOpen();
+            completed = true;
+            return CounterUpdate.snapshot(session, model, clearCache);
+        }
+
+        private void ensureOpen() {
+            if (completed) throw new IllegalStateException("模型计数更新已经执行或提交");
+        }
+    }
 
     /** 按非数字字段维度聚合插入；不传数据源时使用实体注解和当前默认选库规则。 */
     public static <E> Insert<E> insert(E entity) {
@@ -125,7 +174,7 @@ public final class EntityCounter<E> {
 
     /** 立即执行并返回数据库影响行数，可加入当前事务。 */
     public int execute() {
-        return EntityCounterManager.required().execute(complete());
+        return EntityCounterManager.required().executeUpdate(complete());
     }
 
     /** 提交到进程内聚合器；该操作不加入调用线程事务，也不代表数据已经落库。 */
@@ -168,8 +217,10 @@ public final class EntityCounter<E> {
     private EntityCounterManager.Command complete() {
         ensureOpen();
         completed = true;
-        Map<String, Long> snapshot = Collections.unmodifiableMap(new LinkedHashMap<>(deltas));
-        return new EntityCounterManager.Command(session, entityClass, id, primaryKey, snapshot, clearCache);
+        Map<String, BigDecimal> snapshot = new LinkedHashMap<>();
+        deltas.forEach((field, delta) -> snapshot.put(field, BigDecimal.valueOf(delta)));
+        return new EntityCounterManager.Command(session, entityClass, CounterUpdate.freezeId(id),
+                primaryKey, Collections.unmodifiableMap(snapshot), clearCache);
     }
 
     private void ensureOpen() {

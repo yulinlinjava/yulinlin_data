@@ -21,7 +21,11 @@ public @interface JoinField {
 	/** 文本存储类型；仅影响启动 Schema 创建与校验，不改变编解码器。 */
 	TextTypeEnum textType() default TextTypeEnum.auto;
 
-	/** VARCHAR 最大字符数；0 表示沿用数据库默认值。 */
+	/**
+	 * 新建 VARCHAR 的最大字符数；已有列容量大于等于显式长度即可兼容。
+	 * 容量不足默认报错，显式开启数据源 alter-column-type 后可在 CREATE 模式扩容。
+	 * 0 表示使用框架/方言默认值（字符串主键默认 32），不校验已有列长度；SQLite 不强制长度。
+	 */
 	int textLength() default 0;
 
 	/** 数据库列用途说明；MySQL/H2 写入列注释，SQLite 无原生列注释。 */

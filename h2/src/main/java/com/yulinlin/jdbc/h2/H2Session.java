@@ -14,6 +14,7 @@ public class H2Session extends JdbcSession {
     private final H2SchemaManager schemaManager = new H2SchemaManager();
     private volatile DataSource schemaDataSource;
     private volatile SchemaMode schemaMode = SchemaMode.CREATE;
+    private volatile boolean alterColumnType;
 
     public H2Session(DataSource dataSource) {
         super(dataSource);
@@ -25,6 +26,7 @@ public class H2Session extends JdbcSession {
     void configure(H2Properties properties, DataSource schemaDataSource) {
         this.schemaDataSource = schemaDataSource;
         schemaMode = properties.getSchemaMode();
+        alterColumnType = properties.isAlterColumnType();
         setParallelConnections(properties.getParallelConnections());
         setExecuteBatchSize(properties.getExecuteBatchSize());
     }
@@ -42,13 +44,13 @@ public class H2Session extends JdbcSession {
         try (Connection connection = schemaDataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {
-                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode,
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode, alterColumnType,
                         sql -> executeSchemaSql(statement, sql));
             }
         } catch (RuntimeException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalStateException("Cannot initialize H2 schema", error);
+            throw new IllegalStateException("H2 表结构初始化失败；请检查数据源连接、数据库文件权限及下层异常原因", error);
         }
     }
 }

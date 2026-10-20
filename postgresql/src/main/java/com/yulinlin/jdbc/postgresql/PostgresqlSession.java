@@ -15,6 +15,7 @@ import java.util.List;
 public class PostgresqlSession extends JdbcSession {
     private final PostgresqlSchemaManager schemaManager = new PostgresqlSchemaManager();
     private volatile SchemaMode schemaMode = SchemaMode.NONE;
+    private volatile boolean alterColumnType;
     private volatile PostgresqlFullTextOptions fullText = PostgresqlFullTextOptions.defaults();
 
     public PostgresqlSession(DataSource dataSource) {
@@ -27,6 +28,7 @@ public class PostgresqlSession extends JdbcSession {
             throw new IllegalArgumentException("Invalid yulinlin.postgresql configuration");
         }
         schemaMode = properties.getSchemaMode();
+        alterColumnType = properties.isAlterColumnType();
         fullText = PostgresqlFullTextOptions.from(properties);
         setParseManager(new PostgresqlParseManager(fullText));
     }
@@ -44,13 +46,13 @@ public class PostgresqlSession extends JdbcSession {
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {
-                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode, fullText,
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode, fullText, alterColumnType,
                         sql -> executeSchemaSql(statement, sql));
             }
         } catch (RuntimeException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalStateException("Cannot initialize PostgreSQL schema", error);
+            throw new IllegalStateException("PostgreSQL 表结构初始化失败；请检查数据源连接、权限及下层异常原因", error);
         }
     }
 

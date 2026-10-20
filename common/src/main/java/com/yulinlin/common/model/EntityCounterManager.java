@@ -1,12 +1,17 @@
 package com.yulinlin.common.model;
 
 import com.yulinlin.data.core.exception.NoticeException;
+import com.yulinlin.data.core.anno.JoinTable;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.session.RouteSession;
+import com.yulinlin.data.core.wrapper.IUpdateWrapper;
+import com.yulinlin.data.core.wrapper.IConditionWrapper;
+import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.util.ThreadUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,7 +22,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -27,7 +31,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public final class EntityCounterManager implements AutoCloseable {
 
     record Command(String session, Class<?> entityClass, Object id, String primaryKey,
-                   Map<String, Long> deltas, Boolean clearCache) {
+                   Map<String, BigDecimal> deltas, Boolean clearCache) {
     }
 
     private record RowKey(String session, Class<?> entityClass, Object id, String primaryKey) {
@@ -53,26 +57,28 @@ public final class EntityCounterManager implements AutoCloseable {
     private record Window(ConcurrentHashMap<RowKey, RowAccumulator> updates,
                           ConcurrentHashMap<CounterInsert.Key, InsertRow> inserts) { }
 
-    private record RowSnapshot(RowKey key, Map<String, Long> deltas, boolean clearCache) {
+    private record RowSnapshot(RowKey key, Map<String, BigDecimal> deltas, boolean clearCache) {
     }
 
     private static final class RowAccumulator {
-        private final ConcurrentHashMap<String, LongAdder> deltas = new ConcurrentHashMap<>();
-        private final AtomicBoolean clearCache = new AtomicBoolean();
+        private Map<String, BigDecimal> deltas = Map.of();
+        private boolean clearCache;
 
-        void add(Map<String, Long> values, boolean clear) {
-            values.forEach((field, delta) -> deltas.computeIfAbsent(field, ignored -> new LongAdder()).add(delta));
-            if (clear) clearCache.set(true);
+        synchronized void add(Map<String, BigDecimal> values, boolean clear) {
+            // 一行的多个字段原子合并，计算失败时不留下部分增量。
+            Map<String, BigDecimal> merged = new LinkedHashMap<>(deltas);
+            values.forEach((field, delta) -> merged.merge(field, delta, BigDecimal::add));
+            deltas = merged;
+            clearCache |= clear;
         }
 
-        RowSnapshot snapshot(RowKey key) {
-            TreeMap<String, Long> sorted = new TreeMap<>();
+        synchronized RowSnapshot snapshot(RowKey key) {
+            TreeMap<String, BigDecimal> sorted = new TreeMap<>();
             deltas.forEach((field, delta) -> {
-                long value = delta.sum();
-                if (value != 0) sorted.put(field, value);
+                if (delta.signum() != 0) sorted.put(field, delta);
             });
             return new RowSnapshot(key,
-                    Collections.unmodifiableMap(new LinkedHashMap<>(sorted)), clearCache.get());
+                    Collections.unmodifiableMap(new LinkedHashMap<>(sorted)), clearCache);
         }
     }
 
@@ -106,7 +112,7 @@ public final class EntityCounterManager implements AutoCloseable {
         return manager;
     }
 
-    int execute(Command command) {
+    int executeUpdate(Command command) {
         ensureOpen();
         ExecuteRequest<?> request = request(command, clearCache(command));
         if (request == null) return 0;
@@ -146,12 +152,13 @@ public final class EntityCounterManager implements AutoCloseable {
         if (routeSession.isOpenTransaction()) {
             throw new NoticeException("EntityCounter.submit() 不能加入当前事务，请改用 execute() 或在事务外提交。");
         }
+        String group = routeSession.resolveWriteGroup(command.entityClass(), command.session());
 
         boolean flushNow;
         activeLock.readLock().lock();
         try {
             ensureOpen();
-            RowKey key = new RowKey(command.session(), command.entityClass(), command.id(), command.primaryKey());
+            RowKey key = new RowKey(group, command.entityClass(), command.id(), command.primaryKey());
             active.computeIfAbsent(key, ignored -> new RowAccumulator())
                     .add(command.deltas(), clearCache(command));
             flushNow = pendingRows() >= properties.getFlushSize();
@@ -255,16 +262,20 @@ public final class EntityCounterManager implements AutoCloseable {
     @SuppressWarnings({"rawtypes", "unchecked"})
     private ExecuteRequest<?> request(Command command, boolean clearCache) {
         if (command.deltas().isEmpty()) return null;
-        ModelUpdateWrapper wrapper = command.session() == null
-                ? ModelUpdateWrapper.newInstance(command.entityClass())
-                : ModelUpdateWrapper.newInstance(command.session(), command.entityClass());
+        JoinTable table = AnnotationUtil.findAnnotation(command.entityClass(), JoinTable.class);
+        if (table == null) throw new IllegalArgumentException("计数更新实体缺少 @JoinTable：" + command.entityClass().getName());
+        // 不走实体更新工厂，避免默认字段和 updateBefore 被转换成覆盖赋值。
+        IUpdateWrapper wrapper = routeSession.getWrapperFactory().createUpdateWrapper();
+        wrapper.table(table.value());
         command.deltas().forEach((field, delta) -> {
-            if (delta > 0) wrapper.inc(field, delta);
-            else if (delta < 0) wrapper.dec(field, -delta);
+            if (delta.signum() > 0) wrapper.fields().inc(field, CounterNumbers.parameter(delta));
+            else if (delta.signum() < 0) wrapper.fields().dec(field, CounterNumbers.parameter(delta.negate()));
         });
-        wrapper.eq(command.primaryKey(), command.id());
-        wrapper.clearCache(clearCache);
-        return wrapper.getRequest();
+        ((IConditionWrapper) wrapper.where()).eq(command.primaryKey(), command.id());
+        ExecuteRequest<?> request = ExecuteRequest.ofUpdate(command.entityClass());
+        request.setSession(command.session());
+        request.addRequest(wrapper);
+        return request.clearCache(clearCache);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

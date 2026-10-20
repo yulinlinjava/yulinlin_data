@@ -15,6 +15,7 @@ import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
+import com.yulinlin.jdbc.schema.SchemaErrors;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
 
 import java.lang.reflect.Modifier;
@@ -48,28 +49,40 @@ public final class SqliteSchemaManager {
     /** Does not close the connection, change autoCommit, or complete the caller's transaction. */
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
                                             SchemaMode mode, SchemaSqlExecutor executor) {
+        return ensureTable(connection, entity, underscore, mode, false, executor);
+    }
+
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            SchemaMode mode, boolean alterColumnType, SchemaSqlExecutor executor) {
+        executor = SchemaErrors.executor("sqlite", executor);
         Table table = table(entity, underscore);
         if (table == null || mode == SchemaMode.NONE) return false;
         Objects.requireNonNull(connection, "connection");
         try {
             if (!exists(connection, table.name())) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("SQLite table is missing: " + table.name());
+                    throw SchemaErrors.missing("sqlite", table.name(), mode);
                 }
                 if (connection.isReadOnly()) {
-                    throw new IllegalStateException("SQLite table " + table.name()
-                            + " is missing; initialize it outside a read-only transaction");
+                    throw SchemaErrors.readOnly("sqlite", table.name());
                 }
                 executor.execute(createBaseTableSql(table));
             }
             Map<String, Column> actual = readColumns(connection, table);
+            if (alterColumnType && mode == SchemaMode.CREATE) {
+                for (Column expected : table.columns()) {
+                    Column found = actual.get(expected.name().toLowerCase(Locale.ROOT));
+                    if (found != null && !found.type().equals(expected.type())) {
+                        throw incompatibleColumn(table, expected, found, mode, true);
+                    }
+                }
+            }
             actual = ensureColumns(connection, table, actual, mode, executor);
-            validate(table, actual);
+            validate(table, actual, mode, alterColumnType);
             ensureIndexes(connection, table, mode, executor);
             return true;
         } catch (SQLException e) {
-            throw new IllegalStateException("SQLite schema creation/validation failed for "
-                    + entity.getName() + " (" + table.name() + "): " + e.getMessage(), e);
+            throw SchemaErrors.failure("sqlite", table.name() + "（实体 " + entity.getName() + "）", e);
         }
     }
 
@@ -134,33 +147,30 @@ public final class SqliteSchemaManager {
                     || AnnotationUtil.findAnnotation(field, JoinLazy.class) != null) continue;
             String name = aliases.toColumn(field.getName());
             // Qualified names are fields of a joined/query-only model, not physical local columns.
-            if (name.contains(".")) throw new IllegalArgumentException("Qualified SQLite column in " + entity.getName() + ": " + name);
+            if (name.contains(".")) throw new IllegalArgumentException("SQLite 字段映射包含表限定名；请使用普通列名并检查 @JoinField。实体：" + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
             TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
             boolean primary = meta != null && meta.primaryKey();
             String type = storageType(field.getType());
             if (primary && text.type() == TextTypeEnum.text) {
-                throw new IllegalArgumentException("SQLite large-text column cannot be a primary key: "
+                throw new IllegalArgumentException("SQLite 自动 Schema 不支持大文本主键；请改用字符串或数字主键。字段："
                         + table.value() + "." + name);
             }
-            if (primary && "TEXT".equals(type) && text.length() > 128) {
-                throw new IllegalArgumentException("String primary-key textLength cannot exceed 128: "
-                        + entity.getName() + "." + field.getName());
-            }
-            int textLength = primary && "TEXT".equals(type) && text.length() == 0 ? 128 : text.length();
+            int textLength = primary && "TEXT".equals(type) && text.length() == 0
+                    ? TextColumnResolver.DEFAULT_PRIMARY_KEY_LENGTH : text.length();
             String ddl = "TEXT".equals(type) && textLength > 0 && text.type() != TextTypeEnum.text
                     ? "VARCHAR(" + textLength + ")" : type;
             var column = new Column(name, type, ddl, primary,
                     text.type() == TextTypeEnum.text, textLength);
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
-                throw new IllegalArgumentException("Duplicate SQLite column " + table.value() + "." + name);
+                throw new IllegalArgumentException("SQLite 存在重复列映射；请修正实体字段或 @JoinField(name)。列：" + table.value() + "." + name);
             }
             persistentFields.putIfAbsent(field.getName(), name);
         }
-        if (columns.isEmpty()) throw new IllegalArgumentException("No persistent columns: " + entity.getName());
+        if (columns.isEmpty()) throw new IllegalArgumentException("未找到持久化字段；请检查实体字段及 @JoinField(exist=false) 配置。实体：" + entity.getName());
         if (columns.values().stream().filter(Column::primary).count() > 1) {
-            throw new IllegalArgumentException("Composite primary keys are not supported by ORM model operations: " + entity.getName());
+            throw new IllegalArgumentException("ORM 模型操作不支持复合主键；请仅保留一个主键字段，或使用自定义 SQL 管理复合主键表。实体：" + entity.getName());
         }
         List<EntityIndexResolver.Definition> indexes =
                 EntityIndexResolver.resolve(entity, table.value(), persistentFields);
@@ -170,7 +180,7 @@ public final class SqliteSchemaManager {
             for (String name : index.columns()) {
                 Column column = byName.get(name.toLowerCase(Locale.ROOT));
                 if (column != null && column.largeText()) {
-                    throw new IllegalArgumentException("SQLite auto-schema cannot index large-text column "
+                    throw new IllegalArgumentException("SQLite 自动 Schema 不支持声明的大文本索引；请移除该 @JoinIndex 字段或手动设计索引。字段："
                             + table.value() + "." + column.name());
                 }
             }
@@ -194,7 +204,8 @@ public final class SqliteSchemaManager {
             statement.setString(1, name);
             try (var rows = statement.executeQuery()) {
                 if (!rows.next()) return false;
-                if (!"table".equals(rows.getString(1))) throw new IllegalStateException("SQLite object is not a table: " + name);
+                if (!"table".equals(rows.getString(1))) throw SchemaErrors.problem("sqlite", name,
+                        "同名对象不是普通表", "请核对实体表名与数据库对象；视图等对象应关闭 autoSchema，不能通过开关转换为表");
                 return true;
             }
         }
@@ -207,11 +218,10 @@ public final class SqliteSchemaManager {
         boolean changed = false;
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
-            if (expected.primary()) throw incompatibleColumn(table, expected, null);
-            if (mode == SchemaMode.VALIDATE) throw incompatibleColumn(table, expected, null);
+            if (expected.primary()) throw incompatibleColumn(table, expected, null, mode, false);
+            if (mode == SchemaMode.VALIDATE) throw incompatibleColumn(table, expected, null, mode, false);
             if (connection.isReadOnly()) {
-                throw new IllegalStateException("SQLite column " + table.name() + "." + expected.name()
-                        + " is missing; initialize it outside a read-only transaction");
+                throw SchemaErrors.readOnly("sqlite", table.name() + "." + expected.name());
             }
             try {
                 executor.execute(addColumnSql(table.name(), expected));
@@ -227,8 +237,7 @@ public final class SqliteSchemaManager {
         Map<String, Column> updated = readColumns(connection, table);
         for (Column expected : table.columns()) {
             if (!updated.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
-                throw new IllegalStateException("SQLite column was not created: "
-                        + table.name() + "." + expected.name());
+                throw SchemaErrors.missing("sqlite", table.name() + "." + expected.name(), mode);
             }
         }
         return updated;
@@ -241,7 +250,8 @@ public final class SqliteSchemaManager {
                 String name = rows.getString("name");
                 if (rows.getInt("hidden") != 0) {
                     if (table.columns().stream().anyMatch(c -> c.name().equalsIgnoreCase(name))) {
-                        throw new IllegalStateException("SQLite mapped column is generated/hidden: " + table.name() + "." + name);
+                        throw SchemaErrors.problem("sqlite", table.name() + "." + name, "映射字段对应生成列或隐藏列",
+                                "请核对实体映射并手动迁移；自动 Schema 不管理生成列或隐藏列，改列开关不能解除限制");
                     }
                     continue;
                 }
@@ -253,21 +263,27 @@ public final class SqliteSchemaManager {
         return actual;
     }
 
-    private static void validate(Table table, Map<String, Column> actual) {
+    private static void validate(Table table, Map<String, Column> actual, SchemaMode mode, boolean alterColumnType) {
         for (Column expected : table.columns()) {
             Column column = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (column == null || !column.type().equals(expected.type()) || column.primary() != expected.primary()) {
-                throw incompatibleColumn(table, expected, column);
+                throw incompatibleColumn(table, expected, column, mode, alterColumnType);
             }
         }
         if (actual.values().stream().filter(Column::primary).count() != table.columns().stream().filter(Column::primary).count()) {
-            throw new IllegalStateException("Incompatible SQLite primary key: " + table.name());
+            throw SchemaErrors.primary("sqlite", table.name());
         }
     }
 
-    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
-        return new IllegalStateException("Incompatible SQLite column " + table.name() + "." + expected.name()
-                + ": expected " + expected + ", actual " + actual + "; migrate manually");
+    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual,
+                                                            SchemaMode mode, boolean alterColumnType) {
+        return SchemaErrors.column("sqlite", table.name(), diagnosticColumn(expected),
+                actual == null ? null : diagnosticColumn(actual), mode, alterColumnType);
+    }
+
+    private static SchemaErrors.Column diagnosticColumn(Column column) {
+        return new SchemaErrors.Column(column.name(), column.type(), column.ddl(),
+                column.primary(), column.textLength());
     }
 
     private static void ensureIndexes(Connection connection, Table table,
@@ -280,11 +296,10 @@ public final class SqliteSchemaManager {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("SQLite index is missing: " + expected.name());
+                    throw SchemaErrors.missing("sqlite", table.name() + " 索引 " + expected.name(), mode);
                 }
                 if (connection.isReadOnly()) {
-                    throw new IllegalStateException("SQLite index " + expected.name()
-                            + " is missing; initialize it outside a read-only transaction");
+                    throw SchemaErrors.readOnly("sqlite", table.name() + " 索引 " + expected.name());
                 }
                 createIndex(table.name(), expected, executor);
                 created = true;
@@ -297,7 +312,7 @@ public final class SqliteSchemaManager {
             for (EntityIndexResolver.Definition expected : table.indexes()) {
                 ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
                 if (found == null) {
-                    throw new IllegalStateException("SQLite index was not created: " + expected.name());
+                    throw SchemaErrors.missing("sqlite", table.name() + " 索引 " + expected.name(), mode);
                 }
                 validateIndex(table.name(), expected, found);
             }
@@ -349,10 +364,8 @@ public final class SqliteSchemaManager {
     private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {
         if (expected.unique() != actual.unique() || !actual.plain()
                 || !sameColumns(expected.columns(), actual.columns())) {
-            throw new IllegalStateException("Incompatible SQLite index " + table + "." + expected.name()
-                    + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
-                    + "; actual columns=" + actual.columns() + ", unique=" + actual.unique()
-                    + "; migrate manually");
+            throw SchemaErrors.index("sqlite", table + "." + expected.name(), expected.columns(), expected.unique(),
+                    actual.columns(), actual.unique(), actual.plain());
         }
     }
 
@@ -375,7 +388,7 @@ public final class SqliteSchemaManager {
 
     private static void identifier(String name) {
         if (!name.matches("[\\p{L}_][\\p{L}\\p{N}_]*") || name.toLowerCase(Locale.ROOT).startsWith("sqlite_")) {
-            throw new IllegalArgumentException("SQLite schema needs a plain table/column name: " + name);
+            throw new IllegalArgumentException("SQLite 表名或列名不合法；请使用受支持的普通标识符，不要传入 SQL 表达式。当前值：" + name);
         }
     }
     private static String quote(String name) { return "\"" + name.replace("\"", "\"\"") + "\""; }

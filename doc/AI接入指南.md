@@ -298,17 +298,96 @@ private String content;
 
 时间字段不接受 `textType` 或 `textLength`；这两个选项只用于真正按文本编解码的字段。
 
-字符串主键统一按短标识处理：未指定长度时自动创建为 `VARCHAR(128)`，显式 `textLength` 只能是 1～128；超过 128 或把大文本声明为主键会在启动建表前报错。框架生成的普通/唯一索引也不接受大文本列。
+字符串主键未指定长度（`textLength=0`）时统一创建为 `VARCHAR(32)`；显式指定正整数 `textLength` 时按注解生成，不再限制为最多 128。长度单位是字符，不是 bit；例如下面表示最多 64 个字符的字符串主键。数据库自身的列长度、主键索引字节数等限制仍然适用，大文本仍禁止作为主键或框架自动索引。
+
+```java
+@JoinField(textLength = 64)
+@JoinMeta(primaryKey = true)
+private String id;
+```
+
+MySQL/PostgreSQL/H2 会约束 VARCHAR 长度，SQLite 只保留 `VARCHAR(n)` 声明，不强制字符长度。默认值变更仅影响新建列，不自动缩短已有主键；未显式指定长度时，不校验已有列长度。显式指定长度时按容量兼容：已有列长度大于等于要求即可通过，例如实体要求 32、旧列为 128，无需改表；实体要求 64、旧列只有 32，默认报错，可手动扩容或显式开启下文的 `alter-column-type`。此规则同时适用于字符串主键和普通 VARCHAR 字段；主键约束缺失仍报错，默认不自动修改已有类型。
 
 `description` 最多 1024 个字符。新建表或补充新列时，MySQL 写入列 `COMMENT`，PostgreSQL/H2 执行 `COMMENT ON COLUMN`；SQLite 没有原生列注释，因此只接受该元数据但不落库。已有列不会因为 description 变化而执行 ALTER，注释也不参与兼容性校验。
 
-这些选项只服务于启动 Schema 描述，不改变运行期 SQL 编解码器，也不会在 Java 端截断或校验字符串。MySQL/PostgreSQL/H2 会校验显式 VARCHAR 长度；SQLite 不执行或校验 VARCHAR 长度限制，确需强制长度应使用业务校验或自行添加 CHECK 约束。
+这些选项只服务于启动 Schema 描述，不改变运行期 SQL 编解码器，也不会在 Java 端截断或校验字符串。MySQL/PostgreSQL/H2 对显式 VARCHAR 长度只检查已有列容量是否足够，实际可写长度由数据库列决定；SQLite 不执行或校验 VARCHAR 长度限制，确需强制长度应使用业务校验或自行添加 CHECK 约束。
 
 SQLite 的整数/布尔值对应 INTEGER，浮点数对应 REAL，其余默认 TEXT。日期、枚举、BigDecimal、JSON 对象等使用 TEXT；字符串与数字仍由 JDBC 编解码器恢复 Java 字段。日期范围依赖统一、可按字典序排序的固定格式与时区；TEXT BigDecimal 的字符串比较不等于数值比较，数值范围或统计需要适当列类型或显式 SQL CAST。
 
-自动 Schema 不会修改已有列类型。升级后，如果时间字段原来由自动建表创建成 VARCHAR/TEXT，启用 `schema-mode=CREATE` 或 `VALIDATE` 会报告类型不兼容；需要先通过数据库迁移脚本把已有列转换成目标时间类型。SQLite 不需要迁移。
+自动 Schema 默认不会修改已有列类型。升级后，如果时间字段原来由自动建表创建成 VARCHAR/TEXT，会报告类型不兼容；可以先通过数据库迁移脚本转换，或在人工确认格式与数据可转换后按下文显式启用改列。SQLite 的时间仍使用 TEXT，不需要该类型迁移。
 
 启动完成后，CRUD 和自定义 SQL 均不再检查或修改 Schema。`BaseRequest.fromClass` 为 null、Object.class 或任意类型都不会触发 DDL；它原有的映射与路由语义不变。自定义 SQL 涉及的表若不在扫描实体中，应由迁移脚本或其他初始化流程创建。
+
+#### 显式允许修改列类型
+
+仅在用户已人工确认现有数据可转换、且已备份时启用。开关默认 `false`，各数据源独立配置，不改变其他数据源：
+
+```yaml
+yulinlin:
+  mysql:
+    schema-mode: CREATE
+    schema-packages:
+      - "com.example.domain"
+    alter-column-type: true
+  postgresql:
+    alter-column-type: false
+  h2:
+    alter-column-type: false
+```
+
+只处理扫描中 `@JoinTable(autoSchema=true)` 的结构拥有者，启动阶段执行；`schema-mode=NONE` 不操作，`VALIDATE` 即使开启此开关也只校验。不扫描业务数据提前判断转换是否安全，失败由数据库报告；该开关不是忽略校验。
+
+| 现有结构与实体目标 | 开关开启后的 CREATE 行为 |
+| --- | --- |
+| 列存储类型不同 | 按实体当前 Schema 映射生成改类型 DDL，执行后重新读取结构校验 |
+| 同为字符串，显式要求 64，已有 32 | 扩容至 64 |
+| 同为字符串，要求 32，已有 128 | 保留 128，不缩短 |
+| 未显式指定长度 | 不因默认长度变化而修改旧列长度 |
+| 主键缺失或主键标记不一致 | 仍报错，不自动增删主键 |
+| SQLite 类型 affinity 不一致 | 明确提示不支持自动改类型，需手动重建表并迁移数据 |
+
+数据库边界：
+
+- MySQL 使用 `MODIFY COLUMN`，读取并保留已有非空、普通字面量默认值、注释，以及仍为文本时的字符集/排序规则；不以注解中的新 description 覆盖已有注释。要求连接启用严格 SQL 模式。含表达式默认值、ON UPDATE、不可见、UNSIGNED/ZEROFILL、ENUM/SET 等复杂属性的待修改列，保守拒绝自动修改。
+- PostgreSQL 使用 `ALTER COLUMN TYPE ... USING CAST(...)`；H2 使用 `ALTER COLUMN ... SET DATA TYPE ...`。不主动删除默认值、注释、主键或索引来促成转换；默认值、约束、视图或依赖对象不能适配新类型时停止启动，请手动迁移。
+- 三个支持的数据库均拒绝自动修改自增/标识列、生成列、引用外键或被外键引用的列。其他索引与约束交给数据库原生改列语句保留，数据库拒绝时不会自动删约束重试。
+- 目标类型沿用现有实体映射，不新增 `columnDefinition` 或任意 `USING` 表达式配置；例如 String 改为 Long 才对应字符串转 BIGINT，BigDecimal 仍遵循各模块既有文本存储规则。
+
+转换可能改变数据含义，例如 `"001"` 变成 `1`、小数转整数、时间解析、类型转换后唯一键冲突。需人工确认值域、格式、精度和唯一性，框架不保证无损。不执行同类字符串的长度缩短，但其他类型转换仍可能有精度/值域变化。
+
+所有执行的 DDL 由 Session 先打印完整 SQL；改列失败的异常包含中文说明及对应 SQL，启动中止。大表可能锁表或重写数据，多列/多表修改不保证整体回滚，已经完成的 DDL 可能保留；修复后重新启动会读取实际结构，不做自动补偿。建议在维护窗口执行，完成迁移后关闭此开关。
+
+#### 表结构错误排查
+
+MySQL、PostgreSQL、H2、SQLite 的结构冲突使用中文提示，列出数据库类型、表/列、原因、实体要求、数据库现有结构及处理方式，不再直接输出内部 `Column[...]` 对象。例如：
+
+```text
+数据库表结构检查失败
+数据库类型：mysql
+对象：orders.amount
+原因：字段存储类型不同
+实体要求：BIGINT，非主键
+数据库现有：VARCHAR(255)，非主键
+处理方式：自动改列未开启。请手动迁移；或确认数据可转换并备份后，
+设置 yulinlin.mysql.alter-column-type: true，并确保
+yulinlin.mysql.schema-mode: CREATE。修改类型可能锁表或改变数据精度
+```
+
+| 提示原因 | 处理方式 |
+| --- | --- |
+| 类型不同，或显式字符串容量不足 | 先核对实体是否正确。确需迁移时，备份并人工确认数据可转换，再手动改列或使用支持数据库的 `CREATE + alter-column-type=true` |
+| 当前为 `VALIDATE` | 只检查，不执行 DDL；开启改列开关也不会修改。手动迁移，或明确切换 `CREATE` |
+| 主键标记/字段集合不一致，缺失主键列 | 核对 `@JoinMeta(primaryKey=true)`；检查空值、重复值和外键后手动迁移。改列开关不负责增删主键 |
+| 索引定义冲突 | 核对字段顺序、唯一性及索引形式；手动迁移，不会自动删除或替换已有索引 |
+| SQLite 列类型不兼容 | 备份后手动重建表并迁移数据；改列开关不能解除 SQLite 的实现限制 |
+| 自增、生成列、外键或特殊列属性 | 提示具体受限原因；使用迁移脚本处理，不会为了转换而删除约束 |
+| 缺失表、普通列或索引 | `VALIDATE` 下手动补齐或切换 `CREATE`；`CREATE` 下仍缺失时检查实际数据库、权限及前面的 DDL 日志 |
+| 同一张表存在多个自动建表实体 | 同一表只保留一个完整实体的 `autoSchema=true`；DTO 不开启；测试实体放在测试源码且位于业务扫描包之外 |
+| DDL 执行失败 | 查看失败 SQL 与数据库原始错误，核对值域、格式、唯一性、默认值、约束和权限；检查此前 DDL 是否已生效再恢复 |
+
+较长的已有 VARCHAR 不视为冲突：要求 32、已有 128 时继续使用，不缩短、不报错。提示中的类型是框架归一化后的存储类型；精确原始定义以数据库元数据/建表语句为准。`数据库类型` 不是自定义数据源 group，定位连接请结合 Session 的 `[group][schema]` 日志。
+
+框架说明使用中文，数据库驱动原始错误原样保留，异常链及 SQLState/错误码也保留。结构 SQL 失败会中止初始化，但多条 DDL **不保证整体回滚**；不能将“重启失败”理解为“数据库完全没改动”。
 
 #### 预览建表 SQL
 
@@ -326,7 +405,7 @@ ddl.forEach(System.out::println);
 
 #### Schema 边界
 
-这不是完整的版本迁移工具：`CREATE` 会创建缺失表、缺失普通列和缺失的声明索引；新增列通过 `ALTER TABLE ... ADD COLUMN` 执行。它不会自动增加或修改主键，不修改已有列类型，也不删除旧列/旧索引或添加外键、复合主键。框架无法识别字段改名：改名会被视为“增加新列”，旧列和旧数据仍保留，但数据不会自动搬到新列，因此改名必须使用业务迁移脚本。所有实际执行的 DDL 都会先以 INFO 日志打印，并且发生在会话 Bean 初始化阶段，不进入后续业务事务。
+这不是完整的版本迁移工具：`CREATE` 会创建缺失表、缺失普通列和缺失的声明索引；新增列通过 `ALTER TABLE ... ADD COLUMN` 执行。MySQL/PostgreSQL/H2 只有显式开启 `alter-column-type` 才允许上述受限的类型修改和扩容。它不会自动增加或修改主键，也不删除旧列/旧索引或添加外键、复合主键。框架无法识别字段改名：改名会被视为“增加新列”，旧列和旧数据仍保留，但数据不会自动搬到新列，因此改名必须使用业务迁移脚本。所有实际执行的 DDL 都会先以 INFO 日志打印，并且发生在会话 Bean 初始化阶段，不进入后续业务事务。`createTableSql` 只预览新建结构，不读取现有元数据，因此不是改列迁移计划。
 
 SQLite 使用继承 JdbcSession 的 SqliteSession，复用公共 CRUD；不需要 DataSource Bean 或 sqliteTransactionManager。SqliteDatabase 持有并关闭内部连接池。`supportsParallelWrites()` 返回 false，多连接批处理不会拆组；WAL 也不能让同一文件同时拥有多个写事务。
 
@@ -744,7 +823,7 @@ MySQL/PostgreSQL/SQLite/H2 若已在第一专题配置启动扫描，DemoUser �
 
 ```sql
 CREATE TABLE ai_demo_user (
-    id VARCHAR(128) NOT NULL PRIMARY KEY,
+    id VARCHAR(32) NOT NULL PRIMARY KEY,
     user_name VARCHAR(100),
     status INT
 );
@@ -756,7 +835,7 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 | --- | --- |
 | JoinTable | 表或 SQL JOIN 映射；autoSchema 默认 false，只有完整结构实体明确设为 true 才参与启动 Schema |
 | JoinField(name = "...") | Java 属性与列名映射 |
-| JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认且最多 128 |
+| JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认 32，显式长度按注解，仍受数据库限制 |
 | JoinField(textType = TextTypeEnum.text) | 自动 Schema 使用大文本；不能作为主键或框架声明索引 |
 | JoinField(description = "...") | 列用途说明；MySQL/PostgreSQL/H2 新表或新列写入注释，SQLite 不落库 |
 | JoinField(fullText = true) | PostgreSQL 为该文本列维护 pg_jieba GIN 全文索引；其他数据库忽略 |
@@ -1348,7 +1427,7 @@ EntityCounter.update(VideoEntity.class, videoId)
 | `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 加入当前路由事务，包括适配后的 `@Transactional` |
 | `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
 
-聚合键是“数据源选择器 + 实体类型 + 主键”，字段增量保存在该行下面。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
+聚合键是“调用线程解析出的数据源组 + 实体类型 + 主键”，字段增量保存在该行下面。默认选库和显式指定相同组时可以合并，模型更新与链式更新也共用聚合区。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
 
 ```yaml
 yulinlin:
@@ -1361,9 +1440,45 @@ yulinlin:
 
 `flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
 
-上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc/dec` 的数量仍必须是 `long` 范围内的非负整数；下面插入模式的小数支持不会改变这个旧接口。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
+上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc/dec` 的数量仍必须是 `long` 范围内的非负整数；模型更新与插入模式的小数支持不会改变这个接口。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
 
 这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
+
+#### 通过模型提交更新增量
+
+只需要设置主键和本次的数字增量，不必逐个调用 `inc/dec`；原来的链式 API 仍保留。
+
+```java
+VideoEntity delta = new VideoEntity();
+delta.setId(videoId);
+delta.setViewCount(10L);       // 数据库原值 + 10，不是设置为 10
+delta.setHotValue(5L);        // 同一行的另一个计数
+delta.setRemainingQuota(-1L); // 数据库原值 - 1
+
+EntityCounter.update("mysql", delta).submit();
+// 替代选择：EntityCounter.update(delta).submit(); // 默认选库
+// 替代选择：int affected = EntityCounter.update(delta).clearCache(true).execute();
+```
+
+字段规则：
+
+| 字段 | 模型更新行为 |
+| --- | --- |
+| `@JoinMeta(primaryKey=true)` | 必须恰好一个且值非空，仅生成主键条件；即使是数字也不参与累加，允许 `update=false` |
+| 可更新数字字段 | 正值增加、负值减少，null 和 0 忽略；支持多个字段 |
+| 字符串、时间、枚举、布尔等非数字字段 | 忽略，不作为条件或覆盖赋值 |
+| `@JoinField(exist=false/update=false)`、静态、transient、合成字段 | 不参与增量更新 |
+
+支持 byte/short/int/long/float/double 及包装类、BigInteger、BigDecimal、AtomicInteger、AtomicLong、LongAdder、DoubleAdder。原子类读取当前值或 sum，不修改/清零调用对象；NaN、无穷和不支持的 Number 子类拒绝提交。数字增量在内存中用 BigDecimal 合并，避免大整数或小数被转成 long 截断；不承诺数据库浮点列的十进制精度。
+
+注意：
+
+- 必须使用新建的“增量模型”，不要将查回的完整实体直接传入，否则所有非零可更新数字（包括状态码、排序值、默认值）都会成为增量。此接口不是普通 `update(entity)`。
+- 在 `execute/submit` 时读取快照，随后修改实体或原子类不会改变已提交数据；同一对象重复提交仍会重复累计。不要并发修改同一个模型来期待多字段整体原子快照。
+- 仅生成数字加减和主键条件，不调用实体 `updateBefore`，不自动更新时间或执行版本号乐观锁逻辑。无需通过无参构造器复制实体。
+- 所有增量为空/零时 `execute()` 返回 0，`submit()` 不入队；同一窗口相反增量抵消后不执行 SQL。主键不存在则更新 0 行，不会自动插入。
+- SQL 更新字段必须是支持算术运算的数据库数字列。BigDecimal/BigInteger 自动建表仍沿用原存储规则；如果列为 TEXT/VARCHAR，尤其 PostgreSQL，需要业务先迁移为合适的 NUMERIC 列，本功能不自动改列。最终数值范围/精度由数据库决定；列值为 NULL 时也不自动补零。
+- 模型和链式计数更新共享刷新间隔、阈值、缓存策略和失败恢复机制；`execute()` 可加入当前事务，`submit()` 必须在事务外调用。进程内聚合不是可靠消息队列。
 
 #### 按维度聚合插入统计数据
 
@@ -4158,6 +4273,8 @@ public class UserEntity extends IdEntity<UserEntity> {
 `nextIncrId()` 会用表中当前最大 ID 初始化进程内计数器，之后在本进程递增。它不是数据库自增 ID，也不保证多实例唯一；分布式业务保持默认 Snowflake 策略或接入统一 ID 服务。
 
 `IncrementEntity` 的动态表名/列名方式仅为旧代码保留，已经废弃。已有视频记录使用 `EntityCounter.update(VideoEntity.class, videoId).inc(VideoEntity::getViewCount).submit()`；统计明细使用 `EntityCounter.insert(stat).submit()`，非数字字段作为维度、数字字段分别累加，默认一分钟批量插入。不要提前填充统计实体的 ID/时间，以免它们意外成为不同维度。立即写入、类型范围、聚合规则、配置和数据丢失边界见[实体计数器](02-CRUD与统计分析.md#实体计数器)。
+
+多字段增量也可以新建模型，仅设置主键和本次增量后调用 `EntityCounter.update("mysql", delta).submit()`，或 `EntityCounter.update(delta).execute()` 立即写入。数字正值增加、负值减少，非数字字段忽略，主键只作条件。不要传入查回的完整实体：它不是覆盖更新，已有的非零数字都会再次累加。模型更新不触发 `updateBefore`、自动更新时间或版本校验，完整用例见 [通过模型提交更新增量](02-CRUD与统计分析.md#通过模型提交更新增量)。
 
 #### `SuperEntity`
 

@@ -38,7 +38,7 @@ MySQL/PostgreSQL/SQLite/H2 若已在第一专题配置启动扫描，DemoUser �
 
 ```sql
 CREATE TABLE ai_demo_user (
-    id VARCHAR(128) NOT NULL PRIMARY KEY,
+    id VARCHAR(32) NOT NULL PRIMARY KEY,
     user_name VARCHAR(100),
     status INT
 );
@@ -50,7 +50,7 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 | --- | --- |
 | JoinTable | 表或 SQL JOIN 映射；autoSchema 默认 false，只有完整结构实体明确设为 true 才参与启动 Schema |
 | JoinField(name = "...") | Java 属性与列名映射 |
-| JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认且最多 128 |
+| JoinField(textLength = 120) | 自动 Schema 的 VARCHAR 字符上限；字符串主键默认 32，显式长度按注解，仍受数据库限制 |
 | JoinField(textType = TextTypeEnum.text) | 自动 Schema 使用大文本；不能作为主键或框架声明索引 |
 | JoinField(description = "...") | 列用途说明；MySQL/PostgreSQL/H2 新表或新列写入注释，SQLite 不落库 |
 | JoinField(fullText = true) | PostgreSQL 为该文本列维护 pg_jieba GIN 全文索引；其他数据库忽略 |
@@ -642,7 +642,7 @@ EntityCounter.update(VideoEntity.class, videoId)
 | `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 加入当前路由事务，包括适配后的 `@Transactional` |
 | `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
 
-聚合键是“数据源选择器 + 实体类型 + 主键”，字段增量保存在该行下面。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
+聚合键是“调用线程解析出的数据源组 + 实体类型 + 主键”，字段增量保存在该行下面。默认选库和显式指定相同组时可以合并，模型更新与链式更新也共用聚合区。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
 
 ```yaml
 yulinlin:
@@ -655,9 +655,45 @@ yulinlin:
 
 `flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
 
-上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc/dec` 的数量仍必须是 `long` 范围内的非负整数；下面插入模式的小数支持不会改变这个旧接口。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
+上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc/dec` 的数量仍必须是 `long` 范围内的非负整数；模型更新与插入模式的小数支持不会改变这个接口。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
 
 这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
+
+### 通过模型提交更新增量
+
+只需要设置主键和本次的数字增量，不必逐个调用 `inc/dec`；原来的链式 API 仍保留。
+
+```java
+VideoEntity delta = new VideoEntity();
+delta.setId(videoId);
+delta.setViewCount(10L);       // 数据库原值 + 10，不是设置为 10
+delta.setHotValue(5L);        // 同一行的另一个计数
+delta.setRemainingQuota(-1L); // 数据库原值 - 1
+
+EntityCounter.update("mysql", delta).submit();
+// 替代选择：EntityCounter.update(delta).submit(); // 默认选库
+// 替代选择：int affected = EntityCounter.update(delta).clearCache(true).execute();
+```
+
+字段规则：
+
+| 字段 | 模型更新行为 |
+| --- | --- |
+| `@JoinMeta(primaryKey=true)` | 必须恰好一个且值非空，仅生成主键条件；即使是数字也不参与累加，允许 `update=false` |
+| 可更新数字字段 | 正值增加、负值减少，null 和 0 忽略；支持多个字段 |
+| 字符串、时间、枚举、布尔等非数字字段 | 忽略，不作为条件或覆盖赋值 |
+| `@JoinField(exist=false/update=false)`、静态、transient、合成字段 | 不参与增量更新 |
+
+支持 byte/short/int/long/float/double 及包装类、BigInteger、BigDecimal、AtomicInteger、AtomicLong、LongAdder、DoubleAdder。原子类读取当前值或 sum，不修改/清零调用对象；NaN、无穷和不支持的 Number 子类拒绝提交。数字增量在内存中用 BigDecimal 合并，避免大整数或小数被转成 long 截断；不承诺数据库浮点列的十进制精度。
+
+注意：
+
+- 必须使用新建的“增量模型”，不要将查回的完整实体直接传入，否则所有非零可更新数字（包括状态码、排序值、默认值）都会成为增量。此接口不是普通 `update(entity)`。
+- 在 `execute/submit` 时读取快照，随后修改实体或原子类不会改变已提交数据；同一对象重复提交仍会重复累计。不要并发修改同一个模型来期待多字段整体原子快照。
+- 仅生成数字加减和主键条件，不调用实体 `updateBefore`，不自动更新时间或执行版本号乐观锁逻辑。无需通过无参构造器复制实体。
+- 所有增量为空/零时 `execute()` 返回 0，`submit()` 不入队；同一窗口相反增量抵消后不执行 SQL。主键不存在则更新 0 行，不会自动插入。
+- SQL 更新字段必须是支持算术运算的数据库数字列。BigDecimal/BigInteger 自动建表仍沿用原存储规则；如果列为 TEXT/VARCHAR，尤其 PostgreSQL，需要业务先迁移为合适的 NUMERIC 列，本功能不自动改列。最终数值范围/精度由数据库决定；列值为 NULL 时也不自动补零。
+- 模型和链式计数更新共享刷新间隔、阈值、缓存策略和失败恢复机制；`execute()` 可加入当前事务，`submit()` 必须在事务外调用。进程内聚合不是可靠消息队列。
 
 ### 按维度聚合插入统计数据
 

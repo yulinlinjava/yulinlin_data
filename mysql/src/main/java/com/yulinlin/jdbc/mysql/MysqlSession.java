@@ -13,6 +13,7 @@ import java.util.List;
 public class MysqlSession extends JdbcSession {
     private final MysqlSchemaManager schemaManager = new MysqlSchemaManager();
     private volatile SchemaMode schemaMode = SchemaMode.NONE;
+    private volatile boolean alterColumnType;
 
     public MysqlSession(DataSource dataSource) {
         super(dataSource);
@@ -24,6 +25,7 @@ public class MysqlSession extends JdbcSession {
             throw new IllegalArgumentException("Invalid yulinlin.mysql configuration");
         }
         schemaMode = properties.getSchemaMode();
+        alterColumnType = properties.isAlterColumnType();
     }
 
     @Override
@@ -39,13 +41,13 @@ public class MysqlSession extends JdbcSession {
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {
-                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode,
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode, alterColumnType,
                         sql -> executeSchemaSql(statement, sql));
             }
         } catch (RuntimeException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalStateException("Cannot initialize MySQL schema", error);
+            throw new IllegalStateException("MySQL 表结构初始化失败；请检查数据源连接、权限及下层异常原因", error);
         }
     }
 }

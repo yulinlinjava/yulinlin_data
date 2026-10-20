@@ -17,6 +17,7 @@ import java.util.List;
 public class SqliteSession extends JdbcSession {
     private final SqliteSchemaManager schemaManager = new SqliteSchemaManager();
     private volatile SchemaMode schemaMode = SchemaMode.CREATE;
+    private volatile boolean alterColumnType;
 
     public SqliteSession(DataSource dataSource) {
         super(dataSource);
@@ -34,6 +35,7 @@ public class SqliteSession extends JdbcSession {
             throw new IllegalArgumentException("Invalid yulinlin.sqlite configuration");
         }
         schemaMode = properties.getSchemaMode();
+        alterColumnType = properties.isAlterColumnType();
         setParallelConnections(1);
     }
 
@@ -58,13 +60,13 @@ public class SqliteSession extends JdbcSession {
         try (Connection connection = dataSource.getConnection();
              Statement statement = connection.createStatement()) {
             for (Class<?> entity : entities) {
-                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode,
+                schemaManager.ensureTable(connection, entity, isMapUnderscoreToCamelCase(), schemaMode, alterColumnType,
                         sql -> executeSchemaSql(statement, sql));
             }
         } catch (RuntimeException error) {
             throw error;
         } catch (Exception error) {
-            throw new IllegalStateException("Cannot initialize SQLite schema", error);
+            throw new IllegalStateException("SQLite 表结构初始化失败；请检查数据库文件、写入权限及下层异常原因", error);
         }
     }
 }

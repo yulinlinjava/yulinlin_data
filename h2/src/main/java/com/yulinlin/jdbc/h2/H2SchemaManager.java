@@ -16,6 +16,8 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
+import com.yulinlin.jdbc.schema.SchemaColumnAlter;
+import com.yulinlin.jdbc.schema.SchemaErrors;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
 
 import java.lang.reflect.Modifier;
@@ -73,32 +75,39 @@ public final class H2SchemaManager {
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
                                             SchemaMode mode,
                                             SchemaSqlExecutor executor) {
+        return ensureTable(connection, entity, underscore, mode, false, executor);
+    }
+
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            SchemaMode mode, boolean alterColumnType,
+                                            SchemaSqlExecutor executor) {
+        executor = SchemaErrors.executor("h2", executor);
         Table table = table(entity, underscore);
         if (table == null || mode == SchemaMode.NONE) return false;
         try {
             TableRef actual = findObject(connection, table.name());
             if (actual == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("H2 table is missing: " + table.name());
+                    throw SchemaErrors.missing("h2", table.name(), mode);
                 }
                 if (connection.isReadOnly()) {
-                    throw new IllegalStateException("H2 table " + table.name()
-                            + " is missing; initialize it outside a read-only transaction");
+                    throw SchemaErrors.readOnly("h2", table.name());
                 }
                 create(table, executor);
                 actual = findObject(connection, table.name());
-                if (actual == null) throw new IllegalStateException("H2 table was not created: " + table.name());
+                if (actual == null) throw SchemaErrors.missing("h2", table.name(), mode);
             }
             if (!"BASE TABLE".equalsIgnoreCase(actual.type()) && !"TABLE".equalsIgnoreCase(actual.type())) {
-                throw new IllegalStateException("H2 object is not a table: " + table.name());
+                throw SchemaErrors.problem("h2", table.name(), "同名对象不是可管理的普通表",
+                        "请核对 schema、实体表名和现有对象类型；视图等对象应关闭 autoSchema，不能通过改列开关转换为表");
             }
             ensureColumns(connection, actual, table, mode, executor);
-            validate(connection, actual, table);
+            if (alterColumnType && mode == SchemaMode.CREATE) alterColumns(connection, actual, table, executor);
+            validate(connection, actual, table, mode, alterColumnType);
             ensureIndexes(connection, actual, table, mode, executor);
             return true;
         } catch (SQLException error) {
-            throw new IllegalStateException("H2 schema creation/validation failed for "
-                    + entity.getName() + " (" + table.name() + "): " + error.getMessage(), error);
+            throw SchemaErrors.failure("h2", table.name() + "（实体 " + entity.getName() + "）", error);
         }
     }
 
@@ -130,32 +139,29 @@ public final class H2SchemaManager {
                     || AnnotationUtil.findAnnotation(field, JoinLazy.class) != null) continue;
             String name = aliases.toColumn(field.getName());
             if (name.contains(".")) throw new IllegalArgumentException(
-                    "Qualified H2 column in " + entity.getName() + ": " + name);
+                    "H2 字段映射包含表限定名；请使用普通列名并检查 @JoinField。实体：" + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
             TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
             boolean primary = meta != null && meta.primaryKey();
             StorageType type = storageType(field.getType(), text);
             if (primary && type == StorageType.TEXT) {
-                throw new IllegalArgumentException("H2 large-text column cannot be a primary key: "
+                throw new IllegalArgumentException("H2 大文本列不能作为自动建表主键；请改用有界字符串或数字主键。字段："
                         + table.value() + "." + name);
             }
-            if (primary && type == StorageType.STRING && text.length() > 128) {
-                throw new IllegalArgumentException("String primary-key textLength cannot exceed 128: "
-                        + entity.getName() + "." + field.getName());
-            }
-            int textLength = primary && type == StorageType.STRING && text.length() == 0 ? 128 : text.length();
+            int textLength = primary && type == StorageType.STRING && text.length() == 0
+                    ? TextColumnResolver.DEFAULT_PRIMARY_KEY_LENGTH : text.length();
             Column column = new Column(name, type, primary, textLength,
                     text.explicitLength(), text.description());
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
-                throw new IllegalArgumentException("Duplicate H2 column " + table.value() + "." + name);
+                throw new IllegalArgumentException("H2 存在重复列映射；请修正实体字段或 @JoinField(name)。列：" + table.value() + "." + name);
             }
             persistentFields.putIfAbsent(field.getName(), name);
         }
-        if (columns.isEmpty()) throw new IllegalArgumentException("No persistent columns: " + entity.getName());
+        if (columns.isEmpty()) throw new IllegalArgumentException("未找到持久化字段；请检查实体字段及 @JoinField(exist=false) 配置。实体：" + entity.getName());
         if (columns.values().stream().filter(Column::primary).count() > 1) {
             throw new IllegalArgumentException(
-                    "Composite primary keys are not supported by ORM model operations: " + entity.getName());
+                    "ORM 模型操作不支持复合主键；请仅保留一个主键字段，或使用自定义 SQL 管理复合主键表。实体：" + entity.getName());
         }
         List<EntityIndexResolver.Definition> indexes =
                 EntityIndexResolver.resolve(entity, table.value(), persistentFields);
@@ -165,7 +171,7 @@ public final class H2SchemaManager {
             for (String name : index.columns()) {
                 Column column = byName.get(name.toLowerCase(Locale.ROOT));
                 if (column != null && column.type() == StorageType.TEXT) {
-                    throw new IllegalArgumentException("H2 auto-schema cannot index CLOB column "
+                    throw new IllegalArgumentException("H2 自动 Schema 不支持 CLOB 普通索引；请移除该 @JoinIndex 字段或手动设计索引。字段："
                             + table.value() + "." + column.name());
                 }
             }
@@ -258,11 +264,10 @@ public final class H2SchemaManager {
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
             if (expected.primary() || mode == SchemaMode.VALIDATE) {
-                throw incompatibleColumn(table, expected, null);
+                throw incompatibleColumn(table, expected, null, mode, false);
             }
             if (connection.isReadOnly()) {
-                throw new IllegalStateException("H2 column " + table.name() + "." + expected.name()
-                        + " is missing; initialize it outside a read-only transaction");
+                throw SchemaErrors.readOnly("h2", table.name() + "." + expected.name());
             }
             executor.execute(addColumnSql(table.name(), expected));
             if (!expected.description().isBlank()) executor.execute(commentSql(table.name(), expected));
@@ -272,14 +277,36 @@ public final class H2SchemaManager {
             actual = readColumns(connection, reference);
             for (Column expected : table.columns()) {
                 if (!actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
-                    throw new IllegalStateException("H2 column was not created: "
-                            + table.name() + "." + expected.name());
+                    throw SchemaErrors.missing("h2", table.name() + "." + expected.name(), mode);
                 }
             }
         }
     }
 
-    private static void validate(Connection connection, TableRef reference, Table expected) throws SQLException {
+    private static void alterColumns(Connection connection, TableRef reference, Table table,
+                                     SchemaSqlExecutor executor) throws SQLException {
+        Map<String, Column> actual = readColumns(connection, reference);
+        if (actual.values().stream().filter(Column::primary).count()
+                != table.columns().stream().filter(Column::primary).count())
+            throw SchemaErrors.primary("h2", table.name());
+        List<String> statements = new ArrayList<>();
+        for (Column expected : table.columns()) {
+            Column found = actual.get(expected.name().toLowerCase(Locale.ROOT));
+            if (found == null || found.primary() != expected.primary())
+                throw incompatibleColumn(table, expected, found, SchemaMode.CREATE, true);
+            if (found.type() == expected.type()
+                    && (!expected.validateLength() || found.textLength() >= expected.textLength())) continue;
+            SchemaColumnAlter.check("h2", connection, reference.catalog(), reference.schema(), reference.name(), found.name());
+            String type = expected.type() == StorageType.STRING && expected.textLength() > 0
+                    ? "CHARACTER VARYING(" + expected.textLength() + ")" : expected.type().ddl;
+            statements.add("ALTER TABLE " + quote(reference.schema()) + "." + quote(reference.name())
+                    + " ALTER COLUMN " + quote(found.name()) + " SET DATA TYPE " + type);
+        }
+        for (String sql : statements) SchemaColumnAlter.execute(executor, sql);
+    }
+
+    private static void validate(Connection connection, TableRef reference, Table expected,
+                                 SchemaMode mode, boolean alterColumnType) throws SQLException {
         DatabaseMetaData metadata = connection.getMetaData();
         Set<String> primary = new HashSet<>();
         try (var rows = metadata.getPrimaryKeys(reference.catalog(), reference.schema(), reference.name())) {
@@ -288,15 +315,15 @@ public final class H2SchemaManager {
         Map<String, Column> actual = readColumns(connection, reference, primary);
         for (Column column : expected.columns()) {
             Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
+            // 显式长度是所需容量：已有列更长可兼容，不自动缩短或扩容。
             if (found == null || found.type() != column.type() || found.primary() != column.primary()
-                    || column.validateLength() && found.textLength() != column.textLength()
-                    || column.primary() && column.type() == StorageType.STRING && found.textLength() > 128) {
-                throw incompatibleColumn(expected, column, found);
+                    || column.validateLength() && found.textLength() < column.textLength()) {
+                throw incompatibleColumn(expected, column, found, mode, alterColumnType);
             }
         }
         long expectedPrimary = expected.columns().stream().filter(Column::primary).count();
         if (primary.size() != expectedPrimary) {
-            throw new IllegalStateException("Incompatible H2 primary key: " + expected.name());
+            throw SchemaErrors.primary("h2", expected.name());
         }
     }
 
@@ -315,6 +342,8 @@ public final class H2SchemaManager {
         DatabaseMetaData metadata = connection.getMetaData();
         try (var rows = metadata.getColumns(reference.catalog(), reference.schema(), reference.name(), "%")) {
             while (rows.next()) {
+                if (!reference.name().equals(rows.getString("TABLE_NAME"))
+                        || !reference.schema().equals(rows.getString("TABLE_SCHEM"))) continue;
                 String name = rows.getString("COLUMN_NAME");
                 StorageType type = jdbcStorageType(rows.getInt("DATA_TYPE"));
                 actual.put(name.toLowerCase(Locale.ROOT),
@@ -325,9 +354,15 @@ public final class H2SchemaManager {
         return actual;
     }
 
-    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
-        return new IllegalStateException("Incompatible H2 column " + table.name() + "." + expected.name()
-                + ": expected " + expected + ", actual " + actual + "; migrate manually");
+    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual,
+                                                            SchemaMode mode, boolean alterColumnType) {
+        return SchemaErrors.column("h2", table.name(), diagnosticColumn(expected),
+                actual == null ? null : diagnosticColumn(actual), mode, alterColumnType);
+    }
+
+    private static SchemaErrors.Column diagnosticColumn(Column column) {
+        return new SchemaErrors.Column(column.name(), column.type().name(),
+                SchemaErrors.textType(column.type().ddl, column.textLength()), column.primary(), column.textLength());
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
@@ -340,11 +375,10 @@ public final class H2SchemaManager {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("H2 index is missing: " + expected.name());
+                    throw SchemaErrors.missing("h2", table.name() + " 索引 " + expected.name(), mode);
                 }
                 if (connection.isReadOnly()) {
-                    throw new IllegalStateException("H2 index " + expected.name()
-                            + " is missing; initialize it outside a read-only transaction");
+                    throw SchemaErrors.readOnly("h2", table.name() + " 索引 " + expected.name());
                 }
                 createIndex(table.name(), expected, executor);
                 created = true;
@@ -356,7 +390,7 @@ public final class H2SchemaManager {
             actual = readIndexes(connection, reference);
             for (EntityIndexResolver.Definition expected : table.indexes()) {
                 ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
-                if (found == null) throw new IllegalStateException("H2 index was not created: " + expected.name());
+                if (found == null) throw SchemaErrors.missing("h2", table.name() + " 索引 " + expected.name(), mode);
                 validateIndex(table.name(), expected, found);
             }
         }
@@ -405,10 +439,8 @@ public final class H2SchemaManager {
     private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {
         if (expected.unique() != actual.unique() || !actual.ascending()
                 || !sameColumns(expected.columns(), actual.columns())) {
-            throw new IllegalStateException("Incompatible H2 index " + table + "." + expected.name()
-                    + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
-                    + "; actual columns=" + actual.columns() + ", unique=" + actual.unique()
-                    + "; migrate manually");
+            throw SchemaErrors.index("h2", table + "." + expected.name(), expected.columns(), expected.unique(),
+                    actual.columns(), actual.unique(), actual.ascending());
         }
     }
 
@@ -439,7 +471,7 @@ public final class H2SchemaManager {
     private static void identifier(String name) {
         if (!name.matches("[\\p{L}_][\\p{L}\\p{N}_]*")
                 || name.toLowerCase(Locale.ROOT).startsWith("information_schema")) {
-            throw new IllegalArgumentException("H2 schema needs a plain table/column name: " + name);
+            throw new IllegalArgumentException("H2 表名或列名不合法；请使用受支持的普通标识符，不要传入 SQL 表达式。当前值：" + name);
         }
     }
 

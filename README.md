@@ -11,7 +11,7 @@
 - 通过 `JoinQuery`/`JoinLazy` 表达关联查询，主键关联可批量预加载，减少列表场景的 N+1。
 - 通过显式 `@JoinSync` 或 `.autoUpdate()` 在事务内按 setter 跟踪部分更新，不要求所有查询都进入持久化上下文。
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
-- 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.submit()`，按数据源、实体和主键聚合原子更新；统计明细使用 `EntityCounter.insert(entity).submit()`，按非数字维度聚合数字后批量插入，支持大数、AtomicInteger/AtomicLong 和 Adder。
+- 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.update(deltaModel).submit()` 或链式 `inc/dec`，按数据源、实体和主键聚合原子更新；统计明细使用 `EntityCounter.insert(entity).submit()`，按非数字维度聚合数字后批量插入，模型数字支持大数、AtomicInteger/AtomicLong 和 Adder。
 - 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，支持全局及按 `table`/`group.table` 配置 TTL；Key 包含数据源与查询元数据，条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
 - 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描，Elasticsearch 提供同一入口的索引与基础 Mapping 初始化；只有 `autoSchema=true` 的完整实体才参与结构初始化。
@@ -81,7 +81,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 
 从快速交付上述视频网站的角度，推荐先用 MySQL 承载用户、会员、订单和支付，用 PostgreSQL + pg_jieba 承载视频内容与常用全文检索，用 Caffeine 做单机查询加速；确实需要模糊纠错、搜索建议、复杂评分、水平扩展、向量或语义检索时，再引入 Elasticsearch。yulinlin-data 能保持 `match()`、`highlight()` 等业务调用不变，但关系库到 ES 的可靠同步仍需独立设计。
 
-能力边界必须明确：yulinlin-data 的跨库提交是本地事务协调，不是 XA/2PC；自动 Schema 不负责字段改名、改类型、删列和数据搬迁；自动更新要求有效路由事务，回滚不会恢复 Java 对象的内存值；原始 SQL 不会自动翻译为其他方言；本地缓存不自动解决多应用节点一致性。
+能力边界必须明确：yulinlin-data 的跨库提交是本地事务协调，不是 XA/2PC；自动 Schema 默认不改列类型，MySQL/PostgreSQL/H2 可在人工确认并备份后显式开启 `alter-column-type`，不负责字段改名、删列和跨列数据搬迁；自动更新要求有效路由事务，回滚不会恢复 Java 对象的内存值；原始 SQL 不会自动翻译为其他方言；本地缓存不自动解决多应用节点一致性。
 
 对比参考了 [MyBatis-Plus 官方文档](https://baomidou.com/)、[Spring Data JPA 文档](https://docs.spring.io/spring-data/jpa/reference/)、[Hibernate ORM User Guide](https://docs.jboss.org/hibernate/orm/current/userguide/html_single/Hibernate_User_Guide.html)、[Hibernate Search Reference](https://docs.jboss.org/hibernate/stable/search/reference/en-US/html_single/)、[PostgreSQL 全文检索文档](https://www.postgresql.org/docs/current/textsearch.html)和 [Elasticsearch Query DSL](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html)；yulinlin-data 一列以本仓库当前实现和后续专题为准。
 
@@ -108,7 +108,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 
 - MySQL ORM：starter + mysql。
 - 本地 SQLite：starter + sqlite，默认文件 data/local.db、group 为 sqlite，单写连接；适合单文件和可串行写入。
-- 本地 H2：starter + h2，默认数据库基路径 data/local、group 为 h2，默认最多 4 个连接；适合多线程小批量写入。SQLite/H2 可在启动时递归扫描配置包，为显式 `autoSchema=true` 的完整实体创建表、文本列说明与 `JoinIndex`；MySQL 也可启用同一机制。字符串主键默认且最多 128 字符。`autoSchema` 默认 false，CRUD 阶段不再根据 `fromClass` 执行 DDL；简要实测见[第一专题](doc/01-接入与数据源.md#sqliteh2-选型)。
+- 本地 H2：starter + h2，默认数据库基路径 data/local、group 为 h2，默认最多 4 个连接；适合多线程小批量写入。SQLite/H2 可在启动时递归扫描配置包，为显式 `autoSchema=true` 的完整实体创建表、文本列说明与 `JoinIndex`；MySQL 也可启用同一机制。字符串主键默认 32 字符，显式 `@JoinField(textLength=...)` 按注解生成，仍受数据库限制；SQLite 不强制 VARCHAR 长度。`autoSchema` 默认 false，CRUD 阶段不再根据 `fromClass` 执行 DDL；简要实测见[第一专题](doc/01-接入与数据源.md#sqliteh2-选型)。
 - PostgreSQL 可用 `@JoinField(fullText=true)`、`match()` 和 `highlight()` 接入 pg_jieba 中文分词、GIN 索引与原字段高亮；其他 SQL 数据源保持 LIKE/原字段兼容语义。
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。

@@ -52,7 +52,10 @@ public class UpdateFieldsParse implements IParse<UpdateFieldsWrapper> {
         StringJoiner sb = new StringJoiner(" , ");
 
         for (AtomicValue atomicValue : list) {
-            Object value = params.putGetKey(atomicValue.getValue());
+            boolean arithmetic = atomicValue.getOperate() == AtomicValue.OperateEnum.inc
+                    || atomicValue.getOperate() == AtomicValue.OperateEnum.dec;
+            Object value = arithmetic && atomicValue.getValue() instanceof Number number
+                    ? params.putNumberGetKey(number) : params.putGetKey(atomicValue.getValue());
             String key = AliasUtil.parse(atomicValue,params) ;
             String sql;
 

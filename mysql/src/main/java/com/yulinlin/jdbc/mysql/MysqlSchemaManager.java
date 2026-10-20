@@ -16,6 +16,8 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
+import com.yulinlin.jdbc.schema.SchemaColumnAlter;
+import com.yulinlin.jdbc.schema.SchemaErrors;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
 
 import java.lang.reflect.Modifier;
@@ -63,25 +65,32 @@ public final class MysqlSchemaManager {
     public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
                                             SchemaMode mode,
                                             SchemaSqlExecutor executor) {
+        return ensureTable(connection, entity, underscore, mode, false, executor);
+    }
+
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            SchemaMode mode, boolean alterColumnType,
+                                            SchemaSqlExecutor executor) {
+        executor = SchemaErrors.executor("mysql", executor);
         Table table = table(entity, underscore);
         if (table == null || mode == SchemaMode.NONE) return false;
         try {
             TableRef actual = findTable(connection, table.name());
             if (actual == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("MySQL table is missing: " + table.name());
+                    throw SchemaErrors.missing("mysql", table.name(), mode);
                 }
                 create(table, executor);
                 actual = findTable(connection, table.name());
-                if (actual == null) throw new IllegalStateException("MySQL table was not created: " + table.name());
+                if (actual == null) throw SchemaErrors.missing("mysql", table.name(), mode);
             }
             ensureColumns(connection, actual, table, mode, executor);
-            validate(connection, actual, table);
+            if (alterColumnType && mode == SchemaMode.CREATE) alterColumns(connection, actual, table, executor);
+            validate(connection, actual, table, mode, alterColumnType);
             ensureIndexes(connection, actual, table, mode, executor);
             return true;
         } catch (SQLException error) {
-            throw new IllegalStateException("MySQL schema creation/validation failed for "
-                    + entity.getName() + " (" + table.name() + "): " + error.getMessage(), error);
+            throw SchemaErrors.failure("mysql", table.name() + "（实体 " + entity.getName() + "）", error);
         }
     }
 
@@ -124,36 +133,33 @@ public final class MysqlSchemaManager {
                     || AnnotationUtil.findAnnotation(field, JoinLazy.class) != null) continue;
             String name = aliases.toColumn(field.getName());
             if (name.contains(".")) throw new IllegalArgumentException(
-                    "Qualified MySQL column in " + entity.getName() + ": " + name);
+                    "MySQL 字段映射包含表限定名；请使用普通列名并检查 @JoinField。实体：" + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
             TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
             if (text.type() == TextTypeEnum.varchar && text.length() > 16_383) {
-                throw new IllegalArgumentException("MySQL VARCHAR textLength cannot exceed 16383 for utf8mb4: "
+                throw new IllegalArgumentException("MySQL utf8mb4 下声明的 VARCHAR 长度超过 16383；请减小 textLength 或改用 textType=text（不能用于主键）。字段："
                         + entity.getName() + "." + field.getName());
             }
             boolean primary = meta != null && meta.primaryKey();
             StorageType type = storageType(field.getType(), text);
             if (primary && type == StorageType.TEXT) {
-                throw new IllegalArgumentException("MySQL large-text column cannot be a primary key: "
+                throw new IllegalArgumentException("MySQL 大文本列不能作为自动建表主键；请改用有界字符串或数字主键。字段："
                         + table.value() + "." + name);
             }
-            if (primary && type == StorageType.STRING && text.length() > 128) {
-                throw new IllegalArgumentException("String primary-key textLength cannot exceed 128: "
-                        + entity.getName() + "." + field.getName());
-            }
-            int textLength = primary && type == StorageType.STRING && text.length() == 0 ? 128 : text.length();
+            int textLength = primary && type == StorageType.STRING && text.length() == 0
+                    ? TextColumnResolver.DEFAULT_PRIMARY_KEY_LENGTH : text.length();
             Column column = new Column(name, type, primary, textLength,
                     text.explicitLength(), text.description());
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
-                throw new IllegalArgumentException("Duplicate MySQL column " + table.value() + "." + name);
+                throw new IllegalArgumentException("MySQL 存在重复列映射；请修正实体字段或 @JoinField(name)。列：" + table.value() + "." + name);
             }
             persistentFields.putIfAbsent(field.getName(), name);
         }
-        if (columns.isEmpty()) throw new IllegalArgumentException("No persistent columns: " + entity.getName());
+        if (columns.isEmpty()) throw new IllegalArgumentException("未找到持久化字段；请检查实体字段及 @JoinField(exist=false) 配置。实体：" + entity.getName());
         if (columns.values().stream().filter(Column::primary).count() > 1) {
             throw new IllegalArgumentException(
-                    "Composite primary keys are not supported by ORM model operations: " + entity.getName());
+                    "ORM 模型操作不支持复合主键；请仅保留一个主键字段，或使用自定义 SQL 管理复合主键表。实体：" + entity.getName());
         }
         List<EntityIndexResolver.Definition> indexes =
                 EntityIndexResolver.resolve(entity, table.value(), persistentFields);
@@ -163,7 +169,7 @@ public final class MysqlSchemaManager {
             for (String name : index.columns()) {
                 Column column = byName.get(name.toLowerCase(Locale.ROOT));
                 if (column != null && column.type() == StorageType.TEXT) {
-                    throw new IllegalArgumentException("MySQL auto-schema cannot index LONGTEXT column "
+                    throw new IllegalArgumentException("MySQL 自动 Schema 不支持 LONGTEXT 普通索引；请移除该 @JoinIndex 字段或手动设计索引。字段："
                             + table.value() + "." + column.name());
                 }
             }
@@ -248,10 +254,10 @@ public final class MysqlSchemaManager {
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
             if (expected.primary()) {
-                throw incompatibleColumn(table, expected, null);
+                throw incompatibleColumn(table, expected, null, mode, false);
             }
             if (mode == SchemaMode.VALIDATE) {
-                throw incompatibleColumn(table, expected, null);
+                throw incompatibleColumn(table, expected, null, mode, false);
             }
             try {
                 executor.execute(addColumnSql(table.name(), expected));
@@ -267,14 +273,98 @@ public final class MysqlSchemaManager {
             actual = readColumns(connection, reference);
             for (Column expected : table.columns()) {
                 if (!actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
-                    throw new IllegalStateException("MySQL column was not created: "
-                            + table.name() + "." + expected.name());
+                    throw SchemaErrors.missing("mysql", table.name() + "." + expected.name(), mode);
                 }
             }
         }
     }
 
-    private static void validate(Connection connection, TableRef reference, Table expected) throws SQLException {
+    private static void alterColumns(Connection connection, TableRef reference, Table table,
+                                     SchemaSqlExecutor executor) throws SQLException {
+        Map<String, Column> actual = readColumns(connection, reference);
+        if (actual.values().stream().filter(Column::primary).count()
+                != table.columns().stream().filter(Column::primary).count())
+            throw SchemaErrors.primary("mysql", table.name());
+        List<String> statements = new ArrayList<>();
+        for (Column expected : table.columns()) {
+            Column found = actual.get(expected.name().toLowerCase(Locale.ROOT));
+            if (found == null || found.primary() != expected.primary())
+                throw incompatibleColumn(table, expected, found, SchemaMode.CREATE, true);
+            if (found.type() == expected.type()
+                    && (!expected.validateLength() || found.textLength() >= expected.textLength())) continue;
+            SchemaColumnAlter.check("mysql", connection, reference.catalog(), reference.schema(), reference.name(), found.name());
+            statements.add(alterColumnSql(connection, reference, expected, found));
+        }
+        for (String sql : statements) SchemaColumnAlter.execute(executor, sql);
+    }
+
+    private static String alterColumnSql(Connection connection, TableRef reference,
+                                         Column expected, Column found) throws SQLException {
+        String mode;
+        try (var statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT @@SESSION.sql_mode")) {
+            if (!rows.next()) throw SchemaColumnAlter.unsupported("mysql", reference.name(), found.name(), "无法读取 SQL 模式");
+            mode = rows.getString(1).toUpperCase(Locale.ROOT);
+        }
+        if (!mode.contains("STRICT_ALL_TABLES") && !mode.contains("STRICT_TRANS_TABLES"))
+            throw SchemaColumnAlter.unsupported("mysql", reference.name(), found.name(), "MySQL 必须启用严格模式，避免静默转换或截断；请由管理员核对连接的 sql_mode");
+        boolean backslashEscapes = !mode.contains("NO_BACKSLASH_ESCAPES");
+        String query = "SELECT IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA, COLUMN_TYPE, DATA_TYPE, "
+                + "CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?";
+        try (var statement = connection.prepareStatement(query)) {
+            statement.setString(1, reference.catalog());
+            statement.setString(2, reference.name());
+            statement.setString(3, found.name());
+            try (var rows = statement.executeQuery()) {
+                if (!rows.next()) throw SchemaColumnAlter.unsupported("mysql", reference.name(), found.name(), "无法读取完整列属性");
+                String extra = rows.getString("EXTRA");
+                // 表达式默认值、ON UPDATE、不可见列等不可当普通字面量重建。
+                if (extra != null && !extra.isBlank())
+                    throw SchemaColumnAlter.unsupported("mysql", reference.name(), found.name(), "特殊列属性需手动迁移：" + extra);
+                String oldType = rows.getString("COLUMN_TYPE").toLowerCase(Locale.ROOT);
+                String dataType = rows.getString("DATA_TYPE").toLowerCase(Locale.ROOT);
+                if (oldType.contains("unsigned") || oldType.contains("zerofill")
+                        || !Set.of("char", "varchar", "tinytext", "text", "mediumtext", "longtext",
+                        "tinyint", "smallint", "mediumint", "int", "bigint", "float", "double",
+                        "decimal", "date", "datetime", "timestamp", "time").contains(dataType))
+                    throw SchemaColumnAlter.unsupported("mysql", reference.name(), found.name(),
+                            "无法按普通列安全保留现有类型属性：" + oldType);
+                String type = expected.type() == StorageType.STRING && expected.textLength() > 0
+                        ? "VARCHAR(" + expected.textLength() + ")" : expected.type().ddl;
+                StringBuilder sql = new StringBuilder("ALTER TABLE ").append(quote(reference.catalog()))
+                        .append(".").append(quote(reference.name())).append(" MODIFY COLUMN ")
+                        .append(quote(found.name())).append(" ").append(type);
+                if (expected.type() == StorageType.STRING || expected.type() == StorageType.TEXT) {
+                    String charset = rows.getString("CHARACTER_SET_NAME");
+                    String collation = rows.getString("COLLATION_NAME");
+                    if (charset != null) sql.append(" CHARACTER SET ").append(quote(charset));
+                    if (collation != null) sql.append(" COLLATE ").append(quote(collation));
+                }
+                boolean nullable = "YES".equalsIgnoreCase(rows.getString("IS_NULLABLE"));
+                sql.append(nullable ? " NULL" : " NOT NULL");
+                String defaultValue = rows.getString("COLUMN_DEFAULT");
+                if (defaultValue != null && (found.type() == StorageType.DATE || found.type() == StorageType.TIME
+                        || found.type() == StorageType.DATETIME)
+                        && defaultValue.toUpperCase(Locale.ROOT).startsWith("CURRENT_"))
+                    throw SchemaColumnAlter.unsupported("mysql", reference.name(), found.name(), "时间表达式默认值需手动迁移");
+                if (defaultValue != null)
+                    sql.append(" DEFAULT ").append(alterLiteral(defaultValue, backslashEscapes));
+                else if (nullable) sql.append(" DEFAULT NULL");
+                sql.append(" COMMENT ").append(alterLiteral(rows.getString("COLUMN_COMMENT"), backslashEscapes));
+                return sql.toString();
+            }
+        }
+    }
+
+    private static String alterLiteral(String value, boolean backslashEscapes) {
+        String text = value == null ? "" : value;
+        if (backslashEscapes) text = text.replace("\\", "\\\\");
+        return "'" + text.replace("'", "''") + "'";
+    }
+
+    private static void validate(Connection connection, TableRef reference, Table expected,
+                                 SchemaMode mode, boolean alterColumnType) throws SQLException {
         DatabaseMetaData metadata = connection.getMetaData();
         Set<String> primary = new HashSet<>();
         try (var rows = metadata.getPrimaryKeys(reference.catalog(), reference.schema(), reference.name())) {
@@ -283,15 +373,15 @@ public final class MysqlSchemaManager {
         Map<String, Column> actual = readColumns(connection, reference, primary);
         for (Column column : expected.columns()) {
             Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
+            // 显式长度是所需容量：已有列更长可兼容，不自动缩短或扩容。
             if (found == null || found.type() != column.type() || found.primary() != column.primary()
-                    || column.validateLength() && found.textLength() != column.textLength()
-                    || column.primary() && column.type() == StorageType.STRING && found.textLength() > 128) {
-                throw incompatibleColumn(expected, column, found);
+                    || column.validateLength() && found.textLength() < column.textLength()) {
+                throw incompatibleColumn(expected, column, found, mode, alterColumnType);
             }
         }
         long expectedPrimary = expected.columns().stream().filter(Column::primary).count();
         if (primary.size() != expectedPrimary) {
-            throw new IllegalStateException("Incompatible MySQL primary key: " + expected.name());
+            throw SchemaErrors.primary("mysql", expected.name());
         }
     }
 
@@ -310,6 +400,8 @@ public final class MysqlSchemaManager {
         DatabaseMetaData metadata = connection.getMetaData();
         try (var rows = metadata.getColumns(reference.catalog(), reference.schema(), reference.name(), "%")) {
             while (rows.next()) {
+                // JDBC 表名参数是 pattern，名称中的下划线不能匹配到其他表。
+                if (!reference.name().equals(rows.getString("TABLE_NAME"))) continue;
                 String name = rows.getString("COLUMN_NAME");
                 StorageType type = jdbcStorageType(rows.getInt("DATA_TYPE"), rows.getString("TYPE_NAME"));
                 actual.put(name.toLowerCase(Locale.ROOT),
@@ -320,9 +412,15 @@ public final class MysqlSchemaManager {
         return actual;
     }
 
-    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
-        return new IllegalStateException("Incompatible MySQL column " + table.name() + "." + expected.name()
-                + ": expected " + expected + ", actual " + actual + "; migrate manually");
+    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual,
+                                                            SchemaMode mode, boolean alterColumnType) {
+        return SchemaErrors.column("mysql", table.name(), diagnosticColumn(expected),
+                actual == null ? null : diagnosticColumn(actual), mode, alterColumnType);
+    }
+
+    private static SchemaErrors.Column diagnosticColumn(Column column) {
+        return new SchemaErrors.Column(column.name(), column.type().name(),
+                SchemaErrors.textType(column.type().ddl, column.textLength()), column.primary(), column.textLength());
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
@@ -335,7 +433,7 @@ public final class MysqlSchemaManager {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("MySQL index is missing: " + expected.name());
+                    throw SchemaErrors.missing("mysql", table.name() + " 索引 " + expected.name(), mode);
                 }
                 createIndex(table.name(), expected, executor);
                 attempted = true;
@@ -347,7 +445,7 @@ public final class MysqlSchemaManager {
             actual = readIndexes(connection, reference);
             for (EntityIndexResolver.Definition expected : table.indexes()) {
                 ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
-                if (found == null) throw new IllegalStateException("MySQL index was not created: " + expected.name());
+                if (found == null) throw SchemaErrors.missing("mysql", table.name() + " 索引 " + expected.name(), mode);
                 validateIndex(table.name(), expected, found);
             }
         }
@@ -402,10 +500,8 @@ public final class MysqlSchemaManager {
     private static void validateIndex(String table, EntityIndexResolver.Definition expected, ActualIndex actual) {
         if (expected.unique() != actual.unique() || !actual.ascending()
                 || !sameColumns(expected.columns(), actual.columns())) {
-            throw new IllegalStateException("Incompatible MySQL index " + table + "." + expected.name()
-                    + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
-                    + "; actual columns=" + actual.columns() + ", unique=" + actual.unique()
-                    + "; migrate manually");
+            throw SchemaErrors.index("mysql", table + "." + expected.name(), expected.columns(), expected.unique(),
+                    actual.columns(), actual.unique(), actual.ascending());
         }
     }
 
@@ -437,7 +533,7 @@ public final class MysqlSchemaManager {
     private static void identifier(String name) {
         if (!name.matches("[\\p{L}_][\\p{L}\\p{N}_]*")
                 || name.toLowerCase(Locale.ROOT).startsWith("information_schema")) {
-            throw new IllegalArgumentException("MySQL schema needs a plain table/column name: " + name);
+            throw new IllegalArgumentException("MySQL 表名或列名不合法；请使用受支持的普通标识符，不要传入 SQL 表达式。当前值：" + name);
         }
     }
 

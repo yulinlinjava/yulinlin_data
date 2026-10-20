@@ -6,6 +6,8 @@ import java.time.Duration;
 
 /** JDBC-specific settings layered on top of the common entity-session settings. */
 public class JdbcSessionProperties extends EntitySessionProperties {
+    /** 用户已确认数据可转换时，允许启动 CREATE 模式修改列类型或扩容；默认关闭。 */
+    private boolean alterColumnType;
     private int parallelConnections = 4;
     private int executeBatchSize = 256;
     /** Whether bound parameters are included in SQL logs. Disabled by default to avoid leaking data. */
@@ -14,6 +16,10 @@ public class JdbcSessionProperties extends EntitySessionProperties {
     private int maxParamLength = 256;
     /** SQL duration at which one WARN is emitted; zero disables slow-SQL logging. */
     private Duration slowSqlThreshold = Duration.ZERO;
+
+    public boolean isAlterColumnType() { return alterColumnType; }
+
+    public void setAlterColumnType(boolean alterColumnType) { this.alterColumnType = alterColumnType; }
 
     public int getParallelConnections() {
         return parallelConnections;

@@ -33,20 +33,20 @@ public final class EntityIndexResolver {
         Map<List<String>, Definition> byColumns = new LinkedHashMap<>();
         for (JoinIndex declaration : declarations) {
             if (declaration.fields().length == 0) {
-                throw new IllegalArgumentException("Index fields cannot be empty: " + entity.getName());
+                throw new IllegalArgumentException("索引字段列表为空；请为 @JoinIndex.fields 指定持久化属性。实体：" + entity.getName());
             }
             List<String> columns = new ArrayList<>(declaration.fields().length);
             Map<String, Boolean> seenProperties = new HashMap<>();
             for (String property : declaration.fields()) {
                 if (property == null || property.isBlank()) {
-                    throw new IllegalArgumentException("Index property cannot be blank: " + entity.getName());
+                    throw new IllegalArgumentException("索引属性名为空；请修正 @JoinIndex.fields。实体：" + entity.getName());
                 }
                 if (seenProperties.put(property, Boolean.TRUE) != null) {
-                    throw new IllegalArgumentException("Duplicate index property " + entity.getName() + "." + property);
+                    throw new IllegalArgumentException("同一索引重复引用属性；请移除重复的 @JoinIndex.fields 项。属性：" + entity.getName() + "." + property);
                 }
                 String column = persistentFields.get(property);
                 if (column == null) {
-                    throw new IllegalArgumentException("Index property is missing or not persistent: "
+                    throw new IllegalArgumentException("索引引用的属性不存在或不持久化；请使用 Java 持久化属性名。属性："
                             + entity.getName() + "." + property);
                 }
                 columns.add(column);
@@ -59,7 +59,7 @@ public final class EntityIndexResolver {
             if (existing == null) {
                 byColumns.put(signature, definition);
             } else if (existing.unique() == definition.unique()) {
-                throw new IllegalArgumentException("Duplicate index fields on " + entity.getName() + ": " + columns);
+                throw new IllegalArgumentException("索引字段声明重复；请合并重复的 @JoinIndex。实体：" + entity.getName() + ": " + columns);
             } else if (definition.unique()) {
                 // A unique index already serves ordinary lookups for the same ordered columns.
                 byColumns.put(signature, definition);
@@ -70,7 +70,7 @@ public final class EntityIndexResolver {
         for (Definition definition : byColumns.values()) {
             Definition existing = names.putIfAbsent(definition.name().toLowerCase(Locale.ROOT), definition);
             if (existing != null && !existing.equals(definition)) {
-                throw new IllegalArgumentException("Generated index name collision on " + entity.getName()
+                throw new IllegalArgumentException("自动生成的索引名冲突；请调整表名或索引字段声明并检查生成结果。实体：" + entity.getName()
                         + ": " + definition.name());
             }
         }
@@ -90,7 +90,7 @@ public final class EntityIndexResolver {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("JDK does not provide SHA-256", error);
+            throw new IllegalStateException("运行环境缺少 SHA-256 算法，无法生成稳定索引名；请检查 JDK 安装及安全提供者", error);
         }
     }
 }

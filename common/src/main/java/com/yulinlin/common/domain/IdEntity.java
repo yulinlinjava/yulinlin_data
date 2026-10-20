@@ -17,7 +17,7 @@ public class IdEntity<E extends IdEntity<E>>   implements Serializable , Abstrac
 
     @JoinWhere
     @JoinMeta(primaryKey = true)
-    @JoinField
+    @JoinField(textLength = 32)
     @Schema(description = "id")
     private String id;
 

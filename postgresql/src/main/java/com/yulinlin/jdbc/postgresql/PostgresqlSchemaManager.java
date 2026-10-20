@@ -16,6 +16,8 @@ import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.schema.EntityIndexResolver;
 import com.yulinlin.jdbc.schema.SchemaSqlExecutor;
+import com.yulinlin.jdbc.schema.SchemaColumnAlter;
+import com.yulinlin.jdbc.schema.SchemaErrors;
 import com.yulinlin.jdbc.schema.TextColumnResolver;
 
 import java.lang.reflect.Modifier;
@@ -75,6 +77,13 @@ public final class PostgresqlSchemaManager {
                                             SchemaMode mode,
                                             PostgresqlFullTextOptions fullText,
                                             SchemaSqlExecutor executor) {
+        return ensureTable(connection, entity, underscore, mode, fullText, false, executor);
+    }
+
+    public synchronized boolean ensureTable(Connection connection, Class<?> entity, boolean underscore,
+                                            SchemaMode mode, PostgresqlFullTextOptions fullText,
+                                            boolean alterColumnType, SchemaSqlExecutor executor) {
+        executor = SchemaErrors.executor("postgresql", executor);
         Table table = table(entity, underscore);
         if (table == null || mode == SchemaMode.NONE) return false;
         try {
@@ -84,26 +93,27 @@ public final class PostgresqlSchemaManager {
             TableRef actual = findTable(connection, table);
             if (actual == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("PostgreSQL table is missing: " + displayName(table));
+                    throw SchemaErrors.missing("postgresql", displayName(table), mode);
                 }
                 create(table, executor);
                 actual = findTable(connection, table);
                 if (actual == null) {
-                    throw new IllegalStateException("PostgreSQL table was not created: " + displayName(table));
+                    throw SchemaErrors.missing("postgresql", displayName(table), mode);
                 }
             }
             if (!"TABLE".equalsIgnoreCase(actual.type())
                     && !"PARTITIONED TABLE".equalsIgnoreCase(actual.type())) {
-                throw new IllegalStateException("PostgreSQL object is not a table: " + displayName(table));
+                throw SchemaErrors.problem("postgresql", displayName(table), "同名对象不是可管理的普通表",
+                        "请核对 schema、实体表名和现有对象类型；视图等对象应关闭 autoSchema，不能通过改列开关转换为表");
             }
             ensureColumns(connection, actual, table, mode, executor);
-            validate(connection, actual, table);
+            if (alterColumnType && mode == SchemaMode.CREATE) alterColumns(connection, actual, table, executor);
+            validate(connection, actual, table, mode, alterColumnType);
             ensureIndexes(connection, actual, table, mode, executor);
             ensureFullTextIndexes(connection, actual, table, mode, fullText, executor);
             return true;
         } catch (SQLException error) {
-            throw new IllegalStateException("PostgreSQL schema creation/validation failed for "
-                    + entity.getName() + " (" + displayName(table) + "): " + error.getMessage(), error);
+            throw SchemaErrors.failure("postgresql", displayName(table) + "（实体 " + entity.getName() + "）", error);
         }
     }
 
@@ -151,7 +161,7 @@ public final class PostgresqlSchemaManager {
                     || AnnotationUtil.findAnnotation(field, JoinLazy.class) != null) continue;
             String name = aliases.toColumn(field.getName());
             if (name.contains(".")) throw new IllegalArgumentException(
-                    "Qualified PostgreSQL column in " + entity.getName() + ": " + name);
+                    "PostgreSQL 字段映射包含表限定名；请使用普通列名并检查 @JoinField。实体：" + entity.getName() + ": " + name);
             identifier(name);
             JoinMeta meta = AnnotationUtil.findAnnotation(field, JoinMeta.class);
             TextColumnResolver.Definition text = TextColumnResolver.resolve(field, mapping);
@@ -159,29 +169,26 @@ public final class PostgresqlSchemaManager {
             StorageType type = storageType(field.getType(), text);
             boolean fullText = mapping != null && mapping.fullText();
             if (fullText && type != StorageType.STRING && type != StorageType.TEXT) {
-                throw new IllegalArgumentException("PostgreSQL full-text index needs a text column: "
+                throw new IllegalArgumentException("PostgreSQL 全文索引要求文本字段；请修正字段类型或移除 fullText=true。字段："
                         + entity.getName() + "." + field.getName());
             }
             if (primary && type == StorageType.TEXT) {
-                throw new IllegalArgumentException("PostgreSQL large-text column cannot be a primary key: "
+                throw new IllegalArgumentException("PostgreSQL 自动 Schema 不支持大文本主键；请改用有界字符串或数字主键。字段："
                         + table.value() + "." + name);
             }
-            if (primary && type == StorageType.STRING && text.length() > 128) {
-                throw new IllegalArgumentException("String primary-key textLength cannot exceed 128: "
-                        + entity.getName() + "." + field.getName());
-            }
-            int textLength = primary && type == StorageType.STRING && text.length() == 0 ? 128 : text.length();
+            int textLength = primary && type == StorageType.STRING && text.length() == 0
+                    ? TextColumnResolver.DEFAULT_PRIMARY_KEY_LENGTH : text.length();
             Column column = new Column(name, type, primary, textLength,
                     text.explicitLength(), text.description(), fullText);
             if (columns.putIfAbsent(name.toLowerCase(Locale.ROOT), column) != null) {
-                throw new IllegalArgumentException("Duplicate PostgreSQL column " + table.value() + "." + name);
+                throw new IllegalArgumentException("PostgreSQL 存在重复列映射；请修正实体字段或 @JoinField(name)。列：" + table.value() + "." + name);
             }
             persistentFields.putIfAbsent(field.getName(), name);
         }
-        if (columns.isEmpty()) throw new IllegalArgumentException("No persistent columns: " + entity.getName());
+        if (columns.isEmpty()) throw new IllegalArgumentException("未找到持久化字段；请检查实体字段及 @JoinField(exist=false) 配置。实体：" + entity.getName());
         if (columns.values().stream().filter(Column::primary).count() > 1) {
             throw new IllegalArgumentException(
-                    "Composite primary keys are not supported by ORM model operations: " + entity.getName());
+                    "ORM 模型操作不支持复合主键；请仅保留一个主键字段，或使用自定义 SQL 管理复合主键表。实体：" + entity.getName());
         }
         List<EntityIndexResolver.Definition> indexes =
                 EntityIndexResolver.resolve(entity, tableName[1], persistentFields);
@@ -191,7 +198,7 @@ public final class PostgresqlSchemaManager {
             for (String name : index.columns()) {
                 Column column = byName.get(name.toLowerCase(Locale.ROOT));
                 if (column != null && column.type() == StorageType.TEXT) {
-                    throw new IllegalArgumentException("PostgreSQL auto-schema cannot index TEXT column "
+                    throw new IllegalArgumentException("PostgreSQL 自动 Schema 不支持 TEXT 普通索引；请移除该 @JoinIndex 字段，按用途选择全文索引或手动管理。字段："
                             + table.value() + "." + column.name());
                 }
             }
@@ -210,7 +217,7 @@ public final class PostgresqlSchemaManager {
             identifier(parts[1]);
             return new String[]{parts[0], parts[1]};
         }
-        throw new IllegalArgumentException("PostgreSQL schema needs table or schema.table: " + value);
+        throw new IllegalArgumentException("PostgreSQL 表名格式不合法；请使用 table 或 schema.table。当前值：" + value);
     }
 
     private static StorageType storageType(Class<?> type, TextColumnResolver.Definition text) {
@@ -298,7 +305,7 @@ public final class PostgresqlSchemaManager {
         for (Column expected : table.columns()) {
             if (actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) continue;
             if (expected.primary() || mode == SchemaMode.VALIDATE) {
-                throw incompatibleColumn(table, expected, null);
+                throw incompatibleColumn(table, expected, null, mode, false);
             }
             executor.execute(addColumnSql(table, expected));
             if (!expected.description().isBlank()) executor.execute(commentSql(table, expected));
@@ -308,27 +315,53 @@ public final class PostgresqlSchemaManager {
             actual = readColumns(connection, reference);
             for (Column expected : table.columns()) {
                 if (!actual.containsKey(expected.name().toLowerCase(Locale.ROOT))) {
-                    throw new IllegalStateException("PostgreSQL column was not created: "
-                            + displayName(table) + "." + expected.name());
+                    throw SchemaErrors.missing("postgresql", displayName(table) + "." + expected.name(), mode);
                 }
             }
         }
     }
 
-    private static void validate(Connection connection, TableRef reference, Table expected) throws SQLException {
+    private static void alterColumns(Connection connection, TableRef reference, Table table,
+                                     SchemaSqlExecutor executor) throws SQLException {
+        Map<String, Column> actual = readColumns(connection, reference);
+        if (actual.values().stream().filter(Column::primary).count()
+                != table.columns().stream().filter(Column::primary).count())
+            throw SchemaErrors.primary("postgresql", displayName(table));
+        List<String> statements = new ArrayList<>();
+        for (Column expected : table.columns()) {
+            Column found = actual.get(expected.name().toLowerCase(Locale.ROOT));
+            if (found == null || found.primary() != expected.primary())
+                throw incompatibleColumn(table, expected, found, SchemaMode.CREATE, true);
+            if (found.type() == expected.type()
+                    && (!expected.validateLength() || found.textLength() >= expected.textLength())) continue;
+            SchemaColumnAlter.check("postgresql", connection, reference.catalog(), reference.schema(), reference.name(), found.name());
+            String type = expected.type() == StorageType.STRING && expected.textLength() > 0
+                    ? "VARCHAR(" + expected.textLength() + ")" : expected.type().ddl;
+            // 使用元数据解析后的 schema，避免 search_path 导致修改另一张同名表。
+            String sql = "ALTER TABLE " + quote(reference.schema()) + "." + quote(reference.name())
+                    + " ALTER COLUMN " + quote(found.name()) + " TYPE " + type
+                    + " USING CAST(" + quote(found.name()) + " AS " + type + ")";
+            statements.add(sql);
+        }
+        // 不删除默认值/约束；数据库无法自动适配它们时直接失败，由用户手动迁移。
+        for (String sql : statements) SchemaColumnAlter.execute(executor, sql);
+    }
+
+    private static void validate(Connection connection, TableRef reference, Table expected,
+                                 SchemaMode mode, boolean alterColumnType) throws SQLException {
         Set<String> primary = readPrimaryKeys(connection, reference);
         Map<String, Column> actual = readColumns(connection, reference, primary);
         for (Column column : expected.columns()) {
             Column found = actual.get(column.name().toLowerCase(Locale.ROOT));
+            // 显式长度是所需容量：已有列更长可兼容，不自动缩短或扩容。
             if (found == null || found.type() != column.type() || found.primary() != column.primary()
-                    || column.validateLength() && found.textLength() != column.textLength()
-                    || column.primary() && column.type() == StorageType.STRING && found.textLength() > 128) {
-                throw incompatibleColumn(expected, column, found);
+                    || column.validateLength() && found.textLength() < column.textLength()) {
+                throw incompatibleColumn(expected, column, found, mode, alterColumnType);
             }
         }
         long expectedPrimary = expected.columns().stream().filter(Column::primary).count();
         if (primary.size() != expectedPrimary) {
-            throw new IllegalStateException("Incompatible PostgreSQL primary key: " + displayName(expected));
+            throw SchemaErrors.primary("postgresql", displayName(expected));
         }
     }
 
@@ -351,6 +384,8 @@ public final class PostgresqlSchemaManager {
         try (var rows = connection.getMetaData().getColumns(
                 reference.catalog(), reference.schema(), reference.name(), "%")) {
             while (rows.next()) {
+                if (!reference.name().equals(rows.getString("TABLE_NAME"))
+                        || !reference.schema().equals(rows.getString("TABLE_SCHEM"))) continue;
                 String name = rows.getString("COLUMN_NAME");
                 actual.put(name.toLowerCase(Locale.ROOT), new Column(name,
                         jdbcStorageType(rows.getInt("DATA_TYPE"), rows.getString("TYPE_NAME")),
@@ -360,9 +395,15 @@ public final class PostgresqlSchemaManager {
         return actual;
     }
 
-    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual) {
-        return new IllegalStateException("Incompatible PostgreSQL column " + displayName(table) + "."
-                + expected.name() + ": expected " + expected + ", actual " + actual + "; migrate manually");
+    private static IllegalStateException incompatibleColumn(Table table, Column expected, Column actual,
+                                                            SchemaMode mode, boolean alterColumnType) {
+        return SchemaErrors.column("postgresql", displayName(table), diagnosticColumn(expected),
+                actual == null ? null : diagnosticColumn(actual), mode, alterColumnType);
+    }
+
+    private static SchemaErrors.Column diagnosticColumn(Column column) {
+        return new SchemaErrors.Column(column.name(), column.type().name(),
+                SchemaErrors.textType(column.type().ddl, column.textLength()), column.primary(), column.textLength());
     }
 
     private static void ensureIndexes(Connection connection, TableRef reference, Table table,
@@ -375,7 +416,7 @@ public final class PostgresqlSchemaManager {
             ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
             if (found == null) {
                 if (mode == SchemaMode.VALIDATE) {
-                    throw new IllegalStateException("PostgreSQL index is missing: " + expected.name());
+                    throw SchemaErrors.missing("postgresql", displayName(table) + " 索引 " + expected.name(), mode);
                 }
                 executor.execute(createIndexSql(table, expected));
                 changed = true;
@@ -388,7 +429,7 @@ public final class PostgresqlSchemaManager {
             for (EntityIndexResolver.Definition expected : table.indexes()) {
                 ActualIndex found = actual.get(expected.name().toLowerCase(Locale.ROOT));
                 if (found == null) {
-                    throw new IllegalStateException("PostgreSQL index was not created: " + expected.name());
+                    throw SchemaErrors.missing("postgresql", displayName(table) + " 索引 " + expected.name(), mode);
                 }
                 validateIndex(table, expected, found);
             }
@@ -407,7 +448,7 @@ public final class PostgresqlSchemaManager {
             String name = fullTextIndexName(table, column, fullText);
             if (actual.containsKey(name.toLowerCase(Locale.ROOT))) continue;
             if (mode == SchemaMode.VALIDATE) {
-                throw new IllegalStateException("PostgreSQL full-text index is missing: " + name);
+                throw SchemaErrors.missing("postgresql", displayName(table) + " 全文索引 " + name, mode);
             }
             executor.execute(createFullTextIndexSql(table, column, fullText));
             changed = true;
@@ -417,7 +458,7 @@ public final class PostgresqlSchemaManager {
         for (Column column : columns) {
             String name = fullTextIndexName(table, column, fullText);
             if (!actual.containsKey(name.toLowerCase(Locale.ROOT))) {
-                throw new IllegalStateException("PostgreSQL full-text index was not created: " + name);
+                throw SchemaErrors.missing("postgresql", displayName(table) + " 全文索引 " + name, mode);
             }
         }
     }
@@ -485,9 +526,9 @@ public final class PostgresqlSchemaManager {
                 statement.setString(1, config);
                 try (var rows = statement.executeQuery()) {
                     if (!rows.next() || rows.getString(1) == null) {
-                        throw new IllegalStateException("PostgreSQL full-text configuration '" + config
-                                + "' is unavailable. Install pg_jieba on the PostgreSQL server, run "
-                                + "CREATE EXTENSION pg_jieba, and verify yulinlin.postgresql.full-text settings");
+                        throw SchemaErrors.problem("postgresql", "全文检索配置 " + config, "数据库中不存在指定的分词配置",
+                                "请核对 yulinlin.postgresql.full-text 配置；如使用 jieba，请先在服务器安装 pg_jieba，"
+                                        + "并由有权限的管理员在目标数据库执行 CREATE EXTENSION pg_jieba");
                     }
                 }
             }
@@ -499,17 +540,15 @@ public final class PostgresqlSchemaManager {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("JDK does not provide SHA-256", error);
+            throw new IllegalStateException("运行环境缺少 SHA-256 算法，无法生成稳定索引名；请检查 JDK 安装及安全提供者", error);
         }
     }
 
     private static void validateIndex(Table table, EntityIndexResolver.Definition expected, ActualIndex actual) {
         if (expected.unique() != actual.unique() || !actual.ascending()
                 || !sameColumns(expected.columns(), actual.columns())) {
-            throw new IllegalStateException("Incompatible PostgreSQL index " + displayName(table) + "."
-                    + expected.name() + ": expected columns=" + expected.columns() + ", unique=" + expected.unique()
-                    + "; actual columns=" + actual.columns() + ", unique=" + actual.unique()
-                    + "; migrate manually");
+            throw SchemaErrors.index("postgresql", displayName(table) + "." + expected.name(),
+                    expected.columns(), expected.unique(), actual.columns(), actual.unique(), actual.ascending());
         }
     }
 
@@ -545,7 +584,7 @@ public final class PostgresqlSchemaManager {
         if (!name.matches("[\\p{L}_][\\p{L}\\p{N}_]*")
                 || name.toLowerCase(Locale.ROOT).startsWith("pg_")
                 || name.equalsIgnoreCase("information_schema")) {
-            throw new IllegalArgumentException("PostgreSQL schema needs a plain identifier: " + name);
+            throw new IllegalArgumentException("PostgreSQL 标识符不合法或属于受限系统名称；请使用受支持的普通名称。当前值：" + name);
         }
     }
 

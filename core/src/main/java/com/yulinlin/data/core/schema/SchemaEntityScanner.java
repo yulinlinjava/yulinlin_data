@@ -52,7 +52,7 @@ public final class SchemaEntityScanner {
                 JoinTable table = AnnotationUtils.findAnnotation(type, JoinTable.class);
                 if (isSchemaOwner(type, table)) candidates.add(type);
             } catch (LinkageError | ClassNotFoundException error) {
-                throw new IllegalStateException("Cannot load schema entity " + className, error);
+                throw new IllegalStateException("无法加载 Schema 实体；请检查依赖版本和运行时 classpath。实体：" + className, error);
             }
         }
         candidates.sort(java.util.Comparator.comparing(Class::getName));
@@ -63,9 +63,9 @@ public final class SchemaEntityScanner {
             String key = table.value().toLowerCase(Locale.ROOT);
             Class<?> existing = owners.putIfAbsent(key, type);
             if (existing != null && existing != type) {
-                throw new IllegalStateException("Multiple auto-schema owners for " + table.value()
-                        + ": " + existing.getName() + " and " + type.getName()
-                        + "; mark exactly one complete entity with @JoinTable(autoSchema = true)");
+                throw new IllegalStateException("同一张表存在多个自动建表实体。表：" + table.value()
+                        + ": " + existing.getName() + " 与 " + type.getName()
+                        + "\n处理方式：同一张表仅保留一个完整实体的 @JoinTable(autoSchema=true)，其他实体设为 false；测试实体应位于业务扫描包之外");
             }
         }
         return List.copyOf(owners.values());
@@ -76,8 +76,8 @@ public final class SchemaEntityScanner {
         for (String segment : segments) {
             if (segment.equals("*") || segment.equals("**")) continue;
             if (!segment.matches("[\\p{L}_$][\\p{L}\\p{N}_$]*")) {
-                throw new IllegalArgumentException("Invalid schema package pattern: " + value
-                        + "; use Java package segments, * for one level, or ** for any depth");
+                throw new IllegalArgumentException("Schema 扫描包表达式不合法：" + value
+                        + "\n处理方式：使用完整 Java 包段；* 匹配一级包，** 匹配任意层级，不支持半段通配符");
             }
         }
         return value;

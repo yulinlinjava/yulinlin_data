@@ -108,24 +108,7 @@ final class CounterInsert {
     /** 使用不可变精确值保存快照，避免 long 溢出及 double 转换丢失大整数。 */
     record Numeric(Class<?> type, BigDecimal sum) {
         static Numeric of(Number value) {
-            Class<?> type = value.getClass();
-            BigDecimal number;
-            if (type == Byte.class || type == Short.class || type == Integer.class || type == Long.class
-                    || type == AtomicInteger.class || type == AtomicLong.class || type == LongAdder.class) {
-                number = BigDecimal.valueOf(value.longValue());
-            } else if (type == BigInteger.class) {
-                number = new BigDecimal((BigInteger) value);
-            } else if (type == BigDecimal.class) {
-                number = (BigDecimal) value;
-            } else if (type == Float.class || type == Double.class || type == DoubleAdder.class) {
-                double snapshot = value.doubleValue();
-                if (!Double.isFinite(snapshot)) throw new IllegalArgumentException("统计数值不能为 NaN 或无穷大");
-                number = type == Float.class ? new BigDecimal(Float.toString((float) snapshot))
-                        : BigDecimal.valueOf(snapshot);
-            } else {
-                throw new IllegalArgumentException("不支持的统计数字类型：" + type.getName());
-            }
-            return new Numeric(type, number);
+            return new Numeric(value.getClass(), CounterNumbers.snapshot(value));
         }
 
         Numeric add(Numeric other, String field) {

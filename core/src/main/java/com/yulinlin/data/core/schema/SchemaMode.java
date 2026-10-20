@@ -4,7 +4,7 @@ package com.yulinlin.data.core.schema;
 public enum SchemaMode {
     /** Do not scan, create, or validate storage structures. */
     NONE,
-    /** Create missing structures and validate structures that already exist. */
+    /** Create missing structures and validate existing ones; opted-in JDBC modules may also alter column types. */
     CREATE,
     /** Validate existing structures without changing them. */
     VALIDATE

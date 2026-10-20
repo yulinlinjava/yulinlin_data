@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.yulinlin</groupId>
+        <artifactId>data</artifactId>
+        <version>3.0</version>
+    </parent>
+    <artifactId>security-sa-token</artifactId>
+    <properties>
+        <sa-token.version>1.46.0</sa-token.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>security</artifactId>
+            <version>${yulinlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-spring-boot3-starter</artifactId>
+            <version>${sa-token.version}</version>
+        </dependency>
+    </dependencies>
+</project>

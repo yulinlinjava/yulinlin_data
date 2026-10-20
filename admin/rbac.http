@@ -1,4 +1,5 @@
-### 正常启动 AdminApplication，并设置 ADMIN_RBAC_PASSWORD。将下面的值改为同一个密码。
+### 设置 ADMIN_JWT_SECRET（至少32字节随机密钥的Base64）、ADMIN_RBAC_PASSWORD 后启动 AdminApplication。
+### 仅使用 security-jwt。业务校验账号密码后，以 userId 登录；不要在请求中自行传 userId。
 @baseUrl = http://localhost:8083
 @adminPassword = replace-with-your-admin-password
 
@@ -6,9 +7,9 @@
 POST {{baseUrl}}/rbac/auth/login
 Content-Type: application/json
 
-{"username":"admin","password":"{{adminPassword}}"}
+{"username":"admin","password":"{{adminPassword}}","deviceType":"web"}
 
-> {% client.global.set("adminToken", response.body.data.accessToken); %}
+> {% client.global.set("adminToken", response.body.data.token); %}
 
 ### 2. 当前用户（角色编码和合并后的权限集合）
 POST {{baseUrl}}/rbac/auth/me
@@ -71,9 +72,9 @@ Authorization: Bearer {{adminToken}}
 POST {{baseUrl}}/rbac/auth/login
 Content-Type: application/json
 
-{"username":"reader01","password":"Example-Password-2026"}
+{"username":"reader01","password":"Example-Password-2026","deviceType":"web"}
 
-> {% client.global.set("readerToken", response.body.data.accessToken); %}
+> {% client.global.set("readerToken", response.body.data.token); %}
 
 ### 7. 只读用户可以查询用户
 POST {{baseUrl}}/rbac/users/page
@@ -86,7 +87,7 @@ Authorization: Bearer {{readerToken}}
 POST {{baseUrl}}/rbac/roles/list
 Authorization: Bearer {{readerToken}}
 
-### 9. 管理员修改角色权限，事务提交后刷新现有会话
+### 9. 管理员修改角色权限，事务提交后下一次请求通过 UserStore 读取最新权限
 POST {{baseUrl}}/rbac/roles/update
 Content-Type: application/json
 Authorization: Bearer {{adminToken}}
@@ -108,18 +109,18 @@ Authorization: Bearer {{adminToken}}
 POST {{baseUrl}}/rbac/auth/me
 Authorization: Bearer {{readerToken}}
 
-### 13. 停用用户，事务提交后撤销其全部 Token
+### 13. 停用用户，提交后 UserStore 拒绝后续请求（不是撤销 JWT）
 POST {{baseUrl}}/rbac/users/status
 Content-Type: application/json
 Authorization: Bearer {{adminToken}}
 
 {"id":"{{readerUserId}}","status":"disabled"}
 
-### 14. 原 Token 已撤销，应返回 HTTP 401
+### 14. 用户已停用，应返回 HTTP 401；若重新启用，未过期 JWT 可以继续使用
 POST {{baseUrl}}/rbac/auth/me
 Authorization: Bearer {{readerToken}}
 
-### 15. 重置密码，同样撤销该用户所有会话
+### 15. 重置密码（纯无状态 JWT 不会因改密失效；该用户仍因停用而被拒绝访问）
 POST {{baseUrl}}/rbac/users/password
 Content-Type: application/json
 Authorization: Bearer {{adminToken}}
@@ -146,7 +147,7 @@ Authorization: Bearer {{adminToken}}
 
 > {% client.global.set("batchRoleId1", response.body.data[0]); client.global.set("batchRoleId2", response.body.data[1]); %}
 
-### 19. 批量修改角色，同一Service事务提交后刷新权限
+### 19. 批量修改角色，事务提交后下一请求加载最新权限
 POST {{baseUrl}}/rbac/roles/updateBatch
 Content-Type: application/json
 Authorization: Bearer {{adminToken}}

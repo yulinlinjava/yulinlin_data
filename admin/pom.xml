@@ -14,7 +14,7 @@
     <dependencies>
         <dependency>
             <groupId>com.yulinlin</groupId>
-            <artifactId>security</artifactId>
+            <artifactId>security-jwt</artifactId>
             <version>${yulinlin.version}</version>
         </dependency>
         <dependency>

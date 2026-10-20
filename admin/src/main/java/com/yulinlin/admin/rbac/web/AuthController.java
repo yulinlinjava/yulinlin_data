@@ -1,12 +1,13 @@
 package com.yulinlin.admin.rbac.web;
 
-import com.yulinlin.admin.rbac.auth.AdminSecurityManager;
-import com.yulinlin.admin.rbac.auth.AdminUserDetails;
-import com.yulinlin.admin.rbac.domain.UserStatus;
+import com.yulinlin.admin.rbac.auth.AdminAuthenticationService;
 import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.annotation.ApiLimit;
 import com.yulinlin.security.annotation.ApiLogin;
 import com.yulinlin.security.annotation.ApiPublic;
+import com.yulinlin.security.auth.LoginResult;
+import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.IUserDetails;
 import com.yulinlin.starter.domain.R;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,13 +24,16 @@ import org.springframework.web.server.ResponseStatusException;
 @ApiLogin
 @RequiredArgsConstructor
 public class AuthController {
-    private final AdminSecurityManager security;
+    private final AdminAuthenticationService authentication;
+    private final ISecurityManager security;
 
     @ApiPublic
     @ApiLimit(count = 10, interval = "1m")
     @PostMapping("/login")
-    public R<AdminSecurityManager.LoginResponse> login(@Valid @RequestBody RbacRequests.Login request) {
-        return R.ok(security.signIn(request.username(), request.password(), request.code()), "登录成功");
+    public R<LoginResult> login(@Valid @RequestBody RbacRequests.Login request) {
+        String userId = authentication.authenticate(request.username(), request.password(), request.code());
+        String deviceType = request.deviceType() == null ? "web" : request.deviceType();
+        return R.ok(security.login(userId, deviceType), "登录成功");
     }
 
     @PostMapping("/logout")
@@ -39,13 +43,12 @@ public class AuthController {
     }
 
     @PostMapping("/me")
-    public R<AdminUserDetails> me() { return R.ok(security.getUserDetails()); }
+    public R<IUserDetails> me() { return R.ok(security.getUserDetails()); }
 
     @PostMapping("/refresh")
-    public R<AdminUserDetails> refresh() {
-        AdminUserDetails current = security.getUserDetails();
-        AdminUserDetails refreshed = current == null ? null : security.refresh(current.getUserId());
-        if (refreshed == null || refreshed.getStatus() != UserStatus.ENABLED) {
+    public R<IUserDetails> refresh() {
+        IUserDetails refreshed = security.refresh();
+        if (refreshed == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "账号已失效，请重新登录");
         }
         return R.ok(refreshed, "用户信息已刷新");

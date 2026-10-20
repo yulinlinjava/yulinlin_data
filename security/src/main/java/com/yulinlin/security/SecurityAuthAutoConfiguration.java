@@ -3,6 +3,7 @@ package com.yulinlin.security;
 import com.yulinlin.security.aop.ApiAuthAspect;
 import com.yulinlin.security.auth.AnonymousSecurityManager;
 import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.SecurityUtil;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -19,6 +20,12 @@ public class SecurityAuthAutoConfiguration {
     @ConditionalOnMissingBean(ISecurityManager.class)
     public AnonymousSecurityManager anonymousSecurityManager() {
         return new AnonymousSecurityManager();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(SecurityUtil.class)
+    public SecurityUtil securityUtil(ObjectProvider<ISecurityManager> securityManagers) {
+        return new SecurityUtil(securityManagers);
     }
 
     @Bean

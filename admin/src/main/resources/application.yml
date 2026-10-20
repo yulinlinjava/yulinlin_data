@@ -59,8 +59,6 @@ management:
 # RBAC 案例随 admin 正常启动，无需额外激活 rbac profile。
 admin:
   rbac:
-    token-ttl: 2h
-    maximum-sessions: 10000
     bootstrap-username: ${ADMIN_RBAC_USERNAME:admin}
     # 为空时跳过初始管理员创建，不提供默认密码。
     bootstrap-password: ${ADMIN_RBAC_PASSWORD:}
@@ -84,6 +82,13 @@ yulinlin:
     log: true
     alter-column-type: true
   security:
+    auth:
+      enabled: true
+    jwt:
+      # 必填：至少32字节随机密钥的Base64；不能使用每次启动变化的随机值。
+      secret: ${ADMIN_JWT_SECRET}
+      issuer: yulinlin-admin
+      ttl: 2h
     # 引入 security 后需要 unknown 设备配置。默认关闭报文加密，密钥每次启动随机生成。
     # 接入真实客户端时应设置 ADMIN_CRYPTO_KEY，并配置双方约定的设备密钥。
     crypto:

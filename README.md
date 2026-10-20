@@ -103,13 +103,13 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 | HTTP，以及 lang 的反射、JSON、日期、缓存、并发、事件等全部工具 | [工具类](doc/04-工具类.md) |
 | 新数据源接入、编解码扩展、资源生命周期与排障 | [扩展开发与维护](doc/05-扩展开发与维护.md) |
 | 内部维护：core 组件、RouteSession 执行链、事务/缓存/代理/队列、日志与监控边界 | [核心组件与业务边界](doc/10-核心组件与业务边界.md) |
-| JSON 接口加解密、IP/设备限流与浏览器协议 | [接口安全](doc/06-接口安全.md) |
+| 加解密、限流、JWT/Sa-Token 二选一登录、Redis 登录记录与组件扩展 | [接口安全](doc/06-接口安全.md) |
 | SQLite/H2 多线程写入结果、选型依据与复现 | [SQLite/H2 性能报告](doc/07-SQLite与H2性能报告.md) |
 | Caffeine/Ehcache/Redis 查询缓存、TTL、复杂 SQL 与多数据源 Key | [查询缓存](doc/08-查询缓存.md) |
 
 [文档目录](doc/README.md)提供完整阅读导航。AI 能读取仓库时从 [llms.txt](llms.txt)进入；只能上传一个附件时用 [AI 接入指南](doc/AI接入指南.md)，其中包含七个使用专题。
 
-完整业务案例：[Admin 两表 RBAC 与登录](doc/09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)。用户直接保存角色编码集合，角色直接保存权限编码集合，展示枚举状态、集合编解码、JoinQuery、事务自动更新、Token 登录与权限校验；可从 [admin/rbac.http](admin/rbac.http) 执行请求。
+业务案例：[Admin 两表 RBAC 与 JWT 登录](doc/09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)。用户保存角色编码集合，角色保存权限编码集合，展示枚举状态、JoinQuery、事务自动更新和 `security-jwt`：业务校验账号密码后用 userId 登录，UserStore 加载最新权限，默认登录存储支持按用户查询和撤销。启动需配置 `ADMIN_JWT_SECRET`；操作示例见 [rbac.http](admin/rbac.http)，扩展方式见[接口安全](doc/06-接口安全.md#安全管理器)。本次迁移未编译或执行测试。
 
 ## 快速选择
 
@@ -119,7 +119,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 - PostgreSQL 可用 `@JoinField(fullText=true)`、`match()` 和 `highlight()` 接入 pg_jieba 中文分词、GIN 索引与原字段高亮；其他 SQL 数据源保持 LIKE/原字段兼容语义。
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。
-- 接口报文加密：security；当前提供显式注解启用的 AES-CBC（默认）和 AES-GCM JSON 加解密。
+- 接口安全：仅加密、限流、权限协议用 `security`；需要登录时只选 `security-jwt` 或 `security-sa-token`，它们已依赖公共模块。业务验证账号后用 `SecurityUtil.login(userId, deviceType)`，提供 `UserStore` 加载安全用户信息。JWT 支持替换生成/解析、登录拦截器及 `JwtSessionStore`，含[Redis 登录记录接入示例](doc/06-接口安全.md#redis-登录记录接入)；其他安全框架实现唯一的 `ISecurityManager`。各组件职责与注册方式见[扩展入口](doc/06-接口安全.md#常用组件扩展入口)。
 - 查询缓存完全可选：`cache-core` 承载缓存 SPI、`CacheClient` 管理入口、`Cache` 数据操作及 Key/TTL/失效模型，由 ORM core 或 Provider 传递引入；不引入具体 Provider 时 ORM 直接访问数据源，业务 API 返回空缓存。`cache-caffeine`、`cache-ehcache`、`cache-redis` 可以共存，单实现自动选择，多实现用 `yulinlin.cache.default` 指定默认。`cacheClient.getCache()` 获取默认缓存，`getCache("redis")` 人工选择，随后使用 `Cache.get/set/getOrLoad/getAll/setAll/removeAll/clear`。Redis 内置 L1 不等于独立的 caffeine 实现，详见[查询缓存](doc/08-查询缓存.md)。
 - 慢数据库监控：引入 `monitor`，访问 `/monitor/`；可通过 `yulinlin.monitor.enabled=false` 完全关闭采集与页面，页面内置账号密码验证对话框，验证结果保存在当前 Session，不依赖安全框架。
 

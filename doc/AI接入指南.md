@@ -33,7 +33,8 @@
 | Spring Boot 和 PostgreSQL ORM | postgresql；需要便利模型门面时再加 common 或 starter |
 | HTTP 工具 | core，starter 已传递引入 |
 | 反射、深克隆、JSON | lang |
-| JSON 接口请求/响应加密 | security；需要 Spring MVC，独立于 ORM 数据库模块 |
+| JSON 接口请求/响应加密、限流、权限协议 | security；Web 能力需要 Spring MVC，独立于 ORM 数据库模块 |
+| 用户登录与请求身份恢复 | security-jwt 或 security-sa-token 二选一，自动依赖 security；业务提供 UserStore，见[安全接入与扩展](06-接口安全.md#安全管理器) |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
 | 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
@@ -1903,15 +1904,14 @@ public void createOrder() throws Exception {
 ```java
 @Transactional
 @JoinSync
-public void changeRole(String id, List<String> permissions) {
-    RoleEntity role = roleRepository.findByIdEq(id);
-    role.setPermissions(permissions);
-    String code = role.getCode();
-    TransactionUtil.afterCommit(() -> security.refreshRole(code));
+public void disableUser(String id) {
+    UserEntity user = userRepository.findByIdEq(id);
+    user.setStatus(UserStatus.DISABLED);
+    TransactionUtil.afterCommit(() -> sessions.removeByUserId(id));
 }
 ```
 
-上例是方法片段，`roleRepository` 和 `security` 为业务注入对象。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
+上例是方法片段，`userRepository` 为业务仓库，`sessions` 为注入的 `JwtSessionStore`，默认实现支持 `removeByUserId`，无需自建存储。实际业务还应保留自身保护等校验；允许撤销当前用户时，还要在删除成功后清理其本线程上下文。新版 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
 
 | 场景 | 行为 |
 | --- | --- |
@@ -3028,9 +3028,20 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 
 `security` 模块提供 Spring MVC JSON 接口加解密、本机接口限流，以及基于公共注解的登录、角色和权限检查。默认加密协议是 `AES/CBC/PKCS5Padding + UTF-8 key + UTF-8 IV + 标准 Base64`；每种设备可以使用独立密钥，也可以单独切换为 AES-GCM。限流由 Caffeine 保存短期计数，鉴权使用 Spring AOP，不依赖 Spring Security、Redis 或 ORM。
 
-阅读顺序：[完整配置](#完整主配置) · [接口限流](#接口限流) · [鉴权声明](#鉴权声明注解) · [配置规则](#配置项与默认值) · [接口注解](#接口注解) · [CBC 前端对接](#默认-cbc-前端对接) · [排除路径](#明文排除路径) · [GCM](#可选-aes-gcm) · [手动 API](#手动使用) · [安全边界](#安全边界与限制)
+阅读顺序：[完整配置](#完整主配置) · [登录接入](#安全管理器) · [组件扩展](#常用组件扩展入口) · [Redis 登录记录](#redis-登录记录接入) · [自定义拦截器](#自定义登录拦截器) · [接口限流](#接口限流) · [鉴权声明](#鉴权声明注解) · [配置规则](#配置项与默认值) · [接口注解](#接口注解) · [CBC 前端对接](#默认-cbc-前端对接) · [排除路径](#明文排除路径) · [GCM](#可选-aes-gcm) · [手动 API](#手动使用) · [安全边界](#安全边界与限制)
 
 ### 引入模块
+
+一个项目只选一种登录实现，不同时引入 `security-jwt` 和 `security-sa-token`。它们均依赖公共 `security`，无需重复声明公共模块：
+
+| 业务需要 | 引入的制品 | 业务需要提供 |
+| --- | --- | --- |
+| 仅加密、限流或公共权限协议 | `security` | 不需要登录实现；默认匿名管理器可启动 |
+| JWT 登录 | `security-jwt` | `UserStore` Bean、JWT 配置；需要持久化登录时再替换 `JwtSessionStore` |
+| Sa-Token 登录 | `security-sa-token` | `UserStore` Bean；会话策略和存储使用 Sa-Token 自身配置 |
+| 已有其他安全框架 | `security` | 适配该框架的 `ISecurityManager` Bean |
+
+下面为仅引入公共模块的示例；需要登录时，将 `artifactId` 换成上表选定的实现即可。
 
 ```xml
 <dependency>
@@ -3042,7 +3053,7 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 
 模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice、响应加密 Advice 和接口限流拦截器；多设备模式缺少 `unknown`、密钥或 CBC IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
 
-鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。只使用加密、限流的项目不需要提供业务 ISecurityManager；没有鉴权注解的方法不检查登录，也没有额外的 auth.enabled 开关。
+鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 注册拦截器，`yulinlin.security.auth.enabled` 默认 true，只控制该拦截器，不关闭权限 AOP。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
 
 ### 完整主配置
 
@@ -3051,6 +3062,10 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 ```yaml
 yulinlin:
   security:
+    auth:
+      # 控制登录拦截器自动注册（默认或自定义 Bean）；外部框架自行管理请求身份时关闭
+      enabled: true
+
     crypto:
       # true：严格加密；false：兼容明文/密文请求，响应统一明文
       enabled: true
@@ -3251,7 +3266,7 @@ location /api/ {
 
 ### 登录用户模型
 
-需要完整实现时，参考第九专题的 [Admin 两表 RBAC 与登录案例](09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)：在 admin 层实现本节协议，使用集合存储角色/权限、用户状态枚举及独立 Caffeine Token 会话。源码与 HTTP 请求文件都已提供，security 模块的协议仍可被其他业务自行实现。
+完整业务接入参考第九专题的 [Admin 两表 RBAC 与 JWT 登录案例](09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)：业务认证后用 userId 登录，`AdminUserStore` 加载用户与权限，直接使用默认 `JwtSessionStore` 按用户撤销登录记录。admin 只引入 security-jwt，不自己实现安全管理器或登录存储；本轮源码迁移未编译、未执行测试。
 
 登录用户模型只约束最小身份、角色和权限协议，不规定用户表、登录流程、密码校验、Token，以及权限数据如何存储、加载。业务用户模型按需实现 `IUserDetails`：
 
@@ -3315,77 +3330,399 @@ if (loginUser.hasPermission("video:update")) {
 
 #### 安全管理器
 
-需要登录功能的业务项目实现 `ISecurityManager`，提供登录、注销、获取当前登录用户和强制刷新四个入口。框架默认注册 AnonymousSecurityManager，不伪造登录用户，也不规定账号保存在哪里；用户提供自己的 ISecurityManager Bean 后，默认实现自动退出：
+业务先校验账号、密码、验证码和状态，再用可信 `userId` 登录。框架不处理账号密码，也不查询指定用户表。使用 JWT 或 Sa-Token 实现时，不需要自己实现整个 `ISecurityManager`。
 
 ```java
-import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.LoginResult;
+import com.yulinlin.security.auth.SecurityUtil;
+
+// 业务代码：校验密码、验证码、状态，返回真实用户 ID。
+String userId = accountService.authenticate(username, password, code);
+LoginResult result = SecurityUtil.login(userId, "web");
+// Controller 将 result 包装成项目的 R<LoginResult> 返回。
+```
+
+上面的 `accountService` 是业务服务，不是框架组件。不能把前端传入的 userId 直接交给 login，否则会绕过身份认证。失败时业务可抛出 `LoginException`，账号不存在和密码错误应使用相同对外提示；基础设施错误不要伪装成登录成功。
+
+```java
+SecurityUtil.login(userId);        // deviceType 默认 "default"
+SecurityUtil.login(userId, "web"); // 设备类型由本次登录明确传入
+SecurityUtil.getUserDetails();    // 当前用户，未登录为 null
+SecurityUtil.requireUser();       // 当前用户，未登录抛 LoginException
+SecurityUtil.getUserDetails(userId); // 读取指定用户，不切换当前身份
+SecurityUtil.getToken();
+SecurityUtil.hasRole("admin");
+SecurityUtil.hasPermission("video:update");
+SecurityUtil.refresh();           // 重新加载当前用户
+SecurityUtil.refresh(userId);     // 指定用户；不是当前用户时仅加载并返回
+SecurityUtil.logout();            // 注销当前 Token，清理线程上下文
+SecurityUtil.manager();           // 获取底层 ISecurityManager，也可以直接注入它
+```
+
+`login(String, String)` 现在表示 **userId + deviceType**，不再表示用户名和密码；旧三参数登录也已移除。登录成功返回 `LoginResult(token, expiresAt, user)`。`user` 为不含密码的 `IUserDetails`，不要返回含凭证的 ORM 用户实体。登录设备与加密用的 `Device-Type` 请求头不是自动绑定关系。
+
+`SecurityUtil` 只是静态委托入口，应用单例初始化完成后可用；不要在 Bean 构造器等过早阶段调用。普通业务也可以直接注入唯一的 `ISecurityManager`。不需要设计多管理器选择或运行时切换。
+
+#### 常用组件扩展入口
+
+只替换需要定制的组件，其他继续使用当前登录实现的默认行为。各扩展点只注册一个业务 Bean，不需要额外配置“实现类名称”。
+
+| 需要定制的能力 | 扩展点及包 | 怎么接入 |
+| --- | --- | --- |
+| 安全用户模型 | `auth.IUserDetails` | 业务安全 DTO 实现接口，排除密码等敏感字段 |
+| 加载用户、角色、权限 | `auth.UserStore` | 提供 Bean，实现 `load(userId)`；JWT、Sa-Token 都使用它 |
+| JWT 生成及验签解析 | `jwt.JwtTokenCodec` | 提供 Bean，同时实现 `generate`、`parse`，默认 Codec 自动退出 |
+| JWT 登录记录持久化、撤销 | `jwt.JwtSessionStore` | 提供 Bean 实现 `save/get/remove/getByUserId`，替换默认 Caffeine；`removeByUserId` 有默认实现 |
+| Token 从哪里读取、怎样恢复身份 | `web.LoginInterceptor` | 提供该类型 Bean；框架自动注册，不用再写 MVC 注册器 |
+| 整体接入其他安全框架 | `auth.ISecurityManager` | 提供 Bean，负责登录/注销/用户及会话；由外部维护请求身份时关闭 `auth.enabled` |
+| Sa-Token 原生能力 | `satoken.SaTokenSecurityManager` | 使用 `stpLogic()`；存储和策略沿用 Sa-Token 自身扩展 |
+| IP 黑名单 | `limit.IpBlacklist` | 实现并注册 Bean，见 [IP 黑名单](#ip-黑名单) |
+
+表中包名前缀均为 `com.yulinlin.security`。加密设备密钥、限流参数优先使用本专题配置和注解，不必为普通配置需求替换整个安全管理器。
+
+#### 加载用户信息
+
+```java
+import com.yulinlin.security.auth.UserStore;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+public UserStore userStore(AccountService accounts) {
+    return userId -> accounts.loadSecurityUser(userId);
+}
+```
+
+`AccountService.loadSecurityUser` 为业务自定义方法，返回实现 `IUserDetails` 的安全 DTO。只按 userId 加载，不在这里再次验证密码或验证码。用户不存在、已停用或不允许登录时返回 `null` 或抛 `LoginException`；数据库等故障直接抛出，不能返回一个默认用户。返回对象的 userId 必须与查询 ID 一致。
+
+JWT 中不保存完整用户资料。每次正常请求恢复身份时，验证 Token 和登录记录后重新调用 `UserStore`；同一请求后续读取线程快照，不重复加载。业务可在 `UserStore` 内加缓存，但必须自行处理角色、状态变更的失效，`refresh()` 不会替你清理业务缓存。
+
+#### JWT 最小接入
+
+引入 `com.yulinlin:security-jwt:3.0`，注册上述 `UserStore`，再配置：
+
+```yaml
+yulinlin:
+  security:
+    auth:
+      enabled: true
+    jwt:
+      secret: ${YULINLIN_JWT_SECRET} # 至少 32 字节随机密钥的 Base64，不是 AES 设备密钥
+      issuer: yulinlin
+      ttl: 2h
+      maximum-size: 100000 # 仅默认 Caffeine 登录记录容量
+```
+
+默认 `DefaultJwtTokenCodec` 使用 HS256，签发 `sub=userId`、唯一 `jti`、`deviceType`、`iat`、`exp`、`iss`；验签时检查算法、签名和签发者，管理器还检查时间与服务端记录。`ttl` 默认 2h，允许 1s～365d。JWT 是签名而非加密，不要加入密码等秘密资料。
+
+本实现是 **JWT + 服务端登录记录**，不是纯无状态 JWT。默认记录存在本机 Caffeine，容量淘汰或应用重启会使相关登录失效。仅有正确签名不能绕过丢失或被注销的登录记录。
+
+#### 自定义 Token 生成与解析
+
+```java
+package com.example.security;
+
 import com.yulinlin.security.auth.IUserDetails;
-import com.yulinlin.security.auth.LoginException;
-import org.springframework.stereotype.Service;
+import com.yulinlin.security.jwt.JwtTokenCodec;
+import com.yulinlin.security.jwt.TokenInfo;
 
-@Service
-public class SecurityManagerImpl implements ISecurityManager {
+// 在业务配置中将此实现注册成唯一 JwtTokenCodec Bean。
+public class BusinessTokenCodec implements JwtTokenCodec {
+    private final BusinessTokenService tokens;
 
-    @Override
-    public IUserDetails login(String username, String password, String code) {
-        IUserDetails user = authenticate(username, password, code);
-        if (user == null) {
-            throw new LoginException("用户名或密码错误");
-        }
-        return user;
+    public BusinessTokenCodec(BusinessTokenService tokens) {
+        this.tokens = tokens;
     }
 
     @Override
-    public void logout() {
-        // 注销当前请求对应的用户
+    public String generate(IUserDetails user, String deviceType) {
+        return tokens.issue(user.getUserId(), deviceType);
     }
 
     @Override
-    public IUserDetails getUserDetails() {
-        // 返回当前请求对应的登录用户；未登录返回 null
-        return null;
-    }
-
-    @Override
-    public IUserDetails getUserDetails(String userId) {
-        // 读取指定用户，可以使用已有快照或缓存
-        return findUser(userId);
-    }
-
-    @Override
-    public IUserDetails refresh(String userId) {
-        // 强制重新加载指定用户
-        return reloadUser(userId);
+    public TokenInfo parse(String token) {
+        return tokens.verifyAndParse(token);
     }
 }
 ```
 
-接口同时提供两种登录调用：
+`BusinessTokenService` 是示意的业务实现，不是框架类；请委托成熟 JWT 库做签发和验签，不要只 Base64 解码。注册方式：`@Bean JwtTokenCodec jwtTokenCodec(BusinessTokenService tokens) { return new BusinessTokenCodec(tokens); }`。
+
+解析结果定义为：
 
 ```java
-securityManager.login(username, password);
-securityManager.login(username, password, code);
+public record TokenInfo(
+    String userId,
+    String deviceType,
+    String tokenId,
+    Instant issuedAt,
+    Instant expiresAt
+) {}
 ```
 
-两参数版本是默认方法，内部等价于 `login(username, password, null)`，用户只需要实现三参数版本。`code` 表示可选验证码；不使用验证码时为 `null`。
+- 每次新登录生成唯一 tokenId；保留传入的 userId 和 deviceType，不能更换身份。管理器会回读解析结果并核对，再保存登录记录。
+- parse 必须完成验签等真实性校验；无效 Token 返回 null 或抛 `LoginException`。外部依赖故障应正常抛出，不能绕过验证。
+- 签发时间不能在未来，过期时间必须晚于签发时间且未过期。自定义 Codec 以返回的 expiresAt 决定会话到期，不自动再套一层配置 ttl。
+- 兼容旧 Token 未携带 deviceType：解析结果可为 null，管理器从登录记录取得设备类型；其他签名、用户、tokenId、有效期校验不放宽。新登录生成的 Token 仍需携带匹配的 deviceType。
+- 提供自定义 Codec 后，无需默认 Codec 的 secret/issuer；签名策略由自定义实现负责。它不负责存储、注销、加载用户或设置线程上下文。
 
-登录成功必须返回非空 `IUserDetails`。用户不存在、密码错误、验证码错误或账号状态拒绝登录时抛出 `LoginException`；数据库、Redis 等基础设施故障应保留原始异常，不应伪装成普通登录失败。用户名不存在和密码错误对外推荐使用相同提示，避免暴露账号是否存在。
+如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法，但 **generate 本身不保存登录记录**。要让框架接受登录并支持注销，应调用 `SecurityUtil.login`。
 
-`getUserDetails()` 读取当前请求的登录用户，未登录返回 `null`；`getUserDetails(userId)` 读取指定用户，可以使用已有登录快照或缓存，但不能改变当前请求身份：
+#### Redis 登录记录接入
+
+业务实现并注册一个 `JwtSessionStore` Bean 即可。无需改框架或重写 `ISecurityManager`，也无需替换 Token Codec。
 
 ```java
-IUserDetails current = securityManager.getUserDetails();
-IUserDetails specified = securityManager.getUserDetails("10001");
+public interface JwtSessionStore {
+    void save(JwtSession session);
+    JwtSession get(String tokenId);
+    void remove(String tokenId);
+    List<JwtSession> getByUserId(String userId);
+    default void removeByUserId(String userId) {
+        Objects.requireNonNull(userId, "用户ID不能为空");
+        if (userId.isBlank()) throw new IllegalArgumentException("用户ID不能为空");
+        for (JwtSession session : getByUserId(userId)) {
+            remove(session.tokenId());
+        }
+    }
+}
+
+public record JwtSession(
+    String tokenId, String userId, String deviceType, Instant expiresAt
+) {}
 ```
 
-业务只需要实现 `refresh(String userId)`；无参数 `refresh()` 是默认方法，它先取得当前用户，再转调 `refresh(current.getUserId())`，未登录时返回 `null`：
+一条记录对应一个 tokenId（JWT 的 jti），不是一个 userId。同一用户不同登录可以有不同记录。记录不保存原始 Token、密码或完整用户资料；用户资料仍由 `UserStore` 加载。
+
+直接注入 `JwtSessionStore` 即可管理登录，不需要为以下功能自定义存储：
 
 ```java
-IUserDetails current = securityManager.refresh();
-IUserDetails specified = securityManager.refresh("10001");
+List<JwtSession> logins = sessions.getByUserId(userId); // 所有有效登录，没有则为空集合
+sessions.removeByUserId(userId);                     // 撤销该用户查到的全部登录
 ```
 
-刷新用于重新加载最新角色、权限和扩展属性。传入其他用户 ID 时只刷新并返回该用户信息，不能把当前请求身份切换成该用户。刷新不等于重新输入密码登录，也不改变 Token 的签发时间和有效期。
+默认 Caffeine 实现按需遍历当前记录，复杂度 O(缓存记录数)；普通请求按 tokenId 验证不受影响，不维护第二份用户索引。按用户查询不续期，返回不可修改的列表快照；并发登录或注销可能让快照立即变化。默认删除为“先查再逐条删”，不是阻止并发新登录的原子操作。自定义存储可以覆盖该方法做批量删除，异常不能吞掉。
+
+Store 只管理记录，不修改 `SecurityContext`。业务撤销当前用户时可以在成功删除后清理当前线程；其他已经进入业务的请求不会被中途终止。重置密码等写操作应在事务提交成功后执行撤销。
+
+迁移已有自定义 Store 时，必须补充 `getByUserId`，不能用返回空集合来假装支持撤销；返回的记录必须属于该 userId 且未过期。以下 Redis 示例也实现这个方法。
+
+先在业务项目引入 Boot 管理版本的 Redis Starter：
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+```yaml
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: 6379
+      password: ${REDIS_PASSWORD}
+      timeout: 2s
+```
+
+下面 `RedisJwtSessionStore` 是 **业务侧示例，不是框架内置类**。使用同步 `StringRedisTemplate`、固定类型 JSON、记录剩余有效期；不使用本地二级缓存、不异步写入：
+
+```java
+package com.example.security;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yulinlin.security.jwt.JwtSession;
+import com.yulinlin.security.jwt.JwtSessionStore;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+
+public final class RedisJwtSessionStore implements JwtSessionStore {
+    private final StringRedisTemplate redis;
+    private final ObjectMapper json;
+    private final String prefix;
+
+    public RedisJwtSessionStore(StringRedisTemplate redis,
+                               ObjectMapper json, String prefix) {
+        this.redis = redis;
+        this.json = json;
+        this.prefix = prefix;
+    }
+
+    @Override
+    public void save(JwtSession session) {
+        final String value;
+        try {
+            value = json.writeValueAsString(session);
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("登录记录序列化失败", error);
+        }
+        long ttlMillis = Duration.between(Instant.now(), session.expiresAt()).toMillis();
+        if (ttlMillis <= 0) throw new IllegalArgumentException("登录记录已过期");
+        // 一次 SET 同时写入值和 TTL，不能分成 SET、EXPIRE 两步。
+        redis.opsForValue().set(prefix + session.tokenId(), value,
+                Duration.ofMillis(ttlMillis));
+    }
+
+    @Override
+    public JwtSession get(String tokenId) {
+        String value = redis.opsForValue().get(prefix + tokenId);
+        if (value == null) return null;
+        try {
+            JwtSession session = json.readValue(value, JwtSession.class);
+            // 不续期、不回写；缺失/过期/撤销均不能恢复登录。
+            if (session == null || !tokenId.equals(session.tokenId())) {
+                throw new IllegalStateException("登录记录内容与标识不一致");
+            }
+            return session.expired() ? null : session;
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("登录记录反序列化失败", error);
+        }
+    }
+
+    @Override
+    public void remove(String tokenId) {
+        redis.delete(prefix + tokenId); // 同步删除；不存在可忽略，连接故障不能吞掉
+    }
+
+    @Override
+    public List<JwtSession> getByUserId(String userId) {
+        Objects.requireNonNull(userId, "用户ID不能为空");
+        if (userId.isBlank()) throw new IllegalArgumentException("用户ID不能为空");
+        List<JwtSession> result = new ArrayList<>();
+        HashSet<String> visited = new HashSet<>();
+        // 简单单节点示例：前缀由服务端固定配置，不允许包含 Redis glob 通配符。
+        try (var cursor = redis.scan(ScanOptions.scanOptions().match(prefix + "*").count(256).build())) {
+            while (cursor.hasNext()) {
+                String key = cursor.next();
+                if (!key.startsWith(prefix) || !visited.add(key)) continue;
+                JwtSession session = get(key.substring(prefix.length()));
+                if (session != null && userId.equals(session.userId())) result.add(session);
+            }
+        }
+        return List.copyOf(result);
+    }
+}
+```
+
+此 Redis 示例只为说明协议，用户查询采用 SCAN 后过滤，不用阻塞式 KEYS，也不是数据库快照。适合低频管理操作；大量登录记录或频繁按用户查询应维护 userId → tokenId 索引，并处理过期、注销和索引清理。Redis Cluster 需要覆盖全部相关主节点或改用索引，不能把单节点 SCAN 当作全量结果。默认 `removeByUserId` 复用查询并同步逐条删除，不提供跨键原子撤销。
+
+在业务 `@Configuration` 类中注册：
+
+```java
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.yulinlin.security.jwt.JwtSessionStore;
+import org.springframework.context.annotation.Bean;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+@Bean
+public JwtSessionStore jwtSessionStore(StringRedisTemplate redis, ObjectMapper mapper) {
+    ObjectMapper sessionJson = mapper.copy().registerModule(new JavaTimeModule());
+    return new RedisJwtSessionStore(redis, sessionJson, "video:prod:login:");
+}
+```
+
+无需设置“store=redis”。检测到这个 Bean，默认 Caffeine 存储自动退出，`maximum-size` 不再控制登录记录容量。Json Mapper 需要支持 Instant；不要为这些固定结构记录开启任意类名反序列化。
+
+存储实现约定：
+
+- 保存成功才允许登录成功；Redis 不可用时抛异常，不退回本机缓存或纯 JWT 放行。
+- TTL 按该记录 expiresAt 的剩余时间计算，不能每次读取重置成 2h。`get` 不续期。
+- 注销同步删除当前 tokenId，对后续认证读取生效；已进入业务执行中的请求不会被强制终止。
+- 使用同一 Redis 命名空间和主节点读写，不启用该模板的事务排队、异步写入或可能读取旧值的副本读策略。不要直接复用带 L1/异步写入的 ORM `cache-redis` 配置作为登录有效性存储。
+- 应用重启后，签名密钥、issuer、Redis 地址/库/前缀保持一致，记录仍存在且未到期，用户仍允许登录，则旧 Token 可继续使用。默认 Caffeine 不具备这个保证。
+- Redis 自身重启还取决于持久化配置；故障或淘汰导致记录丢失时应拒绝登录。持久化/备份恢复也可能丢失最近的注销，不能宣称仅接入 Redis 就绝对可靠。
+
+Redis 的值与过期时间可通过一次 [SET](https://redis.io/docs/latest/commands/set/) 原子设置；重启恢复和可能的数据丢失边界参见 [Redis 持久化](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)。此示例未编译或联调，接入方需要验证实际 Redis、认证配置与 JSON 配置。
+
+#### 自定义登录拦截器
+
+仅需改变 Token 请求头时，继承默认实现，保留它的验证与上下文处理：
+
+```java
+import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.web.LoginContextInterceptor;
+import com.yulinlin.security.web.LoginInterceptor;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+public LoginInterceptor loginInterceptor(ISecurityManager manager) {
+    return new LoginContextInterceptor(() -> manager) {
+        @Override
+        protected String resolveToken(HttpServletRequest request) {
+            return request.getHeader("X-Token"); // 示例：直接携带 Token，不带 Bearer 前缀
+        }
+    };
+}
+```
+
+保持 `yulinlin.security.auth.enabled: true`。框架发现业务 `LoginInterceptor` Bean 后使用它，否则使用默认实现；框架负责 MVC 注册和清理包装，无需手动 `addInterceptors`，避免重复执行。Bean 返回类型应声明为 `LoginInterceptor` 或具体实现，不要只暴露为普通 `HandlerInterceptor`。
+
+完全定制时也可直接实现 `LoginInterceptor`，但必须自己完成可信身份恢复并设置 `SecurityContext`，不能只从请求里读出 userId 就认为已登录。框架包装器负责请求开始、拒绝请求、异常、完成及异步切换的清理，不替自定义实现补做验签。Token 算法变化优先替换 `JwtTokenCodec`，不必改拦截器。
+
+#### Sa-Token 接入
+
+选择 `com.yulinlin:security-sa-token:3.0`，不引入 `security-jwt`；仍提供相同的 `UserStore`。业务继续调用 `SecurityUtil.login(userId, deviceType)`、`logout()` 和 `getUserDetails()`，权限注解不用改。
+
+Token 生命周期、设备策略、会话存储由 Sa-Token 负责，配置沿用 `sa-token.*`，Redis 持久化使用 Sa-Token 的存储扩展，不实现 `JwtSessionStore` 或 `JwtTokenCodec`。需要原生功能时注入 `SaTokenSecurityManager`，调用 `stpLogic()` 获取底层对象。
+
+统一 HTTP 入口仍默认读取 `Authorization: Bearer <token>`；适配器本身不读写 Cookie。若业务另外使用原生 `StpUtil` 的 HTTP 入口，需自行对齐其 Token 读取配置，不能假设两套请求头规则自动相同。接口详情以所用版本的 [Sa-Token 登录文档](https://sa-token.com/use/login-auth.html) 为准。
+
+#### 登录上下文与请求生命周期
+
+```java
+LoginResult result = SecurityUtil.login(userId, "web"); // 前提：业务已验证身份
+// HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user。
+IUserDetails user = SecurityContext.requireUser();
+String userId = SecurityContext.getUserId();
+String token = SecurityContext.getToken();
+boolean loggedIn = SecurityContext.isLogin();
+```
+
+前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。一个正常请求只解析一次 Token，Controller、Service 和权限 AOP 读取同一用户快照。JWT 和 Sa-Token 实现已提供 resolveSession；自己实现管理器且使用此拦截器时也必须提供该能力。
+
+没有 Authorization 时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
+
+正常完成、异常完成时通过 afterCompletion 调用 ThreadLocal.remove()；preHandle 自身失败也立即清理。异步 MVC 的 afterConcurrentHandlingStarted 清理原请求线程，后续 MVC redispatch 会重新解析 Token，但 Callable、DeferredResult 或线程池的业务线程不会自动继承身份。不要使用 InheritableThreadLocal。后台任务需要的用户 ID 显式作为参数传递；不能把客户端声明的 userId 直接变成可信身份。
+
+请求结束只清理线程，不注销服务端 Token。logout 必须先撤销服务端会话，再在 finally 清理当前上下文。refresh 当前用户时同步更新当前线程快照；其他请求已经加载的快照不会被跨线程强制替换，撤销/角色变化会在后续请求恢复时体现，长请求如有需要应主动复核。刷新用户资料不等于 JWT 自动续期，也不能让已注销 Token 复活；Sa-Token 的活跃超时策略按其自身配置执行。
+
+非 HTTP 使用后必须显式清理：
+
+```java
+try {
+    SecurityUtil.login(userId, "job"); // 仅限服务端已验证身份的场景
+    // 当前线程业务
+} finally {
+    SecurityContext.clear(); // 清理当前线程，不注销服务端会话
+}
+```
+
+SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理使用的入口。LoginSession/LoginResult 的 toString 不打印 Token 和用户资料；仍不得把完整登录响应、请求头或密码写入日志。
+
+#### 接入外部安全框架
+
+如果选择已提供的 Sa-Token 适配，使用上一节即可，不必自己再写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean，委托该框架按 userId 登录、注销、查询用户和刷新。若由外部框架负责完整请求身份生命周期，则关闭本模块的登录拦截器自动注册：
+
+```yaml
+yulinlin:
+  security:
+    auth:
+      enabled: false
+```
+
+不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 login(userId, deviceType)、logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；不要把原来的账号密码验证塞回协议参数。
+
+ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限流也不受影响。外部框架负责身份恢复与清理；如果仍主动写入本模块的 SecurityContext，需要自己保证 finally 清理。该开关不替代外部框架自己的鉴权配置。只想换本模块拦截器 Bean 时不要关闭此开关，否则自定义 Bean 也不会被自动注册。
 
 ### 鉴权声明注解
 
@@ -3438,11 +3775,11 @@ public class UserApi {
 | --- | --- |
 | 无业务 ISecurityManager Bean | 自动提供 AnonymousSecurityManager，正常启动 |
 | `getUserDetails()`、`getUserDetails(userId)`、`refresh(userId)` | 返回 null，不查库、不生成身份 |
-| `logout()` | 空操作 |
+| `logout()` | 清理本模块当前线程上下文，不操作外部登录会话 |
 | `login(...)` 两个重载 | 抛出 IllegalStateException，提示未配置业务安全管理器 |
 | 无鉴权注解或允许匿名的方法 | 不读取管理器，不影响加密和限流 |
 | 默认匿名实现访问受保护方法 | 401，不会因为没有业务实现而放行 |
-| 自定义 ISecurityManager Bean | 自动替换默认实现；多个实现需用 Primary 明确选择 |
+| 自定义 ISecurityManager Bean | 自动替换默认实现；项目只保留一个安全管理器 |
 
 业务实现只需注册为普通 Bean，不需要额外的启用注解或配置。切面只在受保护的调用中解析管理器，每次调用只获取一次当前用户；注解策略按目标类和方法缓存，不缓存用户与校验结果。通过 ClassValue 保存解析结果，避免使用长期全局 Class/Method Map。
 
@@ -3772,7 +4109,7 @@ AesCrypto gcm = new AesGcmCrypto(keyBytes, "web");
 - 当前限流状态只存于单个 Java 进程；多实例部署时每个实例独立计数，不提供分布式强一致限流。
 - 设备 ID 可以伪造，IP 也可能由 NAT 共享；限流用于控制接口频率，不能单独判断用户一定是爬虫。
 
-本专题于 2026-10-15 按当前源码重写。本轮未运行测试、编译或打包；接入时应使用真实客户端验证密钥编码、Padding、Base64、CORS 和异常响应约定。
+本专题的登录与组件扩展说明于 2026-10-20 按当前源码更新。本轮未运行测试、编译或打包；Redis 示例由业务侧接入，未作为框架内置实现发布。接入时应使用真实客户端验证登录、注销、重启恢复，以及密钥编码、Padding、Base64、CORS 和异常响应约定。
 
 ---
 
@@ -5081,7 +5418,9 @@ public int importUsers(List<UserEntity> users) {
 
 ### Admin 两表 RBAC 与登录案例
 
-完整源码位于 [admin/rbac](../admin/src/main/java/com/yulinlin/admin/rbac)，可顺序执行的请求位于 [admin/rbac.http](../admin/rbac.http)。本案例使用 JDK 25、MySQL、现有 `IUserDetails`/`ISecurityManager` 协议和 Caffeine 单机登录会话，未引入 Spring Security。案例只有 `rbac_user`、`rbac_role` 两张业务表。
+源码位于 [admin/rbac](../admin/src/main/java/com/yulinlin/admin/rbac)，请求示例位于 [admin/rbac.http](../admin/rbac.http)。案例只有 `rbac_user`、`rbac_role` 两张业务表，使用 JDK 25、MySQL、`security-jwt` 和本机登录记录，未引入 Spring Security，也不同时引入 Sa-Token。
+
+> 2026-10-20 已迁移到新版 JWT 接入：业务验证账号密码后，用 userId 登录；不再自行实现安全管理器。源码和文档已调整，本轮未编译、未执行测试或数据库联调。
 
 #### 启动方式与完整配置
 
@@ -5089,11 +5428,18 @@ public int importUsers(List<UserEntity> users) {
 
 启动环境设置 `ADMIN_RBAC_PASSWORD`，长度为 12–128 字符；可选设置 `ADMIN_RBAC_USERNAME`，默认 `admin`。不设置密码时跳过初始账号创建，接口不会变成免登录。初始账号已存在时，重启不会覆盖其密码、状态或角色。
 
+另需设置 `ADMIN_JWT_SECRET`：至少 32 字节安全随机密钥的 Base64 字符串，不是登录密码或 AES 密钥，也不要使用 `${random.value}`。在可信环境生成后保存到环境变量或密钥管理器，不提交到仓库：
+
+```java
+byte[] key = new byte[32];
+new java.security.SecureRandom().nextBytes(key);
+String secret = java.util.Base64.getEncoder().encodeToString(key);
+// 将 secret 安全配置为 ADMIN_JWT_SECRET；不要写入生产日志。
+```
+
 ```yaml
 admin:
   rbac:
-    token-ttl: 2h
-    maximum-sessions: 10000
     bootstrap-username: ${ADMIN_RBAC_USERNAME:admin}
     bootstrap-password: ${ADMIN_RBAC_PASSWORD:}
 
@@ -5111,6 +5457,13 @@ yulinlin:
       - com.yulinlin.admin.rbac.domain
     log-params: false
   security:
+    auth:
+      enabled: true
+    jwt:
+      secret: ${ADMIN_JWT_SECRET}
+      issuer: yulinlin-admin
+      ttl: 2h
+      maximum-size: 10000
     crypto:
       enabled: false
       devices:
@@ -5167,38 +5520,55 @@ private List<RoleEntity> roles;
 
 #### 登录、权限和会话生命周期
 
-`AdminSecurityManager` 实现以下既有协议：
+职责划分如下；只定制业务必须处理的部分，不重复实现 JWT：
+
+| 组件 | 职责 |
+| --- | --- |
+| `AdminAuthenticationService` | 校验用户名、密码、验证码策略与用户状态，返回可信 userId |
+| `AuthController` | 调用业务认证，然后调用注入的 `ISecurityManager.login(userId, deviceType)` |
+| `AdminUserStore` | 实现 `UserStore`；按 userId 查库，拒绝停用/锁定/已删除用户，构建安全 DTO |
+| 框架 `JwtSecurityManager` / 默认 `JwtTokenCodec` | 签发、验签、登录记录核对、注销和公共上下文 |
+| 框架 `CaffeineJwtSessionStore` | 默认保存登录记录，支持按用户查询及撤销；admin 不再实现 Store |
+| 框架登录拦截器 / 权限 AOP | Bearer Token 恢复当前用户，请求结束清理；检查登录、角色和权限 |
+
+Controller 中的核心代码：
 
 ```java
-securityManager.login(username, password);
-securityManager.login(username, password, null);
-securityManager.logout();
-securityManager.getUserDetails();
-securityManager.getUserDetails(userId);
-securityManager.refresh();
-securityManager.refresh(userId);
+String userId = authentication.authenticate(request.username(), request.password(), request.code());
+String deviceType = request.deviceType() == null ? "web" : request.deviceType();
+return R.ok(security.login(userId, deviceType), "登录成功");
 ```
 
-HTTP 登录通过具体实现的 `signIn(...)` 获得 `LoginResponse`，其中含 `accessToken`、`tokenType`、`expiresAt`、用户信息。Token 由 `SecureRandom` 生成 32 字节随机值并进行 Base64URL 编码；角色和权限保存在服务端快照中，客户端不能通过修改 Token 内容自定权限。
+也可调用 `SecurityUtil.login(userId, deviceType)`，它与注入管理器等价。不要从前端直接接收 userId 来完成登录。登录 JSON 示例：
 
-前端后续请求携带 `Authorization: Bearer <accessToken>`。会话按固定 `token-ttl` 过期，查询和刷新资料不续期；默认允许同一用户多次登录，注销只撤销当前 Token。达到 `maximum-sessions` 上限时 Caffeine 可能淘汰已有会话；进程重启会话丢失，需要重新登录。它是独立登录会话缓存，不是 ORM 的可选查询缓存 Provider。
+```json
+{"username":"admin","password":"你的管理员密码","deviceType":"web"}
+```
+
+`deviceType` 可不传，admin 接口默认 `web`；显式传值只接受 1～32 位字母、数字、下划线或短横线。它是登录设备分类，不是凭证，也不自动读取加密的 Device-Type 请求头。
+
+响应为 `R<LoginResult>`，`data` 包含 `token`、`expiresAt`、`user`。默认 JWT 使用 HS256，只承载用户 ID 和必要登录元数据，不保存密码或角色权限。`AdminUserStore` 每次请求查最新用户及关联角色，生成不可变 `AdminUserDetails`，不是持久化完整用户快照。角色权限变化在下一次请求生效，同一请求期间读取同一线程快照。
+
+前端后续请求携带 `Authorization: Bearer <token>`。JWT 按 `yulinlin.security.jwt.ttl` 到期，查询/刷新资料不续期；同一用户可以多次登录，注销只撤销当前 tokenId 并清理当前线程。默认 `CaffeineJwtSessionStore` 按每条记录的 expiresAt 设置过期时间，按 `jwt.maximum-size` 限制容量；容量淘汰或进程重启后需要重新登录，即使签名密钥没变也不能绕过记录检查。请求结束仅清理线程，不注销 Token；后台线程不继承身份。
+
+admin 不声明 `ISecurityManager` 或 `JwtSessionStore` Bean，框架自动提供唯一的 JWT 管理器和默认存储。UserService 直接注入 `JwtSessionStore`，使用 `getByUserId(userId)` 查询登录记录，使用 `removeByUserId(userId)` 撤销登录。需要 Redis 时参考[登录记录扩展示例](06-接口安全.md#redis-登录记录接入)，提供一个 Store Bean 实现公共协议，业务调用无需改动。默认 Caffeine 用户查询按需遍历，适合低频管理操作。
 
 密码使用 JDK `PBKDF2WithHmacSHA256`，每次生成独立 16 字节随机盐、600000 次迭代和 256 位校验值；通过 `MessageDigest.isEqual` 比较。参数参考 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)。数据库只保存版本、迭代数、盐和哈希组成的字符串，用户 VO、`IUserDetails` 以及日志不包含密码哈希。登录查库不加 `@JoinCache`，SQL 参数日志也默认关闭。
 
-用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。`code` 参数保留既有协议，但本例未实现验证码，传入非空值会明确拒绝，不能把它当作已经完成验证码验证。
+用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。业务请求可携带 code，但本例未接入验证码服务，非空 code 会明确拒绝；验证码不传给框架，业务完成验证后才按 userId 登录。
 
-案例复用 security 公共鉴权 AOP：三个 Controller 类使用 `@ApiLogin`，登录方法通过 `@ApiPublic` 放行，其他方法默认需要登录；管理方法使用 `@ApiPerm("user:update")` 等权限声明。AdminSecurityManager 作为业务 ISecurityManager Bean 自动替换框架默认匿名实现。原本的 RequirePermission、Anonymous 和 RbacInterceptor 已移除，不再按 URL 前缀执行另一套校验。
+案例复用 security 公共鉴权 AOP：三个 Controller 类使用 `@ApiLogin`，登录方法通过 `@ApiPublic` 放行，其他方法默认需要登录；管理方法使用 `@ApiPerm("user:update")` 等权限声明。不再实现 AdminSecurityManager，也不再自建随机 Token、用户权限快照缓存或登录拦截器。
 
 Permission 枚举仍是业务权限字典，角色集合和用户详情按原有规则加载；公共注解使用字符串编码，也可使用业务定义的 public static final String 常量，不能在注解参数中调用枚举 getCode()。权限精确匹配，无角色名自动越权或通配符解释。未登录/Token 失效为 HTTP 401，缺少权限为 HTTP 403；完整规则和 AOP 边界见[接口安全专题](06-接口安全.md#鉴权声明注解)。Service 仍负责业务事务、内置管理员保护和提交后刷新，不把登录检查加到 ISecurityManager 自己的身份加载路径上。
 
 | 写操作 | 提交成功后的会话处理 |
 | --- | --- |
-| 修改昵称、替换用户角色集合 | 刷新该用户所有现有会话的资料与权限，Token 不变 |
-| 修改角色权限、删除角色 | 刷新持有该角色的在线用户会话 |
-| 用户状态变更、重置密码、删除用户 | 撤销该用户的所有 Token |
+| 修改昵称、替换用户角色集合 | 下次请求由 UserStore 加载新资料；提交后 refresh 同一当前用户时也刷新本线程快照，Token 不变 |
+| 修改角色权限、删除角色 | 不遍历在线会话，下次请求重新读取关联权限 |
+| 用户状态变更、重置密码、删除用户 | 提交后调用 JwtSessionStore.removeByUserId，撤销查到的登录记录；若是当前用户，业务同时清理本线程快照 |
 | 写事务回滚 | 不触发会话刷新或撤销 |
 
-刷新账号或权限时如果查库失败，撤销相关用户会话并保留原始异常，避免继续沿用旧权限。直接手工修改数据库不触发业务回调，需要主动 `refresh(userId)` 或重新登录；多实例部署则需要将会话存储和撤销通知改为共享实现。
+加载用户或权限失败时请求失败，不使用旧权限兜底。手工修改用户状态、角色或权限后，下一次请求会读到新值；手工修改密码不会自动触发撤销回调，密码变更应走业务 Service。已经进入业务的请求不会被中途强制停止；按用户撤销仅针对当时已保存的登录记录，不构成与并发登录/密码修改之间的跨资源原子屏障。高要求场景需增加持久化凭证版本等校验。多实例部署需替换共享存储并实现共享的按用户撤销，不能依赖本机扫描。
 
 #### 业务写法与 HTTP 调用
 
@@ -5213,7 +5583,7 @@ Controller 全部使用 `@PostMapping`，参数对象集中在 `RbacRequests`，
 @Transactional
 @RequiredArgsConstructor
 public class RoleService implements ISuperService<RoleEntity> {
-    // 通用 CRUD + 角色校验、会话刷新等业务增强
+    // 通用 CRUD + 角色校验；权限由下一次请求的 UserStore 加载
 }
 
 @Service("rbacUserService")
@@ -5261,7 +5631,7 @@ public void assignRoles(RbacRequests.AssignRoles request) {
 
 | 路径（全部 POST） | 请求示例或用途 | 所需权限 |
 | --- | --- | --- |
-| `/auth/login` | `{"username":"admin","password":"你配置的密码"}` | 匿名 |
+| `/auth/login` | `{"username":"admin","password":"你配置的密码","deviceType":"web"}`；deviceType 可省略，code 由业务验证 | 匿名 |
 | `/auth/me`、`/auth/refresh`、`/auth/logout` | 当前用户、刷新资料、注销；无需请求体 | 已登录 |
 | `/users/page` | `{"pageNumber":1,"pageSize":15,"username":"reader","status":"enabled"}` | `user:query` |
 | `/users/list` | 与 `/users/page` 相同条件，只返回当前页的列表 | `user:query` |
@@ -5288,4 +5658,4 @@ public void assignRoles(RbacRequests.AssignRoles request) {
 
 推荐按 [rbac.http](../admin/rbac.http) 顺序执行：管理员登录 → 创建只读角色 → 创建用户 → 用户登录 → 验证 403 → 修改角色权限 → 用原 Token 验证新增权限 → 停用账号 → 验证原 Token 返回 401。请求文件有演示密码和占位管理员密码，使用前替换；重复创建同名用户或角色会被唯一约束拒绝。
 
-本案例在 2026-10-19 增加了密码哈希、会话刷新/撤销、通用 CRUD 保护和 HTTP 入口契约的独立单元用例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。
+本案例于 2026-10-20 迁移为 security-jwt 登录，并同步调整已有回归用例源码和 HTTP 请求示例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。

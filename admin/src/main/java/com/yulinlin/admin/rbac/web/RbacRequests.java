@@ -22,7 +22,8 @@ public final class RbacRequests {
     public record Login(
             @NotBlank @Size(max = 64) String username,
             @NotBlank @Size(max = 128) String password,
-            @Size(max = 32) String code) { }
+            @Size(max = 32) String code,
+            @Pattern(regexp = "[a-zA-Z0-9_-]{1,32}") String deviceType) { }
 
     public record Id(@NotBlank @Size(max = 128) String id) { }
 

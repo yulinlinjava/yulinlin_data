@@ -1,7 +1,7 @@
 package com.yulinlin.admin.rbac.service;
 
-import com.yulinlin.admin.rbac.auth.AdminSecurityManager;
-import com.yulinlin.admin.rbac.auth.AdminUserDetails;
+import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.IUserDetails;
 import com.yulinlin.admin.rbac.auth.PasswordHash;
 import com.yulinlin.admin.rbac.domain.RoleEntity;
 import com.yulinlin.admin.rbac.domain.UserEntity;
@@ -25,10 +25,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -40,7 +38,7 @@ public class UserService implements ISuperService<UserEntity> {
     private final UserRepository users;
     private final RoleRepository roles;
     private final PasswordHash passwords;
-    private final AdminSecurityManager security;
+    private final ISecurityManager security;
 
     public Page<UserResponse> page(RbacRequests.UserPage query) {
         return select(query).selectPage(query.getPageNumber(), query.getPageSize()).map(UserResponse::from);
@@ -102,11 +100,11 @@ public class UserService implements ISuperService<UserEntity> {
         Objects.requireNonNull(rows, "rows");
         if (rows.isEmpty()) return 0;
         List<UserEntity> patches = new ArrayList<>();
-        Map<String, Boolean> invalidations = new LinkedHashMap<>();
+        Set<String> ids = new LinkedHashSet<>();
         for (UserEntity row : rows) {
             Objects.requireNonNull(row, "user");
             UserEntity current = requireUser(row.getId());
-            if (invalidations.containsKey(current.getId())) throw new IllegalArgumentException("批次内用户ID不能重复");
+            if (!ids.add(current.getId())) throw new IllegalArgumentException("批次内用户ID不能重复");
             if (row.getUsername() != null && !row.getUsername().equals(current.getUsername())) {
                 throw new IllegalArgumentException("用户名创建后不能修改");
             }
@@ -123,14 +121,13 @@ public class UserService implements ISuperService<UserEntity> {
             if (row.getRoleCodes() != null) patch.setRoleCodes(validRoles(row.getRoleCodes()));
             patch.setUptTime(DateTime.now());
             patches.add(patch);
-            invalidations.put(current.getId(), row.getStatus() != null || row.getPasswordHash() != null);
         }
         int count = users.updateBatch(patches);
         requireCount(count, rows.size());
-        invalidations.forEach((id, revoke) -> TransactionUtil.afterCommit(() -> {
-            if (revoke) security.revokeUser(id);
-            else security.refresh(id);
-        }));
+        IUserDetails current = security.getUserDetails();
+        if (current != null && ids.contains(current.getUserId())) {
+            TransactionUtil.afterCommit(() -> security.refresh(current.getUserId()));
+        }
         return count;
     }
 
@@ -145,7 +142,6 @@ public class UserService implements ISuperService<UserEntity> {
         }
         int count = users.deleteByIdIn(unique);
         requireCount(count, unique.size());
-        for (String id : unique) TransactionUtil.afterCommit(() -> security.revokeUser(id));
         return count;
     }
 
@@ -211,7 +207,6 @@ public class UserService implements ISuperService<UserEntity> {
         UserEntity user = requireUser(request.id());
         user.setStatus(request.status());
         user.setUptTime(DateTime.now());
-        TransactionUtil.afterCommit(() -> security.revokeUser(request.id()));
     }
 
     @Transactional
@@ -230,7 +225,6 @@ public class UserService implements ISuperService<UserEntity> {
         UserEntity user = requireUser(request.id());
         user.setPasswordHash(passwords.encode(request.password()));
         user.setUptTime(DateTime.now());
-        TransactionUtil.afterCommit(() -> security.revokeUser(request.id()));
     }
 
     @Transactional
@@ -270,7 +264,7 @@ public class UserService implements ISuperService<UserEntity> {
     }
 
     private void rejectSelf(String id, String message) {
-        AdminUserDetails current = security.getUserDetails();
+        IUserDetails current = security.getUserDetails();
         if (current != null && current.getUserId().equals(id)) throw new IllegalArgumentException(message);
     }
 }

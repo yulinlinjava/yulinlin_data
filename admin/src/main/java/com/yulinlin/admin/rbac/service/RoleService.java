@@ -1,6 +1,5 @@
 package com.yulinlin.admin.rbac.service;
 
-import com.yulinlin.admin.rbac.auth.AdminSecurityManager;
 import com.yulinlin.admin.rbac.domain.Permission;
 import com.yulinlin.admin.rbac.domain.RoleEntity;
 import com.yulinlin.admin.rbac.domain.UserRoleProjection;
@@ -10,7 +9,6 @@ import com.yulinlin.admin.rbac.web.RoleResponse;
 import com.yulinlin.common.model.ModelSelectWrapper;
 import com.yulinlin.common.service.ISuperService;
 import com.yulinlin.data.core.anno.JoinSync;
-import com.yulinlin.data.core.transaction.TransactionUtil;
 import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.data.lang.util.Page;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +30,6 @@ import java.util.Set;
 public class RoleService implements ISuperService<RoleEntity> {
     public static final String ADMIN_ROLE = "admin";
     private final RoleRepository roles;
-    private final AdminSecurityManager security;
 
     public List<RoleResponse> list() {
         return roles.findAll().stream().map(RoleResponse::from).toList();
@@ -76,7 +73,7 @@ public class RoleService implements ISuperService<RoleEntity> {
         }
         int count = roles.insertBatch(rows);
         requireCount(count, rows.size());
-        for (String code : codes) TransactionUtil.afterCommit(() -> security.refreshRole(code));
+        // UserStore 每次请求加载最新角色权限，无需刷新全部登录记录。
         return count;
     }
 
@@ -87,7 +84,6 @@ public class RoleService implements ISuperService<RoleEntity> {
         if (rows.isEmpty()) return 0;
         List<RoleEntity> patches = new ArrayList<>();
         Set<String> ids = new LinkedHashSet<>();
-        Set<String> codes = new LinkedHashSet<>();
         for (RoleEntity row : rows) {
             Objects.requireNonNull(row, "role");
             RoleEntity current = requireRole(row.getId());
@@ -103,11 +99,9 @@ public class RoleService implements ISuperService<RoleEntity> {
             if (row.getPermissions() != null) patch.setPermissions(validPermissions(row.getPermissions()));
             patch.setUptTime(DateTime.now());
             patches.add(patch);
-            codes.add(current.getCode());
         }
         int count = roles.updateBatch(patches);
         requireCount(count, rows.size());
-        for (String code : codes) TransactionUtil.afterCommit(() -> security.refreshRole(code));
         return count;
     }
 
@@ -144,7 +138,6 @@ public class RoleService implements ISuperService<RoleEntity> {
         }
         int count = roles.deleteByIdIn(unique);
         requireCount(count, unique.size());
-        for (String code : codes) TransactionUtil.afterCommit(() -> security.refreshRole(code));
         return count;
     }
 
@@ -198,8 +191,6 @@ public class RoleService implements ISuperService<RoleEntity> {
         role.setName(request.name());
         role.setPermissions(validPermissions(request.permissions()));
         role.setUptTime(DateTime.now());
-        String code = role.getCode();
-        TransactionUtil.afterCommit(() -> security.refreshRole(code));
     }
 
     @Transactional

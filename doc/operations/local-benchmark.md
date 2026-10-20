@@ -1,10 +1,25 @@
 # SQLite/H2 多线程写入性能报告
 
-本报告记录 yulinlin-data 在本地文件数据库上的完整 ORM 写入性能。它回答的是：在“多个业务线程持续提交小批量数据”的调用方式下，SQLite 与 H2 应如何选择。它不是数据库原生 JDBC 极限测试，也不代表所有硬件、事务和持久化配置下的绝对排名。
+[文档首页](../README.md) / [监控与排障](README.md)
 
-阅读导航：[结论](#结论先行) · [业务模型](#业务模型) · [测试口径](#测试口径) · [正式结果](#正式结果) · [结果分析](#结果分析) · [选型建议](#选型建议) · [复现](#复现方法) · [限制](#限制与后续验证)
+完整指标、业务模型、选型建议与复现方法。
 
-测试日期：2026-10-06。代码基线：制品版本 3.0、JDK 25。
+## 本页导航
+
+- [结论先行](#结论先行)
+- [业务模型](#业务模型)
+- [测试数据](#测试数据)
+- [测试口径](#测试口径)
+- [运行环境](#运行环境)
+- [数据库与框架参数](#数据库与框架参数)
+- [计时边界](#计时边界)
+- [正式结果](#正式结果)
+- [耗时与吞吐量](#耗时与吞吐量)
+- [分配与 GC](#分配与-gc)
+- [结果分析](#结果分析)
+- [选型建议](#选型建议)
+- [复现方法](#复现方法)
+- [限制与后续验证](#限制与后续验证)
 
 ## 结论先行
 
@@ -139,7 +154,7 @@ JMH 误差是 5 个样本推算的 99.9% 置信区间半宽；本次只有 1 个
 
 ## 复现方法
 
-基准源码：[LocalDatabaseWriteBenchmark.java](../admin/src/jmh/java/com/yulinlin/admin/benchmark/LocalDatabaseWriteBenchmark.java)。运行脚本：[run-local-db-benchmark.ps1](../admin/run-local-db-benchmark.ps1)。在仓库根目录使用 JDK 25 执行：
+基准源码：[LocalDatabaseWriteBenchmark.java](../../admin/src/jmh/java/com/yulinlin/admin/benchmark/LocalDatabaseWriteBenchmark.java)。运行脚本：[run-local-db-benchmark.ps1](../../admin/run-local-db-benchmark.ps1)。在仓库根目录使用 JDK 25 执行：
 
 ```powershell
 ./admin/run-local-db-benchmark.ps1
@@ -179,3 +194,7 @@ admin/target/local-db-jmh/sqlite-h2-business-threads.json
 - JMH 1.37 在 JDK 25 输出了 `sun.misc.Unsafe` 终止弃用警告；本次运行成功，但升级 JDK/JMH 后应重新验证结果。
 
 若要形成发布级容量结论，建议至少使用 3 个 fork，记录硬件，固定系统负载，并补充线程数 × 请求大小的参数矩阵、等持久化级别对比、原生 JDBC 基线和 JFR/async-profiler 分配热点分析。
+
+---
+
+下一步：返回[监控与排障主题目录](README.md)按需选择相关专题。

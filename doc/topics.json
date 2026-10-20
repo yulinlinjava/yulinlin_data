@@ -1,0 +1,379 @@
+[
+  {
+    "id": "start",
+    "title": "快速开始",
+    "ai": true,
+    "pages": [
+      {
+        "file": "start/modules.md",
+        "title": "模块选择与版本"
+      },
+      {
+        "file": "start/comparison.md",
+        "title": "技术选型与开发成本对比"
+      }
+    ]
+  },
+  {
+    "id": "datasources",
+    "title": "数据源",
+    "ai": true,
+    "pages": [
+      {
+        "file": "datasources/mysql.md",
+        "title": "MySQL 接入"
+      },
+      {
+        "file": "datasources/sqlite.md",
+        "title": "SQLite 接入"
+      },
+      {
+        "file": "datasources/schema.md",
+        "title": "自动建表、列类型与索引"
+      },
+      {
+        "file": "datasources/h2.md",
+        "title": "H2 接入"
+      },
+      {
+        "file": "datasources/local-choice.md",
+        "title": "本地数据库选型"
+      },
+      {
+        "file": "datasources/postgresql.md",
+        "title": "PostgreSQL 接入"
+      },
+      {
+        "file": "datasources/elasticsearch.md",
+        "title": "Elasticsearch 接入"
+      },
+      {
+        "file": "datasources/routing.md",
+        "title": "多数据源与默认组"
+      },
+      {
+        "file": "datasources/config.md",
+        "title": "数据源配置速查"
+      }
+    ]
+  },
+  {
+    "id": "orm",
+    "title": "ORM 开发",
+    "ai": true,
+    "pages": [
+      {
+        "file": "orm/entity.md",
+        "title": "实体映射与最小模型"
+      },
+      {
+        "file": "orm/crud.md",
+        "title": "插入、更新与删除"
+      },
+      {
+        "file": "orm/query.md",
+        "title": "查询条件、分页与结果"
+      },
+      {
+        "file": "orm/search.md",
+        "title": "全文检索与高亮"
+      },
+      {
+        "file": "orm/join.md",
+        "title": "SQL JOIN"
+      },
+      {
+        "file": "orm/raw-sql.md",
+        "title": "自定义 SQL"
+      },
+      {
+        "file": "orm/analytics.md",
+        "title": "统计分析"
+      },
+      {
+        "file": "orm/filters.md",
+        "title": "请求与结果过滤器"
+      },
+      {
+        "file": "orm/repository.md",
+        "title": "Repository 接口"
+      }
+    ]
+  },
+  {
+    "id": "relations",
+    "title": "关联与事务",
+    "ai": true,
+    "pages": [
+      {
+        "file": "relations/transactions.md",
+        "title": "事务与提交后回调"
+      },
+      {
+        "file": "relations/query.md",
+        "title": "关联查询"
+      },
+      {
+        "file": "relations/lazy.md",
+        "title": "懒加载与批量预加载"
+      },
+      {
+        "file": "relations/auto-update.md",
+        "title": "代理自动更新"
+      }
+    ]
+  },
+  {
+    "id": "write-sync",
+    "title": "批量与同步",
+    "ai": true,
+    "pages": [
+      {
+        "file": "write-sync/incremental.md",
+        "title": "增量同步"
+      },
+      {
+        "file": "write-sync/full.md",
+        "title": "人工全量同步与续传"
+      },
+      {
+        "file": "write-sync/batch.md",
+        "title": "批量与多连接写入"
+      },
+      {
+        "file": "write-sync/counter.md",
+        "title": "EntityCounter 聚合插入与更新"
+      },
+      {
+        "file": "write-sync/queue.md",
+        "title": "延迟写队列"
+      }
+    ]
+  },
+  {
+    "id": "cache",
+    "title": "缓存",
+    "ai": true,
+    "pages": [
+      {
+        "file": "cache/config.md",
+        "title": "缓存选择与公共配置"
+      },
+      {
+        "file": "cache/caffeine.md",
+        "title": "Caffeine 内存缓存"
+      },
+      {
+        "file": "cache/ehcache.md",
+        "title": "Ehcache 持久化缓存"
+      },
+      {
+        "file": "cache/redis.md",
+        "title": "Redis 与可选本地缓存"
+      },
+      {
+        "file": "cache/serialization.md",
+        "title": "缓存序列化"
+      },
+      {
+        "file": "cache/query.md",
+        "title": "ORM 查询缓存"
+      },
+      {
+        "file": "cache/client.md",
+        "title": "CacheClient 业务缓存"
+      },
+      {
+        "file": "cache/invalidation.md",
+        "title": "缓存 Key、失效与一致性"
+      }
+    ]
+  },
+  {
+    "id": "security",
+    "title": "接口安全",
+    "ai": true,
+    "pages": [
+      {
+        "file": "security/modules.md",
+        "title": "安全模块选型"
+      },
+      {
+        "file": "security/crypto.md",
+        "title": "接口加密与前端对接"
+      },
+      {
+        "file": "security/rate-limit.md",
+        "title": "限流与 IP 黑名单"
+      },
+      {
+        "file": "security/user.md",
+        "title": "用户模型与安全管理器"
+      },
+      {
+        "file": "security/jwt.md",
+        "title": "无状态 JWT 登录"
+      },
+      {
+        "file": "security/token-codec.md",
+        "title": "自定义 Token 生成与解析"
+      },
+      {
+        "file": "security/extension.md",
+        "title": "自定义安全实现与拦截器"
+      },
+      {
+        "file": "security/sa-token.md",
+        "title": "有状态 Sa-Token 登录"
+      },
+      {
+        "file": "security/context.md",
+        "title": "登录上下文生命周期"
+      },
+      {
+        "file": "security/authorization.md",
+        "title": "登录、角色与权限注解"
+      }
+    ]
+  },
+  {
+    "id": "tools",
+    "title": "常用工具",
+    "ai": true,
+    "pages": [
+      {
+        "file": "tools/catalog.md",
+        "title": "lang 定位与类型目录"
+      },
+      {
+        "file": "tools/http.md",
+        "title": "HTTP 请求、上传与下载"
+      },
+      {
+        "file": "tools/reflection.md",
+        "title": "反射复制与深克隆"
+      },
+      {
+        "file": "tools/json.md",
+        "title": "JSON 转换"
+      },
+      {
+        "file": "tools/value.md",
+        "title": "日期、数字与字符串工具"
+      },
+      {
+        "file": "tools/local-cache.md",
+        "title": "轻量缓存与资源池"
+      },
+      {
+        "file": "tools/concurrency.md",
+        "title": "线程、调度与事件"
+      },
+      {
+        "file": "tools/types.md",
+        "title": "Lambda、泛型与包扫描"
+      },
+      {
+        "file": "tools/serialization.md",
+        "title": "序列化、元组与扩展 SPI"
+      }
+    ]
+  },
+  {
+    "id": "practice",
+    "title": "项目实践",
+    "ai": true,
+    "pages": [
+      {
+        "file": "practice/conventions.md",
+        "title": "项目开发规范"
+      },
+      {
+        "file": "practice/models.md",
+        "title": "公共实体与页面参数"
+      },
+      {
+        "file": "practice/service.md",
+        "title": "通用 Service 与树服务"
+      },
+      {
+        "file": "practice/crud-example.md",
+        "title": "完整 CRUD 分层案例"
+      },
+      {
+        "file": "practice/rbac.md",
+        "title": "Admin RBAC 与 JWT 登录案例"
+      }
+    ]
+  },
+  {
+    "id": "operations",
+    "title": "监控与排障",
+    "ai": false,
+    "pages": [
+      {
+        "file": "operations/sql-log.md",
+        "title": "SQL 与事务日志"
+      },
+      {
+        "file": "operations/monitor.md",
+        "title": "慢操作监控页面"
+      },
+      {
+        "file": "operations/orm-faq.md",
+        "title": "ORM 常见边界与排障"
+      },
+      {
+        "file": "operations/clone-benchmark.md",
+        "title": "历史克隆基准"
+      },
+      {
+        "file": "operations/local-benchmark.md",
+        "title": "SQLite/H2 多线程写入性能报告"
+      }
+    ]
+  },
+  {
+    "id": "internal",
+    "title": "内部维护",
+    "ai": false,
+    "pages": [
+      {
+        "file": "internal/extension.md",
+        "title": "新增数据源流程"
+      },
+      {
+        "file": "internal/jdbc.md",
+        "title": "JDBC 模块接入"
+      },
+      {
+        "file": "internal/non-jdbc.md",
+        "title": "非 JDBC 与资源扩展"
+      },
+      {
+        "file": "internal/maintenance.md",
+        "title": "迁移、文档与 AI 维护约定"
+      },
+      {
+        "file": "internal/architecture.md",
+        "title": "核心组件与职责"
+      },
+      {
+        "file": "internal/execution.md",
+        "title": "RouteSession 执行链与过滤器"
+      },
+      {
+        "file": "internal/logging.md",
+        "title": "Session 日志与监控监听"
+      },
+      {
+        "file": "internal/transactions.md",
+        "title": "事务上下文与 JDBC 资源"
+      },
+      {
+        "file": "internal/checklist.md",
+        "title": "维护检查清单"
+      }
+    ]
+  }
+]

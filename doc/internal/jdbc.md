@@ -1,41 +1,18 @@
-# 扩展开发与维护
+# JDBC 模块接入
 
-本文面向框架维护者与开发新模块的 AI。说明接入新数据源、编解码与负载均衡扩展，以及迁移、验证和历史性能记录。核心组件与执行边界先读独立的[第十专题](10-核心组件与业务边界.md)；业务用法以对应使用专题为准，不把内部实现替代用户配置示例。
+[文档首页](../README.md) / [内部维护](README.md)
 
-阅读导航：[架构](#架构与职责) · [执行链](#routesession-执行链) · [日志与监听](#session-日志与执行监听) · [接入流程](#新增数据源流程) · [JDBC 示例](#jdbc-接入示例) · [非 JDBC](#非-jdbc-接入) · [负载均衡](#负载均衡与资源生命周期) · [迁移与排障](#迁移与排障) · [验收](#验收与文档维护) · [历史基准](#历史克隆基准)
+解析器、Session、自动配置、注册和时间编解码。
 
-## 架构与职责
+## 本页导航
 
-核心组件与业务边界已独立到[第十专题](10-核心组件与业务边界.md)，后续架构规则只维护该文档。本文继续负责新数据源接入、编解码扩展、资源治理及排障。
-
-### RouteSession 执行链
-
-见[查询、立即写入、延迟写入与批量边界](10-核心组件与业务边界.md#routesession-执行链)。
-
-### Session 日志与执行监听
-
-见[Session 日志与执行监听](10-核心组件与业务边界.md#session-日志与执行监听)，包括 JdbcExecutionLog/EsExecutionLog/MongoExecutionLog、监控扩展及耗时口径。
-
-### 过滤器边界
-
-见[过滤器边界](10-核心组件与业务边界.md#过滤器边界)。
-
-### 事务提交成功扩展点
-
-见[事务上下文与提交扩展点](10-核心组件与业务边界.md#事务上下文与提交扩展点)，包括嵌套深度、sync 代理、资源提交、afterCommit 和 Spring 注解适配。
-
-## 新增数据源流程
-
-1. 明确 JDBC/非 JDBC，列出 CRUD、分页、JOIN、聚合、事务、并发和类型支持。
-2. 新建独立模块，继承根 POM 并加入 modules；JDBC 依赖 jdbc + 驱动，非 JDBC 依赖 core + SDK。
-3. 注册确有差异的 IParse；不支持的节点明确拒绝，不静默忽略。
-4. 优先复用 JdbcSession；只有执行/驱动差异才增加 Session 子类。
-5. 核对 Java 编码、参数绑定、数据库类型及读取的完整往返。
-6. 模块自行声明工厂与 Session Bean，添加自动配置 imports。
-7. 检查 group、事务、并发、资源所有权和释放路径；不能引入 Spring 绑定连接复用。
-8. 补最小用法、能力限制与验收案例；执行验证须由当前任务授权。
-
-没有差异就直接用公共注册项。不要依赖另一个数据库模块、复制空继承类或重复工具包来“兼容”。
+- [JDBC 接入示例](#jdbc-接入示例)
+- [解析器注册](#解析器注册)
+- [Session 的差异](#session-的差异)
+- [data-sync 扩展](#data-sync-扩展)
+- [自动配置完整模板](#自动配置完整模板)
+- [创建与注册](#创建与注册)
+- [编解码](#编解码)
 
 ## JDBC 接入示例
 
@@ -115,7 +92,7 @@ JoinIndex 是 core 中的可重复类注解，只有 fields 和 unique。jdbc.sc
 
 JoinField 的 `textType`、`textLength` 和 `description` 先由 `jdbc.schema.TextColumnResolver` 做跨数据库校验，再由各 SchemaManager 转成方言 DDL。字符串主键缺省长度统一引用 `TextColumnResolver.DEFAULT_PRIMARY_KEY_LENGTH`（32），显式正长度按注解生成，不设置框架专属的 128 上限；仍遵守各数据库列和索引限制。大文本禁止作为主键或自动索引。MySQL/PostgreSQL/H2 对显式 VARCHAR 长度采用容量校验：实际长度小于要求默认报错，大于等于要求直接兼容；主键和普通文本字段规则一致。内部 `validateLength` 表示是否校验显式容量，不表示必须等长。未显式指定时不校验已有长度，不自动缩短。SQLite 只校验类型 affinity，不能把 `VARCHAR(n)` 当成实际长度约束。description 会在 MySQL/PostgreSQL/H2 创建新表或补充新列时落库，但不会修改已有列的注释。
 
-`alter-column-type` 仅属于 JDBC 模块，在各 Session.configure 捕获后传入 SchemaManager。仅 `SchemaMode.CREATE` 且开关为 true 才按现有 StorageType 分类的差异或显式容量不足生成改列语句；旧 ensureTable 重载保留，默认 false。不扫描行数据，不自动调整主键，不删默认值/约束促成转换；先为当前表全部候选列检查并生成语句，再通过 Session 的 SchemaSqlExecutor 执行并重新校验元数据。不同表之间不提供原子迁移。Jdbc 的 SchemaColumnAlter 共用自增/生成列、外键检查与中文 SQL 异常包装，各模块仍拥有 DDL 方言。MySQL 保留普通列属性，对特殊属性保守拒绝，要求严格模式；PostgreSQL 使用 USING CAST，H2 使用 SET DATA TYPE。SQLite 遇到类型变更明确拒绝，不自动重建表。元数据的表名/schema pattern 必须过滤到实际目标表，避免下划线匹配其他表。人工确认、备份、锁表和失败恢复说明见[显式允许修改列类型](01-接入与数据源.md#显式允许修改列类型)。
+`alter-column-type` 仅属于 JDBC 模块，在各 Session.configure 捕获后传入 SchemaManager。仅 `SchemaMode.CREATE` 且开关为 true 才按现有 StorageType 分类的差异或显式容量不足生成改列语句；旧 ensureTable 重载保留，默认 false。不扫描行数据，不自动调整主键，不删默认值/约束促成转换；先为当前表全部候选列检查并生成语句，再通过 Session 的 SchemaSqlExecutor 执行并重新校验元数据。不同表之间不提供原子迁移。Jdbc 的 SchemaColumnAlter 共用自增/生成列、外键检查与中文 SQL 异常包装，各模块仍拥有 DDL 方言。MySQL 保留普通列属性，对特殊属性保守拒绝，要求严格模式；PostgreSQL 使用 USING CAST，H2 使用 SET DATA TYPE。SQLite 遇到类型变更明确拒绝，不自动重建表。元数据的表名/schema pattern 必须过滤到实际目标表，避免下划线匹配其他表。人工确认、备份、锁表和失败恢复说明见[显式允许修改列类型](../datasources/schema.md#显式允许修改列类型)。
 
 方言维护参考：[MySQL MODIFY 属性保留说明](https://bugs.mysql.com/bug.php?id=106791)、[PostgreSQL ALTER TABLE](https://www.postgresql.org/docs/17/sql-altertable.html)、[H2 ALTER TABLE](https://h2database.github.io/html/commands.html#alter_table_alter_column)。新增方言须核对默认值、约束和 DDL 提交行为，不能仅替换 SQL 关键字。
 
@@ -123,7 +100,7 @@ Schema 诊断复用 `jdbc.schema.SchemaErrors`：它只格式化中文错误、�
 
 `SchemaErrors.executor` 装饰 Session 提供的 SchemaSqlExecutor，为失败语句补充完整 SQL 和恢复建议；保留 SQLException 的 SQLState、错误码和 cause，避免破坏重复建表/建索引竞争的错误码判断。Session 仍负责日志、连接和实际执行。主键/索引冲突不应提示“开启改列即可修复”，SQLite 应明确手动迁移；DDL 失败必须提醒可能已有部分修改生效。扫描器、字段/索引注解错误同样给出中文修正建议。
 
-诊断回归源码位于 `admin/src/test/java/com/yulinlin/regression/jdbc/SchemaErrorsTest.java`；不声明自动建表实体、不连接数据库。本次仅新增源码，未编译、未执行。用户排查示例见[表结构错误排查](01-接入与数据源.md#表结构错误排查)。
+诊断回归源码位于 `admin/src/test/java/com/yulinlin/regression/jdbc/SchemaErrorsTest.java`；不声明自动建表实体、不连接数据库。本次仅新增源码，未编译、未执行。用户排查示例见[表结构错误排查](../datasources/schema.md#表结构错误排查)。
 
 ### data-sync 扩展
 
@@ -144,7 +121,7 @@ SyncManager.ManualGuard 按目标 group 保护本进程所有相关增量规则�
 
 保护期间检查 capture/enqueue 处的源写入/提交；不替代全局停写，不能检测其他进程或未匹配规则的原生操作。全量任务处理过程中检测到冲突时保存 RESTART_REQUIRED，不能继续使用旧游标。业务负责先停新写入、排空 EntityCounter/普通写队列、结束在途事务，再排空增量；失败续传期间也保持停写。数据库会话锁跨批次提交保留，释放失败应中止物理连接，避免持锁连接回到池中。维护连接回滚失败时不能用 setAutoCommit(true) 意外提交剩余数据。
 
-回归源码仅位于 admin 的 `src/test/java/com/yulinlin/regression/sync` 和 `src/test/java/com/yulinlin/sync`，不参与业务扫描。覆盖增量快照/队列、全量映射与游标边界、维护资源清理和全量期间源提交冲突等。本轮未编译、未执行；真实 MySQL/PostgreSQL 双端事务、进程中断续传及驱动组合仍需集成验证。使用配置及人工恢复见[数据源同步](01-接入与数据源.md#数据源增量同步)。
+回归源码仅位于 admin 的 `src/test/java/com/yulinlin/regression/sync` 和 `src/test/java/com/yulinlin/sync`，不参与业务扫描。覆盖增量快照/队列、全量映射与游标边界、维护资源清理和全量期间源提交冲突等。本轮未编译、未执行；真实 MySQL/PostgreSQL 双端事务、进程中断续传及驱动组合仍需集成验证。使用配置及人工恢复见[数据源同步](../write-sync/incremental.md#数据源增量同步)。
 
 ### 自动配置完整模板
 
@@ -214,7 +191,7 @@ com.yulinlin.jdbc.mydb.MydbAutoConfiguration
 
 CacheRegistry 不是 QueryCache，不能再作为 Provider 注册，否则会重复计数或形成循环依赖。CacheClient 只负责 getCache()/getCache(name) 选择及只读清单，RoutingCacheClient 为每个实现复用一个 DefaultCache（实现 Cache），由 Cache 提供业务读写、泛型回源、批量和清理。不提供 ORM 表/实体手动清理入口，不引入 ORM 路由/注解桥接。批量默认逐条调用，不保证原子性；不新增调度层。ORM 不增加缓存名参数，也不广播失效。无 Provider 时默认返回空 Cache，ORM 保持无缓存运行。旧 QueryCaches.single 仅用于无显式默认配置的手动装配兼容，Spring 工厂不再使用。Provider 的资源仍由原 Bean 销毁方法关闭，注册表/客户端不能重复关闭。缓存选择、批量/泛型操作与清理隔离的回归源码位于 admin/src/test/java/com/yulinlin/regression/cache/CacheRegistryTest.java；按要求未编译、未运行，未新增 Spring YAML 绑定测试。
 
-多个模块都可能注入同一 @Primary DataSource。group 名不同不代表物理源已隔离；业务应显式绑定工厂、池和组，完整例子在 [第一专题](01-接入与数据源.md#多数据源注册)。
+多个模块都可能注入同一 @Primary DataSource。group 名不同不代表物理源已隔离；业务应显式绑定工厂、池和组，完整例子在 [数据源接入](../datasources/routing.md#多数据源注册)。
 
 ### 编解码
 
@@ -227,10 +204,10 @@ CacheRegistry 不是 QueryCache，不能再作为 Provider 注册，否则会重
 
 | 模块 | 管理器 | 具体时间编码器 | DateTime / LocalDateTime 编码结果 |
 | --- | --- | --- | --- |
-| MySQL | [MysqlCoderManager](../mysql/src/main/java/com/yulinlin/jdbc/mysql/coder/MysqlCoderManager.java) | [MysqlTemporalCoders](../mysql/src/main/java/com/yulinlin/jdbc/mysql/coder/MysqlTemporalCoders.java) | `LocalDateTime`，绑定 DATETIME 语义 |
-| PostgreSQL | [PostgresqlCoderManager](../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlCoderManager.java) | [PostgresqlTemporalCoders](../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlTemporalCoders.java) | `LocalDateTime`，对应无时区 TIMESTAMP |
-| H2 | [H2CoderManager](../h2/src/main/java/com/yulinlin/jdbc/h2/coder/H2CoderManager.java) | [H2TemporalCoders](../h2/src/main/java/com/yulinlin/jdbc/h2/coder/H2TemporalCoders.java) | `LocalDateTime`，对应无时区 TIMESTAMP |
-| SQLite | [SqliteCoderManager](../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/coder/SqliteCoderManager.java) | [SqliteTemporalCoders](../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/coder/SqliteTemporalCoders.java) | `yyyy-MM-dd HH:mm:ss` 字符串 |
+| MySQL | [MysqlCoderManager](../../mysql/src/main/java/com/yulinlin/jdbc/mysql/coder/MysqlCoderManager.java) | [MysqlTemporalCoders](../../mysql/src/main/java/com/yulinlin/jdbc/mysql/coder/MysqlTemporalCoders.java) | `LocalDateTime`，绑定 DATETIME 语义 |
+| PostgreSQL | [PostgresqlCoderManager](../../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlCoderManager.java) | [PostgresqlTemporalCoders](../../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlTemporalCoders.java) | `LocalDateTime`，对应无时区 TIMESTAMP |
+| H2 | [H2CoderManager](../../h2/src/main/java/com/yulinlin/jdbc/h2/coder/H2CoderManager.java) | [H2TemporalCoders](../../h2/src/main/java/com/yulinlin/jdbc/h2/coder/H2TemporalCoders.java) | `LocalDateTime`，对应无时区 TIMESTAMP |
+| SQLite | [SqliteCoderManager](../../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/coder/SqliteCoderManager.java) | [SqliteTemporalCoders](../../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/coder/SqliteTemporalCoders.java) | `yyyy-MM-dd HH:mm:ss` 字符串 |
 
 H2 的管理器内部完成注册：
 
@@ -274,115 +251,6 @@ MySQL/PostgreSQL/H2 当前各自将 `DateTime` / `LocalDateTime` 编码为 `Loca
 
 MapCoderManager 原有 registerCoder 行为保留；新增受保护的 replaceCoder 供 JDBC 子类使用。JdbcCoderManager.registerCoder 会移除同 Java 类型的旧编码器、加入新编码器并清空已解析类型缓存，使初始化时的覆盖确定生效；这不是并发运行期热更新接口。
 
-## 非 JDBC 接入
+---
 
-实现 SessionFactory<Client> 创建并完整配置 Session。通常继承 AbstractSession，实现 executeUpdate、executeSelect、executeGroup、executeCount、字段名策略及 ping/shutdown，把结果转成 IDataBuffer。与 JDBC 一样，工厂必须初始化缓存、编码器、解析器、EntityProxyService、可选执行监听器、配置和 group，不能依赖 RouteSession 注册时补齐；EntityProxyService 用于查询后的关联加载和代理增强，不能遗漏。日志在 Session.printExecution 中直接调用本模块辅助类，不注册 LogPrint。
-
-解析器根结果用 ParseResult 携带 SDK 请求；子节点返回后端需要的对象，不强行套 SQL。客户端地址和凭据来自配置，不硬编码 localhost，不引入 jdbc 只为加入路由。Elasticsearch 模块当前基于 Java Client 9.5.4，使用默认 Rest5Client；新代码不要重新引入已弃用的 Apache HttpClient 4 RestClientTransport。
-
-EntitySession/TransactionSession 接口不提供后端事务能力。AbstractSession 的计数也不会替 SDK 开启真实事务；当前 MongoSession、ElasticsearchSession 的开始/提交/回滚是空实现，不能照抄后宣称支持回滚。
-
-有真实事务时管理本 Session 的资源、rollback-only、提交/回滚和清理，业务嵌套统一由 TransactionListenerManager 处理；不支持时要设计无事务路径及能力拒绝。直接把 startTransaction 改成抛异常会影响 RouteSession 的自动写入事务包装，需联动处理。
-
-supportsParallelWrites 默认 false。异步任务必须明确传递或隔离资源和事务上下文，不能把 CompletableFuture 包装视为自动继承主线程事务。
-
-## 负载均衡与资源生命周期
-
-AbstractLoadBalance 只有一个注册组时直接选组；多个组使用应用共享 Bean 的 setDefaultGroup 或 yulinlin.datasource.default-group，没有配置/组不存在时报错。RegisterSession 委托同一默认规则，不保留静态 master 或取首组策略。
-
-注册/移除发布只读 copy-on-write 快照；RandomLoadBalance 健康快照绑定注册快照，旧 ping 不恢复已移除节点。标签过滤不因单节点绕过。0 权重不参与，负权重拒绝；long 总和、[0,total) 抽样避免整数溢出和首节点偏置。
-
-非事务请求重新选节点，路由事务内保留组和 cluster 的节点绑定。heartbeat 当前是空钩子，本轮不恢复自动后台调度；ping 是显式健康刷新。底层 JdbcSession.ping 仍主要返回 true，不代表真实服务探测已实现。
-
-只读快照保护集合访问，不提供在途事务的资源租约。运行中随意改 group/cluster、关闭共享客户端或卸载租户仍需业务协调。
-
-DataSource、SDK、流、执行器都需明确所有者。外部共享资源不因单个 Session 关闭被误关；内部资源应有销毁入口。JdbcSession.shutdown 主要记日志，不是连接池通用关闭器；factory.create(DataSourceProperties, group) 创建的池仍需所有者关闭。SQLite 使用 SqliteDatabase、H2 使用 H2Database 管理内部池，都不暴露 DataSource Bean。
-
-## 迁移与排障
-
-| 症状或旧入口 | 处理 |
-| --- | --- |
-| NoSuchMethodError | 比对编译/运行时 lang、core、jdbc 来源和版本；不能只替换部分 JAR |
-| import jdbc.names.SqlNode | 当前类型为 com.yulinlin.jdbc.session.SqlNode |
-| 原 PostgreSQL 包内 MysqlParseManager/MysqlParseAutoConfig | 使用 PostgresqlParseManager/PostgresqlAutoConfiguration |
-| 原 PG 工厂名 mysqlSessionFactory | 改为 postgresqlSessionFactory，真正 MySQL 名称不变 |
-| 默认 jdbcSession / primary | 默认 Bean mysqlSession/postgresqlSession，组 mysql/postgresql；自定义兼容名仍可让默认创建退让 |
-| 多组默认不明确 | 设置 datasource.default-group 或显式请求组；primary 不自动优先 |
-| Raw ExecuteRequest 执行返回 null | 原工厂未设置 requestType；当前源码已设置为 update |
-| 原始 SQL 参数绑定为 null | Map 键使用裸名，SQL 保留 #{name}；ExpressionNodeParse 当前已修正 |
-| 私有反射访问失败 | 检查模块 opens 和支持模型，不用吞异常绕过 |
-| PostgreSQL 提示 MySQL 函数 | 工厂错配或原始 SQL 未迁移 |
-| Git push publickey 认证错误 | 是远端认证问题，不等同于本地 commit 失败；检查实际 SSH 客户端和密钥，不修改业务代码 |
-
-以上迁移信息依据当前源码，不表示部署产物已同步。日期格式、字段命名、JSON、原生类型、库版本和代理行为在目标环境验证。
-
-## 验收与文档维护
-
-以下编译、定向测试和 JMH 描述均为历史记录，不代表本次改动已经验证。本次 Session 日志/监听迁移及核心边界文档只做静态阅读检查，不执行编译、测试、打包或 `git diff --check`。历史结果、口径与复现方法见[第七专题](07-SQLite与H2性能报告.md)。
-
-| 层次 | 案例 |
-| --- | --- |
-| 解析和入口 | RawSqlParametersTest、ExecuteRequestRawSqlTest、PostgresqlSessionTest |
-| 负载均衡 | LoadBalanceTest、RegisterSessionDefaultGroupTest |
-| 连接与事务 | JdbcSessionTransactionTest、JdbcBatchExecutionTest |
-| SQLite 集成 | SqliteIntegrationTest、SqliteSessionTest、SqliteSchemaManagerTest、SqliteDefaultsTest：本轮定向通过；OrmProxyIntegrationTest 未纳入本轮定向命令 |
-| H2 集成 | H2SessionTest：启动建表/索引和 NONE 模式本轮通过；日期/区间解析、多连接批量仍需完整回归 |
-| 自动配置 | SchemaEntityScannerTest、MysqlParseAutoConfigTest 本轮通过；PostgresqlAutoConfigurationTest 未纳入本轮定向命令 |
-| 真实 PostgreSQL | PostgresqlServerTest，需显式测试环境，默认不启用 |
-
-使用独立测试配置和隔离资源，不默认读取生产连接或修改业务表。性能测试与正确性回归分开，不用固定毫秒数作业务测试的成功断言。
-
-### 测试代码布局
-
-所有模块的单元测试、集成回归用例及测试辅助类统一放在 `admin/src/test/java`，测试资源放在 `admin/src/test/resources`；不再向各业务库模块添加 `src/test` 代码，也不把测试类放进 `src/main/java`。JMH 保留在 `admin/src/jmh/java`，按已有性能测试 profile 隔离。
-
-迁移后的测试保留原 Java 包名，便于继续访问被测模块的包级成员，以及复用现有包扫描辅助模型。JUnit、Mockito 等测试工具由 `admin/pom.xml` 的 `spring-boot-starter-test` 提供；仅为测试接入的数据库、缓存模块使用 `test` 范围依赖，不进入 admin 正式运行环境，库模块不再统一继承测试工具依赖。
-
-2026-10-19 已将 13 个库模块的 73 个测试及辅助文件迁移到 admin。此次只调整目录、依赖和忽略规则，没有执行编译、测试或打包；上表所述结果属于历史记录，不代表迁移后已经重新验证。需要真实数据库的用例仍须由使用者提供隔离环境，不能将全部测试直接指向生产库。
-
-文档维护源为十个专题。第一至第四、第六、第八和第九专题组成 AI 使用指南；第五专题用于扩展实现，第七专题用于本地数据库选型与基准复现，第十专题单独维护核心组件与业务边界。内部维护 AI 先读或上传第十专题，涉及具体接入再补充第五专题；不要把业务 AI 导出当作完整内部架构说明。维护依赖、签名、异常、null、线程/事务、复制与资源语义；每段标明完整类、方法体片段、业务占位和前置条件。
-
-获得授权后，文档导出命令为：
-
-```powershell
-./doc/build-ai-docs.ps1
-./doc/build-ai-docs.ps1 -Check
-```
-
-脚本只合并七个使用文档并检查链接/围栏，不证明 Java 示例编译或业务正确。是否执行应以当次任务记录为准；只修改第五专题不需要重新导出相同的业务指南。别把 AI 导出再作为第二份手写维护源。
-
-### AI 使用约定
-
-AI 先读第一专题的版本和模块选择，再按任务读所需章节；框架扩展先读第十专题的核心边界，再读本文的实现流程。不能套用 MyBatis-Plus、JPA、Spring Data 的接口，不能凭方法名发明参数。
-
-默认执行边界：修改源码或文档后只做静态阅读检查，不主动执行编译、打包、单元测试、集成测试、JMH、Spring YAML 属性绑定测试或 `git diff --check`。只有用户在当前任务中明确要求时，才执行对应命令；没有执行的验证不得写成“已通过”。本文及其他专题已有的测试结果均为历史记录，不代表后续改动已经重新验证。
-
-生成业务代码前提供表结构、模型基类、主键/where、会话 group 和事务边界。自定义 SQL 提供目标数据库；HTTP 提供接口样例而非真实密钥；复制任务提供引用关系及类型需求。未验证应明确说明，不把统计或性能结论超出样本外推。
-
-## 历史克隆基准
-
-以下从 2026-10-01 的本机报告迁移，是历史记录，不是本轮运行或当前所有对象的排名。
-
-环境：Intel i7-13700HX、Windows 11、约 23.7 GiB 系统可见内存；OpenJDK 25+36-3489，-Xms1g -Xmx1g；JMH 1.37，单线程，2 fork，每 fork 3 轮预热及 5 轮测量，各 2 秒。每次操作克隆 200,000 个 User；Kryo 5.6.2，Commons Lang 3.17.0。
-
-模型含基本类型、字符串、Address、List、Map、int[]；一个用户内部 Map.address 与 User.address 共享，用户之间无共享可变对象。序列化模型实现 Serializable；Kryo 按线程复用并启用引用跟踪。数据生成和小样本校验不计入计时。
-
-| 方法 | ms/op ± Error | 摊销 μs/对象 | MiB/op |
-| --- | ---: | ---: | ---: |
-| 手写逐条 | 19.501 ± 1.355 | 0.098 | 60.27 |
-| Kryo 逐条 | 103.977 ± 7.306 | 0.520 | 66.38 |
-| ReflectionUtil 逐条 | 193.878 ± 21.813 | 0.969 | 215.91 |
-| Kryo 整体 | 241.603 ± 12.687 | 1.208 | 100.33 |
-| ReflectionUtil 整体 | 411.107 ± 38.755 | 2.056 | 187.33 |
-| Apache 整体 | 599.324 ± 94.892 | 2.997 | 335.11 |
-| Apache 逐条 | 2110.918 ± 70.763 | 10.555 | 2607.72 |
-
-Error 是 JMH 误差区间半宽，不是标准差。单对象数字是整批平均除以 200,000，不是孤立调用延迟；分配是累计量，不是峰值存活内存。
-
-在这个样本里手写基线最快，ReflectionUtil 位于 Kryo 与序列化克隆之间。不能推导 Kryo 或手写对所有业务都最快；整体与逐条也不能在有跨元素共享关系时直接互换。
-
-记录的 GC 次数/时间（ms）依次为：手写 820/9305、Kryo 逐条 165/2053、ReflectionUtil 逐条 135/1809、Kryo 整体 105/3271、ReflectionUtil 整体 75/1754、Apache 整体 71/1627、Apache 逐条 63/773。按时间测量时快方法执行更多批次，不用总 GC 次数直接判优。
-
-原始输出记录在 admin/target/clone-jmh 的 JSON/log，clean 可清除。当前仓库保留了 run-clone-benchmark.ps1，但其引用的 admin 主源码 DeepCloneBenchmark.java 本轮未找到；因此不把旧运行命令描述成当前即用方案。恢复或重建基准后再授权运行，确认类路径优先使用当前实现，不测旧 JAR。
-
-后续基准至少控制模型、共享引用、数据规模、fork、预热、GC 与机器负载；保存原始 JSON、具体参数和源码基线，不只保留“最快”结论。
+下一步：返回[内部维护主题目录](README.md)按需选择相关专题。

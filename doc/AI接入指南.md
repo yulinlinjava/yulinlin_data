@@ -2,27 +2,47 @@
 
 ---
 
-> 派生文件，维护源为 doc 下七个使用专题。重新导出：./doc/build-ai-docs.ps1。
+> 自动生成；正文来源为 topics.json 中 ai=true 的小专题。不要手工编辑本文件。
 
 ---
 
-用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存，以及 Common 公共模型和项目最佳实践；内部架构、扩展与完整性能报告不在此导出中。内部维护另提供第十专题，扩展实现补充第五专题，性能报告提供第七专题。
+适用 JDK 25、Spring Boot 3.5.16、制品 3.0。用于无法读取仓库时的单附件接入；有仓库访问能力时先读 llms.txt，按任务读取小专题即可。内部架构、监控与完整性能报告按需另提供。
 
 ---
 
-适用 JDK 25、Spring Boot 3.5.16、制品 3.0。2026-10-10 已运行本地库 JMH、JDK 25 全模块测试编译、lang/缓存专项测试和 Schema 定向测试；代码片段不等于所有数据库服务器均已集成验证，真实账号、表、路径和接口由业务提供。
+代码片段不等于已完成编译或全部数据库集成验证。历史测试结果只代表原日期和环境，本次文档导出不编译、不运行测试。业务必须替换示例表、账号、地址和密钥。
 
 ---
 
-<!-- source: doc/01-接入与数据源.md -->
-## 项目接入与数据源
+## 主题导航
 
-先选数据库模块，再配置数据源和会话组。本文完成 Spring Boot 接入、MySQL 与 PostgreSQL 配置、SQLite/H2 本地存储，以及多数据源注册和默认组选取。
+- **快速开始**：[模块选择与版本](#ai-start-modules) · [技术选型与开发成本对比](#ai-start-comparison)
+- **数据源**：[MySQL 接入](#ai-datasources-mysql) · [SQLite 接入](#ai-datasources-sqlite) · [自动建表、列类型与索引](#ai-datasources-schema) · [H2 接入](#ai-datasources-h2) · [本地数据库选型](#ai-datasources-local-choice) · [PostgreSQL 接入](#ai-datasources-postgresql) · [Elasticsearch 接入](#ai-datasources-elasticsearch) · [多数据源与默认组](#ai-datasources-routing) · [数据源配置速查](#ai-datasources-config)
+- **ORM 开发**：[实体映射与最小模型](#ai-orm-entity) · [插入、更新与删除](#ai-orm-crud) · [查询条件、分页与结果](#ai-orm-query) · [全文检索与高亮](#ai-orm-search) · [SQL JOIN](#ai-orm-join) · [自定义 SQL](#ai-orm-raw-sql) · [统计分析](#ai-orm-analytics) · [请求与结果过滤器](#ai-orm-filters) · [Repository 接口](#ai-orm-repository)
+- **关联与事务**：[事务与提交后回调](#ai-relations-transactions) · [关联查询](#ai-relations-query) · [懒加载与批量预加载](#ai-relations-lazy) · [代理自动更新](#ai-relations-auto-update)
+- **批量与同步**：[增量同步](#ai-write-sync-incremental) · [人工全量同步与续传](#ai-write-sync-full) · [批量与多连接写入](#ai-write-sync-batch) · [EntityCounter 聚合插入与更新](#ai-write-sync-counter) · [延迟写队列](#ai-write-sync-queue)
+- **缓存**：[缓存选择与公共配置](#ai-cache-config) · [Caffeine 内存缓存](#ai-cache-caffeine) · [Ehcache 持久化缓存](#ai-cache-ehcache) · [Redis 与可选本地缓存](#ai-cache-redis) · [缓存序列化](#ai-cache-serialization) · [ORM 查询缓存](#ai-cache-query) · [CacheClient 业务缓存](#ai-cache-client) · [缓存 Key、失效与一致性](#ai-cache-invalidation)
+- **接口安全**：[安全模块选型](#ai-security-modules) · [接口加密与前端对接](#ai-security-crypto) · [限流与 IP 黑名单](#ai-security-rate-limit) · [用户模型与安全管理器](#ai-security-user) · [无状态 JWT 登录](#ai-security-jwt) · [自定义 Token 生成与解析](#ai-security-token-codec) · [自定义安全实现与拦截器](#ai-security-extension) · [有状态 Sa-Token 登录](#ai-security-sa-token) · [登录上下文生命周期](#ai-security-context) · [登录、角色与权限注解](#ai-security-authorization)
+- **常用工具**：[lang 定位与类型目录](#ai-tools-catalog) · [HTTP 请求、上传与下载](#ai-tools-http) · [反射复制与深克隆](#ai-tools-reflection) · [JSON 转换](#ai-tools-json) · [日期、数字与字符串工具](#ai-tools-value) · [轻量缓存与资源池](#ai-tools-local-cache) · [线程、调度与事件](#ai-tools-concurrency) · [Lambda、泛型与包扫描](#ai-tools-types) · [序列化、元组与扩展 SPI](#ai-tools-serialization)
+- **项目实践**：[项目开发规范](#ai-practice-conventions) · [公共实体与页面参数](#ai-practice-models) · [通用 Service 与树服务](#ai-practice-service) · [完整 CRUD 分层案例](#ai-practice-crud-example) · [Admin RBAC 与 JWT 登录案例](#ai-practice-rbac)
 
-阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [本地库选型](#sqliteh2-选型) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [增量同步](#数据源增量同步) · [慢数据库监控](#慢数据库监控) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
+---
 
-适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-06 核对仓库源码；本地库 JMH、JDK 25 编译和 Schema 定向测试已执行。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
+<a id="ai-start-modules"></a>
+<!-- source: doc/start/modules.md -->
+<a id="ai-start-modules-模块选择与版本"></a>
+## 模块选择与版本
 
+[文档首页](README.md) / [快速开始](start/README.md)
+
+先确定需要引入的模块；业务不依赖 admin 示例模块。
+
+<a id="ai-start-modules-本页导航"></a>
+### 本页导航
+
+- [模块选择](#ai-start-modules-模块选择)
+
+<a id="ai-start-modules-模块选择"></a>
 ### 模块选择
 
 | 使用场景 | 依赖 |
@@ -34,7 +54,7 @@
 | HTTP 工具 | core，starter 已传递引入 |
 | 反射、深克隆、JSON | lang |
 | JSON 接口请求/响应加密、限流、权限协议 | security；Web 能力需要 Spring MVC，独立于 ORM 数据库模块 |
-| 用户登录与请求身份恢复 | security-jwt（无状态）或 security-sa-token（有状态）二选一，自动依赖 security；业务提供 UserStore，见[安全选型与扩展](06-接口安全.md#jwt-与-sa-token-如何选择) |
+| 用户登录与请求身份恢复 | security-jwt（无状态）或 security-sa-token（有状态）二选一，自动依赖 security；业务提供 UserStore，见[安全选型与扩展](#ai-security-modules-jwt-与-sa-token-如何选择) |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
 | 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
@@ -46,6 +66,116 @@
 
 core 同时包含 ORM 自动配置，不是独立的纯 HTTP starter。只使用公共 JDBC Session 时，数据库模块不强制依赖 common/starter。
 
+---
+
+下一步：返回[快速开始主题目录](start/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-start-comparison"></a>
+<!-- source: doc/start/comparison.md -->
+<a id="ai-start-comparison-技术选型与开发成本对比"></a>
+## 技术选型与开发成本对比
+
+[文档首页](README.md) / [快速开始](start/README.md)
+
+以下为已有项目能力对比，评分不是运行性能或通用排名；并非本次重新验证外部产品。
+
+<a id="ai-start-comparison-开发一个完整系统的成本对比"></a>
+### 开发一个完整系统的成本对比
+
+本节比较的不是“最终能不能写出来”，而是交付同一项能力时，业务开发者还需要引入什么、学习什么、编写什么，以及以后维护什么。能够手写 SQL 或再接入一个框架，不等于当前框架已经低成本支持该能力。
+
+能力按以下口径分类：
+
+| 类型 | 判断标准 | 开发成本 |
+| --- | --- | --- |
+| 内置能力 | 不增加依赖，直接使用现有实体和 API | 最低 |
+| 简单扩展 | 按需增加模块和配置，继续使用原实体、Wrapper、Repository 和 Session 模型 | 低 |
+| 复杂扩展 | 增加依赖后还要学习新的注解、查询 API、DSL 和生命周期 | 中高 |
+| 自行实现 | 手写 SQL、适配器、缓存规则、队列或其他基础设施 | 高 |
+
+下面以一个需要 MySQL、PostgreSQL/Elasticsearch 全文检索、H2/SQLite 本地数据、查询缓存、高频延迟写入和播放热度聚合的视频网站为例。视频文件和播放流量应走对象存储/CDN，不属于 ORM 对比范围。
+
+<a id="ai-start-comparison-功能交付成本"></a>
+#### 功能交付成本
+
+| 需要交付的能力 | MyBatis-Plus | Spring Data JPA / Hibernate | yulinlin-data |
+| --- | --- | --- | --- |
+| 用户、会员、订单 CRUD | 低：实体、Mapper、Service | 低：实体、Repository | 低：实体可直接使用 Model/Service，Repository 可选 |
+| 页面动态查询与分页 | 中：查询对象转 Wrapper；分页插件处理 Count | 中：派生方法、Specification/Criteria 与 Pageable | 低：`PagePo + @JoinWhere`，统一分页与 Count |
+| 参数化自定义 SQL | 低：Mapper/XML | 中：JPQL/Native Query | 低：`QueryRequest`、`ExecuteRequest` |
+| 一对一、一对多关联 | 中高：ResultMap、Join SQL 或业务组装 | 低：实体关系是核心能力 | 低：`@JoinQuery` |
+| 懒加载 | 中高：MyBatis 底层可配置，但需 ResultMap、嵌套 Select 和 Session 行为 | 低：内置 Lazy 代理，但要理解持久化上下文和 N+1 | 低：`@JoinQuery + @JoinLazy`，在路由事务内首次访问 getter 时加载 |
+| 列表关联批量预加载 | 高：自行收集 ID、查询并分配 | 中：EntityGraph、Batch Fetch、Join Fetch | 低：主键关联可自动按 IN 分批预加载；复杂条件仍可能 N+1 |
+| 实体修改自动写回 | 高：显式调用 UPDATE | 低：托管实体默认 dirty checking/flush | 低：默认普通对象，按需使用 `.autoUpdate()` 或 `@JoinSync` 跟踪 setter |
+| MySQL、PostgreSQL、H2 访问 | 低：都可通过 JDBC 使用 | 低：使用对应 Dialect | 低：按模块接入，业务 API 不变 |
+| SQLite 本地数据库 | 中高：需处理 DDL、WAL 与单写限制 | 中高：需额外 Dialect 与并发约束 | 低：模块处理文件、WAL、Schema 与单写退化 |
+| 运行时切换数据源 | 中高：动态数据源扩展或多个 SqlSessionFactory | 高：多个 persistence unit/EntityManagerFactory | 低：group、默认组和 `@JoinSession` |
+| PostgreSQL 全文索引、中文匹配和高亮 | 高：学习 `tsvector`、GIN、`ts_headline` 并编写 DDL/Mapper SQL | 高：Native Query；JPA 本身不提供全文 API | 低：配置 pg_jieba，字段声明 `fullText`，继续使用 `match()`/`highlight()` |
+| Elasticsearch 查询、Mapping 和高亮 | 高：另接 ES Client/框架，维护 Document、DSL 和结果解析 | 中高：需引入 Hibernate Search 或 Spring Data ES，并学习新注解与 Search DSL | 低：引入 ES 模块，继续使用相同实体、Wrapper、`match()` 和 `highlight()` |
+| 高级 ES 同义词、建议、向量与语义搜索 | 高：ES 专项开发 | 中：Hibernate Search/ES 专项配置 | 中高：当前公共 Wrapper 未完整覆盖，必要时使用原生 ES 能力 |
+| 查询缓存接入 | 中：配置 MyBatis 二级缓存或 Spring Cache/Provider | 中：配置二级/查询缓存 Provider | 低：按需引入 Caffeine、Ehcache 或 Redis 模块，业务 API 不变 |
+| 多种缓存同时使用 | 中：配置 CacheManager 及选择规则 | 中：ORM Provider 与业务 CacheManager 分别配置 | 低：缓存模块共存，配置 default；ORM 统一默认，客户端可按名称选择 |
+| 更新后的缓存失效 | 低但粗：默认让当前 Mapper namespace 缓存空间全部失效 | 中：实体缓存和查询缓存规则不同 | 低：单字段等值结构按条件值失效；出现多种或复杂结构后升级为表 namespace 整体失效 |
+| 多数据源、列表与 Count 缓存隔离 | 中高：业务缓存需自行设计 Key 和失效关系 | 中高：需区分 persistence unit、Region 与查询缓存 | 低：数据源、实体、SQL、参数和请求类型统一进入缓存元数据 |
+| 跨请求延迟批量写入 | 高：需自行开发队列、定时任务、分组、满量刷新和失败处理 | 高：事务 Flush 不是跨请求队列，仍需自行开发 | 低：`.queue()` 固化 INode，按 Session/类型/实体分组，按时间或 `flush-size` 刷新 |
+| 自动计数聚合（例如多次 `+1` 合成 `+N`） | 高：业务自行维护计数器、调度、失败恢复和批量 SQL | 高：事务 Flush 不跨请求，仍需业务实现聚合任务 | 低：`EntityCounter` 支持按主键聚合更新、按非数字维度聚合插入，按时间或阈值刷新 |
+| 自动建表、索引与结构校验 | 高：通常维护 DDL 或接入迁移工具 | 低到中：Hibernate Schema 能力 | 低：Schema 扫描、`@JoinIndex` 和 CREATE/VALIDATE 安全子集 |
+| 慢操作聚合和查看页面 | 中高：另接监控组件 | 中高：另接 Statistics/Micrometer 与页面 | 低：引入 `monitor`，使用内置只读页面 |
+| 框架内跨数据源轻量增量同步 | 高：需自行监听变化、适配目标写入和异步队列，或接入同步工具 | 中高：关系库到 ES 可接 Hibernate Search；通用跨库同步仍需另做 | 低：引入 `data-sync`，配置 source/target/entities，提交后重放框架写请求；有界内存队列、失败暂停 |
+| MySQL/PostgreSQL 人工全量补同步与续传 | 高：自行分页、目标写入、保存进度和恢复 | 高：通用关系库间补同步仍需自行实现；索引重建不等于跨库迁移 | 低：`sync(source,target,class)` 自动读取主键进度，`restart(...)` 从头覆盖；业务停写，内部暂停相关增量消费 |
+| 崩溃可恢复的可靠同步（含关系库到 ES） | 高：另接 CDC，或实现事务 Outbox、消费与重试 | 中高：ORM 实体到 ES 可接 Hibernate Search outbox-polling，仍需额外依赖、配置和运维 | 高：当前轻量队列不保证可靠交付，仍需 CDC 或事务 Outbox 等额外机制；不是已经内置的能力 |
+| 多节点共享缓存 | 需 Redis/广播等外部能力 | 需 Redis/广播等外部能力 | 内置 `cache-redis`；关闭其 Caffeine L1 后所有节点直接读取 Redis |
+
+JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分；但 Hibernate Search 不是 JPA 查询语法的延续。接入后仍需学习 `@Indexed`、`@FullTextField`、`SearchSession`、Predicate/Projection/Highlight DSL、Analyzer 和索引生命周期，因此属于复杂扩展，而不是“引入即用”的简单扩展。yulinlin-data 的数据库、搜索和缓存也是按需模块，但模块继续复用原实体和查询 API，所以按简单扩展计算。
+
+同步成本要区分“已有功能”和“可靠性保障”：`data-sync` 已提供跨 group 的轻量增量入口，目标使用自身解析器，因此不应再把所有同步都写成必须自行实现 Outbox/MQ。ES 作为增量目标时仍受其节点解析、字段映射和写入语义限制，不能据此宣称所有 SQL 条件均已兼容；当前人工全量只支持 MySQL/PostgreSQL，不包含 ES。以上同步实现尚未完成真实服务端组合验证。若要求源提交与事件持久化原子完成、崩溃恢复、可靠重试，则属于另外一档成本；Hibernate Search 的 [outbox-polling](https://docs.jboss.org/hibernate/stable/search/reference/en-US/html_single/#coordination-outbox-polling) 是这类 ORM 索引同步扩展，不能与普通提交后异步通知混为一谈。
+
+<a id="ai-start-comparison-开发效率参考分"></a>
+#### 开发效率参考分
+
+分数只表示完成上述系统所需的业务开发与集成工作量；不表示运行性能、社区规模或任何框架“做不到”。分数越高，代表新增能力时需要学习的新模型、胶水代码和长期维护规则越少。
+
+| 开发效率维度 | 权重 | MyBatis-Plus + 自行扩展 | JPA/Hibernate + Hibernate Search | yulinlin-data |
+| --- | ---: | ---: | ---: | ---: |
+| 多数据源统一访问 | 25 | 8 | 11 | 25 |
+| 全文索引、搜索和高亮 | 18 | 4 | 8 | 16 |
+| 查询缓存与失效管理 | 17 | 6 | 8 | 16 |
+| 关联、懒加载和自动更新 | 15 | 5 | 14 | 13 |
+| CRUD、动态查询和分页 | 10 | 9 | 9 | 10 |
+| 跨请求延迟写入与计数聚合 | 8 | 2 | 2 | 8 |
+| 建表、索引和 Mapping | 4 | 1 | 4 | 4 |
+| 日志和慢操作监控 | 3 | 1 | 1 | 3 |
+| **开发效率总分** | **100** | **36** | **57** | **95** |
+
+这个分数针对“多数据库 + 搜索 + 缓存 + 延迟写入”的复杂新系统。若只是单 MySQL CRUD，MyBatis-Plus 和 JPA 的开发效率会明显提高；若项目以复杂领域对象图为核心，JPA 的关系与实体生命周期模型更完整；若项目要逐条控制历史 SQL，MyBatis-Plus 更直接。
+
+从快速交付上述视频网站的角度，推荐先用 MySQL 承载用户、会员、订单和支付，用 PostgreSQL + pg_jieba 承载视频内容与常用全文检索，用 Caffeine 做单机查询加速；确实需要模糊纠错、搜索建议、复杂评分、水平扩展、向量或语义检索时，再引入 Elasticsearch。yulinlin-data 能保持 `match()`、`highlight()` 等业务调用不变，并已提供 `data-sync` 轻量增量同步和 MySQL/PostgreSQL 人工全量续传；只有要求崩溃可恢复等可靠交付保障时，才需要进一步接入 CDC 或事务 Outbox 等机制。不要把“有轻量同步”表述成“已有可靠数据库复制”。
+
+能力边界必须明确：yulinlin-data 的跨库提交是本地事务协调，不是 XA/2PC；自动 Schema 默认不改列类型，MySQL/PostgreSQL/H2 可在人工确认并备份后显式开启 `alter-column-type`，不负责字段改名、删列和跨列数据搬迁；自动更新要求有效路由事务，回滚不会恢复 Java 对象的内存值；原始 SQL 不会自动翻译为其他方言；本地缓存不自动解决多应用节点一致性。
+
+对比参考了 [MyBatis-Plus 官方文档](https://baomidou.com/)、[Spring Data JPA 文档](https://docs.spring.io/spring-data/jpa/reference/)、[Hibernate ORM User Guide](https://docs.jboss.org/hibernate/orm/current/userguide/html_single/Hibernate_User_Guide.html)、[Hibernate Search Reference](https://docs.jboss.org/hibernate/stable/search/reference/en-US/html_single/)、[PostgreSQL 全文检索文档](https://www.postgresql.org/docs/current/textsearch.html)和 [Elasticsearch Query DSL](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html)；yulinlin-data 一列以本仓库当前实现和后续专题为准。
+
+---
+
+<a id="ai-datasources-mysql"></a>
+<!-- source: doc/datasources/mysql.md -->
+<a id="ai-datasources-mysql-mysql-接入"></a>
+## MySQL 接入
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+配置 MySQL 数据源和默认会话。
+
+共同规则：[自动建表与索引](#ai-datasources-schema) · [多数据源与默认组](#ai-datasources-routing) · [SQL 与事务日志](operations/sql-log.md)。
+
+<a id="ai-datasources-mysql-本页导航"></a>
+### 本页导航
+
+- [MySQL 接入](#ai-datasources-mysql-mysql-接入-1)
+
+<a id="ai-datasources-mysql-mysql-接入-1"></a>
 ### MySQL 接入
 
 加入依赖：
@@ -87,113 +217,31 @@ yulinlin:
       - demo.domain
 ```
 
-正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。为兼容已有生产项目，`schema-mode` 默认 `NONE`；不需要框架管理结构时删除整个 `yulinlin.mysql` 段并由迁移脚本准备表。设为 `CREATE` 后，启动时递归扫描 `schema-packages`，创建缺失的表、普通列和声明索引，并校验已有结构；`VALIDATE` 只校验，缺失直接阻止启动。完整实体与 CRUD 见 [第二专题](02-CRUD与统计分析.md)。
+正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。为兼容已有生产项目，`schema-mode` 默认 `NONE`；不需要框架管理结构时删除整个 `yulinlin.mysql` 段并由迁移脚本准备表。设为 `CREATE` 后，启动时递归扫描 `schema-packages`，创建缺失的表、普通列和声明索引，并校验已有结构；`VALIDATE` 只校验，缺失直接阻止启动。完整实体与 CRUD 见 [ORM 开发](orm/README.md)。
 
-#### JDBC 执行日志
+---
 
-MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换为对应模块名即可：
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
 
-- `log` 默认 `false`，只控制真正访问数据库后的成功日志；缓存命中没有执行 SQL，因此不会伪造 SQL 日志。
-- `log-params` 默认 `false`。开启后打印绑定参数，但长值最多保留 `max-param-length` 个字符；字节数组和输入流只记录类型、长度等摘要。
-- `max-param-length` 默认 `256`，必须为正整数。
-- `slow-sql-threshold` 默认 `0`（关闭）。配置为 `1s` 后，框架侧耗时达到 1 秒的执行以 `WARN` 输出，即使 `log=false` 也会记录。
-- SQL 异常始终以单条 `ERROR` 输出，包含实际耗时并携带原始堆栈。批量写入按执行组打印一条摘要；摘要列出最多 5 种 SQL 模板及模板总数，不再为每一行打印 INFO。
+---
 
-SQL 日志指标使用中文：`事务ID`、`数据源`、`节点`、`操作`、`总耗时`、`操作数量`、`影响行数`、`SQL模板数`、`SQL`、`参数`。成功批次（含慢批次）额外展示 `平均每条耗时`，按原始纳秒耗时 ÷ 操作数量换算为毫秒，保留三位小数，是每条操作的分摊值而非逐条实测。失败批次不展示平均耗时和影响行数。驱动不提供精确影响行数时，框架可能按成功命令计数，不能把该值一律视为精确修改行数。
+<a id="ai-datasources-sqlite"></a>
+<!-- source: doc/datasources/sqlite.md -->
+<a id="ai-datasources-sqlite-sqlite-接入"></a>
+## SQLite 接入
 
-```text
-SQL批量执行成功 事务ID=12 数据源=mysql 节点=master 操作=insert 总耗时=240ms 平均每条耗时=0.240ms 操作数量=1000 影响行数=1000 SQL模板数=1
-SQL=["insert into ..."]
-参数=[...]
-SQL批量执行失败 事务ID=12 数据源=mysql 节点=master 操作=insert 总耗时=240ms 操作数量=1000 SQL模板数=1
-SQL=["insert into ..."]
-参数=[...]
-```
+[文档首页](README.md) / [数据源](datasources/README.md)
 
-普通、批量、慢操作和失败 SQL 日志统一分行：首行摘要，下一行 SQL，开启 log-params 时再输出一行参数；仍是一次 logger 调用，不拆为多个日志事件。参数只在 log-params 开启时输出；批量仍仅取首个请求的参数，最多 20 项并限制每项长度，标签统一为“参数”，不代表打印整个批次所有值。并行拆组时各组单独计时，不能将各组耗时相加当作请求总耗时；此处不额外输出请求汇总日志。
+单文件本地数据库、WAL 和单写约束。
 
-耗时是应用侧观察值，可能包含获取连接、JDBC 驱动、参数绑定和结果读取，并不等同于数据库服务器内部的纯执行时间。写入成功日志在 JDBC 执行返回后打印，不代表外层事务已经提交；事务结果应查看下面的事务诊断日志。查询缓存的 `HIT/MISS/REFRESH/BYPASS` 使用 `com.yulinlin.data.cache.QueryCache` 的 DEBUG 日志；延迟写队列刷新摘要使用 `com.yulinlin.data.core.queue.WriteQueueManager` 的 DEBUG 日志。需要排查缓存时可临时提高对应 logger 级别，或者使用 `.cache(CacheMode.REFRESH)` 强制访问数据库。
+共同规则：[自动建表与索引](#ai-datasources-schema) · [多数据源与默认组](#ai-datasources-routing) · [SQL 与事务日志](operations/sql-log.md)。
 
-#### 事务诊断日志
+<a id="ai-datasources-sqlite-本页导航"></a>
+### 本页导航
 
-怀疑“SQL 返回影响行数，但数据未提交”时，临时开启全局开关。此配置对全部数据源生效，独立于 `yulinlin.mysql.log` 等 SQL 开关，默认 `false`：
+- [SQLite 接入](#ai-datasources-sqlite-sqlite-接入-1)
 
-```yaml
-yulinlin:
-  data:
-    transaction-log: true
-
-# 项目根日志级别高于 INFO 时，需要同时放开此 logger。
-logging:
-  level:
-    com.yulinlin.data.core.transaction.TransactionLog: INFO
-```
-
-日志统一使用中文事件描述。同一个最外层框架事务使用相同事务 ID，SQL 日志以 `事务ID` 展示，事务生命周期日志仍使用 `txId`；嵌套事务、多个数据源及 JDBC 批处理工作线程共享该 ID。ID 只用于当前进程内关联，不是订单 ID，也不是跨服务链路 ID。普通查询没有框架事务时显示 `事务ID=none`。事务日志的 `elapsedMs` 从最外层框架事务开启时计算，包含事务内业务耗时，与 SQL 日志的 `总耗时` 计时范围不同。
-
-框架层记录开启、嵌套深度 `depth`、参与者数量 `participants`、只回滚标记 `rollbackOnly`、资源提交/回滚和上下文清理。JDBC 层额外记录 `group`、`cluster`、DataSource 实例标识、连接标识、连接数量、原始/当前自动提交状态和提交归属 `owner`。不额外借连接、查询数据库元数据或打印账号密码；连接标识是当前 JDBC 连接对象的标识，不是数据库服务器的连接编号。
-
-| 事件 | 如何理解 |
-| --- | --- |
-| `内层事务提交返回，等待最外层提交` | 只减少嵌套深度，尚未提交连接 |
-| `JDBC连接开始提交` | 即将调用这个连接的 `commit()` |
-| `JDBC连接提交成功` | 这个连接的 `commit()` 已正常返回；多连接/多库仍需逐一核对其他资源 |
-| `JDBC连接回滚成功` | 对应连接已回滚，之前打印 SQL 成功不代表数据最终保留 |
-| `框架事务资源处理完成` | 所有参与 Session 的提交方法均已正常返回；JDBC 物理结果仍按连接核对 |
-| `框架事务上下文已清理` | 只代表线程状态清理，不代表数据库提交成功 |
-| `事务提交后回调开始` | 框架资源提交成功且旧上下文已清理，开始处理进程内通知 |
-
-例如，下列是同一笔单连接事务中实际提交的关键日志片段，省略了其他生命周期行：
-
-```text
-事务开启 txId=1 elapsedMs=0 depth=1 participants=0 rollbackOnly=false
-SQL批量执行成功 事务ID=1 数据源=mysql 节点=master 操作=insert 总耗时=8ms 平均每条耗时=8.000ms 操作数量=1 影响行数=1 SQL模板数=1
-SQL=["insert into `pay_order` (`id`) values (?)"]
-参数=[order-1]
-JDBC连接开始提交 txId=1 elapsedMs=28 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
-JDBC连接提交成功 txId=1 elapsedMs=31 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
-```
-
-排查时按 `txId` 找完整过程：只看到嵌套结束则检查最外层是否收尾；每个 JDBC 连接都应找到最终提交或回滚结果；出现提交失败、回滚失败或连接释放失败会记录 ERROR 与原始异常。只有 SQL 成功而没有最终结果时，不应直接下结论认为已提交或已回滚。ES/MongoDB 当前没有对应的物理事务，框架资源方法返回也不能证明其具备数据库回滚能力。
-
-关闭开关时不采集事务诊断计时、不输出生命周期日志，但仍生成轻量事务 ID，供 SQL 日志关联。SQL 普通、慢操作、异常和批量日志都包含 `事务ID`，是否输出仍遵守原有 SQL 日志配置；批处理 ID 在提交工作线程前捕获，不依赖工作线程的事务 ThreadLocal。手动声明 `TransactionListenerManager` Bean 的项目需自行调用 `setTransactionLog(true)`，默认自动配置会读取上述 YAML。
-
-JDBC 事务连接统一标记 `owner=framework`：直接向 DataSource 借连接，关闭自动提交，最终由框架提交/回滚、恢复连接状态并释放。不再复用 Spring 线程绑定连接，也不等待 Spring 的提交通知。DataSource 仍可由 Spring Boot、Druid 或 Hikari 配置和注入；`@Transactional` 仅通过注解适配器委托 RouteSession，不再交给原生 JDBC 事务管理器。多资源仍是多个本地事务，不提供跨库原子提交保证；原生 JdbcTemplate/MyBatis/JPA 与框架写入不共用事务。注解支持范围及多事务管理器选取见[Spring 事务注解兼容](02-CRUD与统计分析.md#spring-事务注解兼容)。
-
-#### 慢数据库监控
-
-需要在运行期查看慢 SQL 与数据库异常时，引入可选模块：
-
-```xml
-<dependency>
-    <groupId>com.yulinlin</groupId>
-    <artifactId>monitor</artifactId>
-    <version>3.0</version>
-</dependency>
-```
-
-```yaml
-yulinlin:
-  monitor:
-    enabled: true
-    threshold: 1s
-    max-records: 1000
-    username: admin
-    password: ${MONITOR_PASSWORD:}
-```
-
-模块默认启用；设置 `yulinlin.monitor.enabled=false` 后，不注册数据库采集器、SQL 监听器、管理接口和页面，访问 `/monitor/` 也不会得到模块页面。启用时访问 `/monitor/` 可打开内置只读页面；页面使用 Vue 3 和锁定版本的 Element Plus 2.14.7，通过 jsDelivr 加载前端资源。部署环境无法访问公共 CDN 时，应将对应资源转存到业务自己的静态资源域名，再替换模块页面中的地址。
-
-页面可以直接打开；数据接口发现尚未验证时，页面会在原地显示账号密码对话框。验证成功后只在当前 HTTP Session 中保存一个布尔标记，再自动加载监控数据，不跳转登录页，也不依赖任何安全框架。账号默认是 `admin`，密码没有默认值，必须通过配置或环境变量提供；密码为空时登录接口拒绝验证，避免发布一个所有人都知道的默认密码。
-
-监控会轻量聚合所有实际执行的 JDBC 操作，以 `Group + Session 类型 + 操作类型 + 来源实体 + SQL 模板` 为一组，展示执行次数、慢查询率、平均耗时、最大耗时和最近耗时。只有达到 `threshold` 的成功操作及数据库异常才保留明细，最多保存最近 `max-records` 条；SQL 聚合组也使用该数量作为内存上限。平均耗时基于全部执行计算，不会因为只统计慢操作而被放大。
-
-页面按照优化优先级排序：`P0` 表示出现异常；`P1` 表示平均耗时达到阈值 3 倍或最大耗时达到 10 倍；`P2` 表示平均达到 2 倍、最大达到 5 倍或慢查询率达到 50%；`P3` 表示平均达到阈值、最大达到 2 倍或慢查询率达到 10%；`P4` 表示只有少量请求超过阈值；其余为正常。慢查询率参与等级判断前至少需要 10 次执行，避免首次慢请求直接产生过高等级。同等级依次比较异常次数、慢操作次数、慢查询率、平均耗时和最大耗时。
-
-实体请求会显示来源实体、完整类名以及 `@JoinTable` / `@JoinTableList` 声明的表。自定义 SQL 的 `fromClass` 为 `null` 或 `Object.class` 时，来源显示“自定义 SQL”、表名显示 `-`，不会通过正则猜测表名。批量写入每个执行组记录一次；SQL 只保留模板，不采集绑定参数。多数据源按 `Session.group()` 和具体 Session 类型区分，`RouteSession` 不重复计数；缓存命中没有访问数据库，因此不会生成记录，延迟写队列最终执行 JDBC 时会自然纳入监控。
-
-页面接口和 Java API 都只读查询监控数据；`DatabaseMonitor.clear()` 仅供应用内部按需调用。
-
+<a id="ai-datasources-sqlite-sqlite-接入-1"></a>
 ### SQLite 接入
 
 仅加入 starter + sqlite，无需数据库服务器、账号或密码：
@@ -230,7 +278,34 @@ yulinlin:
 
 启动时创建父目录与文件，启用 WAL、外键约束和单连接池。SQLite 的 `schema-mode` 默认 `CREATE`：递归扫描 `schema-packages` 并创建缺失结构；`VALIDATE` 只校验；`NONE` 完全跳过扫描。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
 
-#### 启动扫描与表结构拥有者
+---
+
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-datasources-schema"></a>
+<!-- source: doc/datasources/schema.md -->
+<a id="ai-datasources-schema-自动建表列类型与索引"></a>
+## 自动建表、列类型与索引
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+显式声明结构拥有者，再配置扫描；CRUD 不触发建表。
+
+<a id="ai-datasources-schema-本页导航"></a>
+### 本页导航
+
+- [启动扫描与表结构拥有者](#ai-datasources-schema-启动扫描与表结构拥有者)
+- [文本列、长度与说明](#ai-datasources-schema-文本列长度与说明)
+- [显式允许修改列类型](#ai-datasources-schema-显式允许修改列类型)
+- [表结构错误排查](#ai-datasources-schema-表结构错误排查)
+- [预览建表 SQL](#ai-datasources-schema-预览建表-sql)
+- [Schema 边界](#ai-datasources-schema-schema-边界)
+- [MySQL/PostgreSQL/H2/SQLite 自动索引](#ai-datasources-schema-mysqlpostgresqlh2sqlite-自动索引)
+
+<a id="ai-datasources-schema-启动扫描与表结构拥有者"></a>
+### 启动扫描与表结构拥有者
 
 MySQL、PostgreSQL、SQLite、H2 和 Elasticsearch 共用 core 中相同的扫描规则。每个配置包都会递归扫描子包，但只处理显式声明 `@JoinTable(..., autoSchema = true)` 的具体普通结构类。`autoSchema` 默认 `false`；普通查询实体、DTO、接口、抽象类、JOIN 模型和统计模型不参与。未配置扫描包时也不扫描任何类。
 
@@ -257,7 +332,8 @@ public class DemoUserSummary { /* 查询投影 */ }
 
 扫描结果若发现两个 `autoSchema=true` 的类映射同一表，应用启动失败并列出冲突类，避免“小实体先创建残缺表”。建表沿用字段别名、下划线映射、继承字段、单主键和 `JoinIndex` 元信息；static、transient、非持久化和关联查询字段不生成列。
 
-#### 文本列、长度与说明
+<a id="ai-datasources-schema-文本列长度与说明"></a>
+### 文本列、长度与说明
 
 完整结构实体可以通过 `JoinField` 明确普通文本长度、大文本类型和列用途：
 
@@ -294,7 +370,7 @@ private String content;
 - 这三个模块中，`java.util.Date` 仍编码为 `Timestamp`，`LocalDate` / `LocalTime` 仍编码为 `java.sql.Date` / `java.sql.Time`，保留原有行为；`Time` 编码仍是秒级精度。
 - SQLite 自己的编码器直接输出 TEXT：`DateTime` / `LocalDateTime` / `Date` 为 `yyyy-MM-dd HH:mm:ss`，`LocalDate` 为 `yyyy-MM-dd`，`LocalTime` 为 `HH:mm:ss`。格式器也定义在 SQLite 模块，保留旧数据的空格分隔、秒级精度；写入和查询条件使用相同规则，日期范围比较不混用带 `T` 的格式。原始参数绑定中的时间对象也调用 SQLite 自己的编码器。
 - JDBC 解码支持 `LocalDateTime`、旧驱动返回的 `Timestamp`，以及空格或 `T` 分隔、可带 1～9 位小数秒的日期时间文本。文本直接解析为本地时间，不经 `Timestamp` 中转；MySQL/PostgreSQL/H2 实际保存的小数秒精度仍由列定义与驱动决定，SQLite 保持秒级存储。
-- core 的 `DateTimeCoder`、JSON 展示，以及 MongoDB/Elasticsearch 的原有时间规则不变。扩展数据库时定义自己的 `CoderManager` 并在内部注册编码器，自行声明工厂时例如传入 `new H2CoderManager()`，参见 [第五专题：编解码](05-扩展开发与维护.md#编解码)。`SqlParseManager` 仍只负责 SQL 解析，字段编解码沿用 `ICoderManager`。
+- core 的 `DateTimeCoder`、JSON 展示，以及 MongoDB/Elasticsearch 的原有时间规则不变。扩展数据库时定义自己的 `CoderManager` 并在内部注册编码器，自行声明工厂时例如传入 `new H2CoderManager()`，参见 [编解码扩展](internal/jdbc.md#编解码)。`SqlParseManager` 仍只负责 SQL 解析，字段编解码沿用 `ICoderManager`。
 
 `DateTime` / `LocalDateTime` 表示无时区的日期时间，这次修复避免它们因为被转成 `Timestamp` 而触发驱动的时间点换算。它不会修改 JVM 或数据库时区；`DateTime.now()` 仍取 JVM 本地时间。`java.util.Date` 表示时间点，保留原有时区处理；手工建成 MySQL `TIMESTAMP`、PostgreSQL/H2 带时区列的字段仍有数据库自身的时区语义，不能据此认为所有列都不再换算。历史上已经写偏的值不会自动修复，不要直接对整表统一加减 8 小时。升级时同步更新 core、jdbc 及项目使用的 mysql/postgresql/h2/sqlite 模块，避免新旧注册方法、工厂和编码器混用。
 
@@ -320,7 +396,8 @@ SQLite 的整数/布尔值对应 INTEGER，浮点数对应 REAL，其余默认 T
 
 启动完成后，CRUD 和自定义 SQL 均不再检查或修改 Schema。`BaseRequest.fromClass` 为 null、Object.class 或任意类型都不会触发 DDL；它原有的映射与路由语义不变。自定义 SQL 涉及的表若不在扫描实体中，应由迁移脚本或其他初始化流程创建。
 
-#### 显式允许修改列类型
+<a id="ai-datasources-schema-显式允许修改列类型"></a>
+### 显式允许修改列类型
 
 仅在用户已人工确认现有数据可转换、且已备份时启用。开关默认 `false`，各数据源独立配置，不改变其他数据源：
 
@@ -359,7 +436,8 @@ yulinlin:
 
 所有执行的 DDL 由 Session 先打印完整 SQL；改列失败的异常包含中文说明及对应 SQL，启动中止。大表可能锁表或重写数据，多列/多表修改不保证整体回滚，已经完成的 DDL 可能保留；修复后重新启动会读取实际结构，不做自动补偿。建议在维护窗口执行，完成迁移后关闭此开关。
 
-#### 表结构错误排查
+<a id="ai-datasources-schema-表结构错误排查"></a>
+### 表结构错误排查
 
 MySQL、PostgreSQL、H2、SQLite 的结构冲突使用中文提示，列出数据库类型、表/列、原因、实体要求、数据库现有结构及处理方式，不再直接输出内部 `Column[...]` 对象。例如：
 
@@ -391,7 +469,8 @@ yulinlin.mysql.schema-mode: CREATE。修改类型可能锁表或改变数据精�
 
 框架说明使用中文，数据库驱动原始错误原样保留，异常链及 SQLState/错误码也保留。结构 SQL 失败会中止初始化，但多条 DDL **不保证整体回滚**；不能将“重启失败”理解为“数据库完全没改动”。
 
-#### 预览建表 SQL
+<a id="ai-datasources-schema-预览建表-sql"></a>
+### 预览建表 SQL
 
 `EntitySession` 统一提供 `createTableSql(Class<?>)`。它只根据当前 Session 的数据库方言和字段命名设置生成 SQL，不获取连接、不执行 DDL；返回列表依次包含建表、列注释和声明索引。只有显式 `autoSchema=true` 的完整简单表实体会生成 DDL，投影、统计模型、null 和 Object.class 返回空列表：
 
@@ -405,7 +484,8 @@ ddl.forEach(System.out::println);
 
 `initializeSchema(Collection<Class<?>>)` 才执行初始化。MySQL、PostgreSQL、H2、SQLite 和 Elasticsearch 的启动扫描调用该 Session 接口；JDBC Session 自己管理连接和 Statement，并在执行每条语句前以 INFO 输出 `[group][schema]` 和完整 DDL。预览和实际初始化共用相同的结构描述函数。`schema-mode=NONE` 会跳过自动初始化，但不妨碍手动调用 `createTableSql` 预览。
 
-#### Schema 边界
+<a id="ai-datasources-schema-schema-边界"></a>
+### Schema 边界
 
 这不是完整的版本迁移工具：`CREATE` 会创建缺失表、缺失普通列和缺失的声明索引；新增列通过 `ALTER TABLE ... ADD COLUMN` 执行。MySQL/PostgreSQL/H2 只有显式开启 `alter-column-type` 才允许上述受限的类型修改和扩容。它不会自动增加或修改主键，也不删除旧列/旧索引或添加外键、复合主键。框架无法识别字段改名：改名会被视为“增加新列”，旧列和旧数据仍保留，但数据不会自动搬到新列，因此改名必须使用业务迁移脚本。所有实际执行的 DDL 都会先以 INFO 日志打印，并且发生在会话 Bean 初始化阶段，不进入后续业务事务。`createTableSql` 只预览新建结构，不读取现有元数据，因此不是改列迁移计划。
 
@@ -413,6 +493,56 @@ SQLite 使用继承 JdbcSession 的 SqliteSession，复用公共 CRUD；不需�
 
 SQLite 不支持框架生成的 FOR UPDATE、日期分组和数值间隔分组，当前解析器明确拒绝；需用自定义 SQL 实现数据库专用功能。运行中不要单独删除 -wal/-shm 文件，也不要仅复制主文件作为可靠备份。NORMAL 偏向性能，FULL 更重视持久性；这不是业务吞吐量承诺。
 
+<a id="ai-datasources-schema-mysqlpostgresqlh2sqlite-自动索引"></a>
+### MySQL/PostgreSQL/H2/SQLite 自动索引
+
+在具体表实体上重复使用 `@JoinIndex`，fields 填 Java 属性名，顺序就是联合索引的列顺序。字段先经过 JoinField 和下划线映射，再生成数据库索引：
+
+```java
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinIndex;
+import com.yulinlin.data.core.anno.JoinTable;
+import java.util.Date;
+
+@JoinTable(value = "video_comment", autoSchema = true)
+@JoinIndex(fields = {"videoId", "crtTime"})
+@JoinIndex(fields = {"videoId", "userId"}, unique = true)
+public class VideoComment {
+    @JoinField(name = "video_id") private String videoId;
+    @JoinField(name = "user_id") private String userId;
+    @JoinField(name = "crt_time") private Date crtTime;
+}
+```
+
+上例自动生成普通索引 `idx_video_comment_video_id_crt_time` 和唯一索引 `uk_video_comment_video_id_user_id`。用户不填写索引名；名称由类型前缀、表名和映射后的列名组成，统一小写，超过 63 个字符时截断并追加稳定的 8 位哈希。
+
+同一有序字段组合不能重复声明；如果同时声明普通和唯一索引，只保留唯一索引。字段为空、重复、不存在、exist=false、关联字段或函数映射字段会在启动初始化时报错。索引注解只读取结构拥有者具体类上的声明，不继承父类索引；fields 仍可引用父类持久化字段。
+
+已有同名索引会校验字段顺序、唯一性以及是否为普通升序列索引；不兼容时要求手动迁移。删除或修改注解不会自动删除旧索引，修改字段组合会创建新名称。MySQL/PostgreSQL/H2 使用独立启动连接；SQLite 在内部数据库会话初始化时执行。
+
+---
+
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-datasources-h2"></a>
+<!-- source: doc/datasources/h2.md -->
+<a id="ai-datasources-h2-h2-接入"></a>
+## H2 接入
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+配置本地 H2 和连接并发。
+
+共同规则：[自动建表与索引](#ai-datasources-schema) · [多数据源与默认组](#ai-datasources-routing) · [SQL 与事务日志](operations/sql-log.md)。
+
+<a id="ai-datasources-h2-本页导航"></a>
+### 本页导航
+
+- [H2 接入](#ai-datasources-h2-h2-接入-1)
+
+<a id="ai-datasources-h2-h2-接入-1"></a>
 ### H2 接入
 
 H2 适合纯 Java 的本地文件存储，不需要数据库服务器或本机原生库。加入 starter + h2：
@@ -477,36 +607,55 @@ H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连
 
 H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 parallel-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
 
-#### SQLite/H2 选型
+---
 
-4 个业务线程、每次最多 128 行、总计 10 万行的 JMH 实测中，H2 为 89,401 行/秒，SQLite 为 45,456 行/秒；SQLite 的累计内存分配更低。多线程小批量且吞吐优先选 H2，单文件和写入可排队选 SQLite。测试口径、完整指标、限制和复现命令见[第七专题](07-SQLite与H2性能报告.md)。
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
 
-#### MySQL/PostgreSQL/H2/SQLite 自动索引
+---
 
-在具体表实体上重复使用 `@JoinIndex`，fields 填 Java 属性名，顺序就是联合索引的列顺序。字段先经过 JoinField 和下划线映射，再生成数据库索引：
+<a id="ai-datasources-local-choice"></a>
+<!-- source: doc/datasources/local-choice.md -->
+<a id="ai-datasources-local-choice-本地数据库选型"></a>
+## 本地数据库选型
 
-```java
-import com.yulinlin.data.core.anno.JoinField;
-import com.yulinlin.data.core.anno.JoinIndex;
-import com.yulinlin.data.core.anno.JoinTable;
-import java.util.Date;
+[文档首页](README.md) / [数据源](datasources/README.md)
 
-@JoinTable(value = "video_comment", autoSchema = true)
-@JoinIndex(fields = {"videoId", "crtTime"})
-@JoinIndex(fields = {"videoId", "userId"}, unique = true)
-public class VideoComment {
-    @JoinField(name = "video_id") private String videoId;
-    @JoinField(name = "user_id") private String userId;
-    @JoinField(name = "crt_time") private Date crtTime;
-}
-```
+先看简要取舍，完整数据与环境见性能报告。
 
-上例自动生成普通索引 `idx_video_comment_video_id_crt_time` 和唯一索引 `uk_video_comment_video_id_user_id`。用户不填写索引名；名称由类型前缀、表名和映射后的列名组成，统一小写，超过 63 个字符时截断并追加稳定的 8 位哈希。
+<a id="ai-datasources-local-choice-本页导航"></a>
+### 本页导航
 
-同一有序字段组合不能重复声明；如果同时声明普通和唯一索引，只保留唯一索引。字段为空、重复、不存在、exist=false、关联字段或函数映射字段会在启动初始化时报错。索引注解只读取结构拥有者具体类上的声明，不继承父类索引；fields 仍可引用父类持久化字段。
+- [SQLite/H2 选型](#ai-datasources-local-choice-sqliteh2-选型)
 
-已有同名索引会校验字段顺序、唯一性以及是否为普通升序列索引；不兼容时要求手动迁移。删除或修改注解不会自动删除旧索引，修改字段组合会创建新名称。MySQL/PostgreSQL/H2 使用独立启动连接；SQLite 在内部数据库会话初始化时执行。
+<a id="ai-datasources-local-choice-sqliteh2-选型"></a>
+### SQLite/H2 选型
 
+4 个业务线程、每次最多 128 行、总计 10 万行的 JMH 实测中，H2 为 89,401 行/秒，SQLite 为 45,456 行/秒；SQLite 的累计内存分配更低。多线程小批量且吞吐优先选 H2，单文件和写入可排队选 SQLite。测试口径、完整指标、限制和复现命令见[本地数据库性能报告](operations/local-benchmark.md)。
+
+---
+
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-datasources-postgresql"></a>
+<!-- source: doc/datasources/postgresql.md -->
+<a id="ai-datasources-postgresql-postgresql-接入"></a>
+## PostgreSQL 接入
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+接入 PostgreSQL 与中文全文检索前置配置。
+
+共同规则：[自动建表与索引](#ai-datasources-schema) · [多数据源与默认组](#ai-datasources-routing) · [SQL 与事务日志](operations/sql-log.md)。
+
+<a id="ai-datasources-postgresql-本页导航"></a>
+### 本页导航
+
+- [PostgreSQL 接入](#ai-datasources-postgresql-postgresql-接入-1)
+- [PostgreSQL 中文全文检索](#ai-datasources-postgresql-postgresql-中文全文检索)
+
+<a id="ai-datasources-postgresql-postgresql-接入-1"></a>
 ### PostgreSQL 接入
 
 最小依赖只需 postgresql，公共 jdbc/core/lang 会传递引入；不依赖 mysql 模块或 MySQL 驱动：
@@ -560,6 +709,7 @@ JSON 读取支持合法 JSON 的路径，例如 `payload->profile->name`；数�
 
 JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream、bytea/oid 等二进制对象；需要保存时应先由明确的编解码策略转成文本，或把文件放到对象存储后只保存地址。原生布尔列保留 false/NULL；除布尔列外结果大多沿用字符串解码，不能推定 timestamptz 等扩展类型完整往返已验证。
 
+<a id="ai-datasources-postgresql-postgresql-中文全文检索"></a>
 #### PostgreSQL 中文全文检索
 
 全文检索是 PostgreSQL 模块的可选能力，中文分词依赖数据库服务器已安装 `pg_jieba`。框架不会下载或安装 PostgreSQL 扩展二进制；运维先按服务器版本安装插件，再由有权限的账号执行：
@@ -570,10 +720,31 @@ CREATE EXTENSION IF NOT EXISTS pg_jieba;
 
 默认索引配置是 `jiebacfg`，查询配置是 `jiebaqry`。只有结构拥有者实体上显式声明 `@JoinField(fullText = true)` 的文本列才生成 GIN 表达式索引。`schema-mode=CREATE` 会创建缺失索引，`VALIDATE` 只校验；初始化遇到配置不存在时会直接说明需要安装/启用 pg_jieba。修改 index-config 会使用新的索引名称创建新索引，旧索引不会自动删除。
 
-`index-config` 同时用于 `to_tsvector`、GIN 索引和 `ts_headline`，不能随意设置为不同分词配置；`query-config` 用于 `websearch_to_tsquery`。`max-words/min-words` 是 PostgreSQL 专属摘要长度；高亮标签、片段数和分隔符来自所有 EntitySession 共用的 `highlight` 配置，并作为 JDBC 参数绑定，不拼接用户输入。默认标记不是 HTML，前端可安全地按 `__HL_START__` / `__HL_END__` 转义后渲染；若改成 `<mark>`，仍须遵循项目的 XSS 输出策略。查询用法见[全文匹配与高亮](02-CRUD与统计分析.md#全文匹配与高亮)。
+`index-config` 同时用于 `to_tsvector`、GIN 索引和 `ts_headline`，不能随意设置为不同分词配置；`query-config` 用于 `websearch_to_tsquery`。`max-words/min-words` 是 PostgreSQL 专属摘要长度；高亮标签、片段数和分隔符来自所有 EntitySession 共用的 `highlight` 配置，并作为 JDBC 参数绑定，不拼接用户输入。默认标记不是 HTML，前端可安全地按 `__HL_START__` / `__HL_END__` 转义后渲染；若改成 `<mark>`，仍须遵循项目的 XSS 输出策略。查询用法见[全文匹配与高亮](#ai-orm-search-全文匹配与高亮)。
 
 MySQL、SQLite、H2 当前不会创建全文索引：`fullText=true` 被忽略，`match()` 退化为包含式 LIKE，`highlight()` 返回原字段。这保证同一业务调用可以运行，但不代表大表查询具有全文检索性能。
 
+---
+
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-datasources-elasticsearch"></a>
+<!-- source: doc/datasources/elasticsearch.md -->
+<a id="ai-datasources-elasticsearch-elasticsearch-接入"></a>
+## Elasticsearch 接入
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+索引与 Mapping 初始化、配置和能力边界。
+
+<a id="ai-datasources-elasticsearch-本页导航"></a>
+### 本页导航
+
+- [Elasticsearch 结构初始化](#ai-datasources-elasticsearch-elasticsearch-结构初始化)
+
+<a id="ai-datasources-elasticsearch-elasticsearch-结构初始化"></a>
 ### Elasticsearch 结构初始化
 
 Elasticsearch 与 JDBC 模块复用 core 的实体扫描和 Schema 配置。默认 `schema-mode=NONE`，不会访问或修改索引；启用时配置：
@@ -596,6 +767,30 @@ yulinlin:
 
 模块使用 Elasticsearch Java Client `9.5.4` 和其默认 `Rest5Client`。`CREATE` 会创建缺失索引和基础 Mapping，并给已有索引补充缺失字段；`VALIDATE` 只检查索引、字段和字段类型，不修改结构。普通字符串映射为 `keyword`，`@JoinField(fullText = true)` 或 `textType = text` 映射为 `text`；复杂 JSON 对象保留 Elasticsearch 动态映射。已存在字段类型不一致时不会强制修改，而是要求手工迁移索引。查询调用 `.highlight(field)` 后使用公共标签与片段数，并按 `fragment-delimiter` 合并返回的多个片段到原字段。
 
+---
+
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-datasources-routing"></a>
+<!-- source: doc/datasources/routing.md -->
+<a id="ai-datasources-routing-多数据源与默认组"></a>
+## 多数据源与默认组
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+注册多个数据源，使用 group 或 JoinSession 选择路由。
+
+<a id="ai-datasources-routing-本页导航"></a>
+### 本页导航
+
+- [多数据源注册](#ai-datasources-routing-多数据源注册)
+- [两个 MySQL 数据源](#ai-datasources-routing-两个-mysql-数据源)
+- [MySQL 与 PostgreSQL 共存](#ai-datasources-routing-mysql-与-postgresql-共存)
+- [默认会话组](#ai-datasources-routing-默认会话组)
+
+<a id="ai-datasources-routing-多数据源注册"></a>
 ### 多数据源注册
 
 三个名字不要混用：
@@ -608,6 +803,7 @@ yulinlin:
 
 工厂 `create(dataSource, group)` 返回已配置的 Session，并继承该工厂所属模块的配置，但不注册路由。把它声明为 EntitySession Bean，core 就会收集到 RouteSession；无需在 Bean 创建方法中反向注入 RouteSession。某个同类 Session 需要独立参数时，可调用 `create(dataSource, group, properties)` 显式覆盖。
 
+<a id="ai-datasources-routing-两个-mysql-数据源"></a>
 #### 两个 MySQL 数据源
 
 下面是完整配置类。应用提供 spring.datasource 和 oss.datasource 两套 DataSourceProperties 配置；main 数据源标记 @Primary，使模块默认 mysqlSession 使用它：
@@ -657,6 +853,7 @@ public class MultiDataSourceConfig {
 
 Boot 可能因为额外的 DataSource Bean 不再创建原默认源，因此例子明确声明两个池，而不是只声明第二个源。
 
+<a id="ai-datasources-routing-mysql-与-postgresql-共存"></a>
 #### MySQL 与 PostgreSQL 共存
 
 模块不检查 JDBC URL。两边自动配置可能注入同一个 @Primary DataSource；默认 group 不同不代表已绑定不同物理库。
@@ -693,209 +890,7 @@ MySQL 与 SQLite 共存时，保留原主库配置即可，SQLite 使用内部�
 
 使用容器管理的 JdbcSessionFactory：`create(...)` 返回前已初始化编码器、解析器、代理服务、日志、配置、group 和缓存；未引入缓存实现时使用空缓存，不影响启动。RouteSession 注册时只登记节点，不再补充或覆盖 Session 配置；过滤器只由 RouteSession 执行。不要把手动 `new JdbcSessionFactory(...)` 当成已完成容器注入的工厂。`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
 
-### 数据源增量同步
-
-`data-sync` 是可选模块。增量模式把经过框架 RouteSession 的写请求，在源事务提交成功后异步重放到目标组；复用 `INode`，不把 MySQL SQL 原文发送给 PostgreSQL。另提供 MySQL/PostgreSQL 全量 API，按主键分页复制，并在目标库保存检查点。
-
-当前采用**轻量同步：日常增量正常运行，全量只在人工维护时调用**。启动只校验数据源组并启动增量消费，不扫描实体或执行全量。内部暂停的是增量消费者，不是业务接口或数据库写权限；全量前必须由业务停写，不能把暂停消费当作不停写同步方案。
-
-```xml
-<dependency>
-    <groupId>com.yulinlin</groupId>
-    <artifactId>data-sync</artifactId>
-    <version>3.0</version>
-</dependency>
-```
-
-先按上文注册 MySQL、PostgreSQL 两个数据源。`source` / `target` 是框架注册的 **group**，不是 Spring DataSource Bean 名；规则内未注册组会阻止同步模块启动。业务表需通过原有 Schema 配置或迁移脚本准备；全量 API 只自动创建自身的进度表。
-
-```yaml
-yulinlin:
-  sync:
-    enabled: true                  # 默认 false；不引入模块或关闭时不注册同步过滤器
-    capacity: 10000                # 每条规则最多保留的写节点数，不是字节数
-    full-batch-size: 1000           # 全量 API 每批读取/提交条数，1～10000；与增量 capacity 无关
-    rules:
-      - name: video-search         # 可省略，默认 mysql->postgresql
-        source: mysql
-        target: postgresql
-        entities:
-          - com.example.video.VideoEntity
-          - com.example.video.CommentEntity
-```
-
-#### 全量 API：自动读取主键进度
-
-完成下面的停写、排空步骤后，注入 `com.yulinlin.sync.DataSyncClient` 调用；无需自己查询最后一条记录或记录主键。人工 API 不要求实体命中增量 `entities`，调用方显式传入实体类，并自行确认权限和迁移范围：
-
-```java
-import com.yulinlin.sync.DataSyncClient;
-import com.yulinlin.sync.SyncResult;
-import org.springframework.stereotype.Service;
-
-@Service
-public class VideoSyncService {
-    private final DataSyncClient dataSyncClient;
-
-    public VideoSyncService(DataSyncClient dataSyncClient) {
-        this.dataSyncClient = dataSyncClient;
-    }
-
-    // 前提：已停写、在途事务结束、相关增量队列排空。
-    // 不加 @Transactional；人工触发后台维护任务，方法阻塞到完成或失败。
-    public SyncResult syncVideos() {
-        return dataSyncClient.sync("mysql", "postgresql", VideoEntity.class);
-    }
-
-    // 明确开启新一轮：从头复制，但不清空目标表。
-    public SyncResult restartVideos() {
-        return dataSyncClient.restart("mysql", "postgresql", VideoEntity.class);
-    }
-}
-```
-
-仅用人工 API 时可以不配置增量规则：
-
-```yaml
-yulinlin:
-  sync:
-    enabled: true
-    full-batch-size: 1000
-    rules: []
-```
-
-| 调用 / 状态 | 行为 |
-| --- | --- |
-| 首次 `sync(source, target, class)` | 主键升序，从第一批开始 |
-| 中断或失败后再次 `sync(...)` | 保持停写且源数据未变化时，从 `主键 > 最后成功主键` 继续，不使用 OFFSET；若已恢复写入，先核对是否需 `restart` |
-| 已完成后再次 `sync(...)` | 返回已有完成结果，本次复制数为 0；不会自动追加源库新增数据 |
-| `restart(...)` | 新任务 ID、清零该任务进度，从头按主键新增或覆盖；不删除目标额外数据 |
-| 映射、主键结构或实际连接指纹变化 | 拒绝沿用旧进度，核对后使用 `restart` |
-| 检测到全量期间源写入 | 暂停相关增量规则，全量进度标记 `RESTART_REQUIRED`；停写、人工修复并排空规则后 `restart`，不能直接续传 |
-
-`SyncResult` 返回 `taskId/source/target/entity/status/lastPrimaryKey/completedRows/rowsThisRun/batchesThisRun/elapsedMillis`。`completedRows` 是本轮累计复制的源行数，`rowsThisRun` 是这次调用确认提交的源行数，不是数据库 UPDATE 的 changed-rows；覆盖相同值也计入复制数。失败会抛异常，并保留可恢复的检查点。
-
-**主键与字段要求：**
-
-- 使用完整单表 `@JoinTable` 实体，主键声明 `@JoinMeta(primaryKey = true)`，且与两端实际单列主键一致；不要求实体 `autoSchema=true`。
-- 主键支持 `String`、byte/short/int/long 及其包装类、`BigInteger`；不支持复合主键、浮点主键、UUID Java 类型。主键不能为空，需保持稳定；字符串按源数据库排序，不执行数字“+1”。
-- 复制实体声明的持久化字段，包括 `null`、`update=false`、ID 和时间；跳过 `exist=false`、计算字段、关联加载字段。使用源 CoderManager 解码、目标 CoderManager 编码，复用对应 Session 的值读取/绑定策略。
-- 拒绝聚合投影和 JoinTableList 联表实体。不经过业务过滤器、代理、自动补时间或增量回放；不能依赖租户过滤器限制迁移范围，也不支持动态分表。应由有权限的维护代码调用，模块不公开 HTTP 管理接口。
-- 仅支持 MySQL/PostgreSQL。目标 MySQL 业务表与进度表必须是 InnoDB；触发器、生成列、自增序列、额外唯一约束、字段范围和排序规则需人工确认。复制显式主键不会自动调整 PostgreSQL sequence；序列型主键后续插入前应自行校准。
-
-**进度、事务和日志：**
-
-进度存入目标连接默认库/schema 的 `yulinlin_sync_progress`，任务按源 group + 目标 group + 实体类区分；每个任务只保存最新一轮进度，不保存所有历史轮次。需要该表的建表和读写权限，业务表需 SELECT/INSERT/UPDATE 权限。每批数据和检查点使用同一目标连接提交，失败回滚本批；已提交批次不回滚。目标按主键区分 INSERT/UPDATE，不使用 MySQL 任意唯一键冲突覆盖。每批提交后主动清理目标实体缓存。
-
-运行全量时持有源、目标各一个维护连接；目标事务按批提交，不使用多连接批处理。相同任务通过目标库会话锁防止重复运行。进程异常退出后可续传，连接断开后的锁释放以数据库为准；持久化 RUNNING 不代表仍有工作线程。不要同时用不同 group 别名/不同实体启动对同一物理表的全量任务。
-
-日志示例（数值仅示意）：
-
-```text
-全量同步开始 源=mysql 目标=postgresql 实体=com.example.VideoEntity 任务=... 每批=1000 恢复主键=2000 累计完成=2000
-全量同步进度 源=mysql 目标=postgresql 实体=com.example.VideoEntity 本批=1000 本次完成=1000 累计完成=3000 最后成功主键=3000 本批耗时=120ms
-全量同步完成 源=mysql 目标=postgresql 实体=com.example.VideoEntity 本次完成=1000 累计完成=3000 批次=1 总耗时=135ms
-```
-
-不预先 COUNT 全表，所以不提供百分比。异常日志提示排查和续传；提交确认异常时，以目标进度表实际值为准，不用旧内存游标覆盖已提交进度。
-
-#### 人工全量流程：业务停写，内部暂停增量
-
-按下面的顺序操作，无需业务再写一套暂停/恢复增量消费者的代码：
-
-1. **业务停写**：关闭相关源/目标业务写入口，覆盖所有应用实例、定时任务及其他程序的写入。先停止产生新任务，再让 EntityCounter、`.queue()` 和在途事务处理完；不能只暂停 HTTP 接口。
-2. **排空增量**：保持增量消费正常运行，等待提交后的同步任务完成。用 `syncManager.statuses()` 核对写向本次目标组的规则无积压、无错误。不要先关闭整个同步模块，否则不能排空。
-3. **人工调用**：在业务事务之外调用 `sync(source, target, class)`，需要重新覆盖全部历史数据时调用 `restart(...)`。API 会再次检查规则是否空闲；尚在执行、积压、已暂停或被其他全量占用时直接报错，不自动等待、不丢弃任务。状态计数只是观察入口，最终以 API 检查为准。
-4. **内部暂停**：检查通过后，本进程所有写向该目标 group 的增量规则进入维护保护，不再调度消费；不只是当前实体或当前源组。随后逐批复制，业务行与检查点同批提交。
-5. **完成并恢复**：API 正常返回时释放内部维护保护，未处于错误暂停状态的规则恢复正常调度。核对结果、日志和规则状态后，再由业务恢复写入。正常全量完成不需要调用 `resumeAfterRepair`。
-
-**内部暂停不等于业务停写。** 不会拦截用户请求、不撤销源事务，也不会停止其他应用实例、原生 SQL 或数据库客户端的修改。若其他源组的规则也写向这个目标 group，同样需要协调它们的停写。目标读取未被禁止，但全量按批提交，期间可能看到部分新、部分旧的数据，不能把它当作整表原子切换。
-
-| 情况 | 内部处理 | 业务操作 |
-| --- | --- | --- |
-| 全量正常完成 | 释放维护保护，正常规则恢复调度 | 核对后恢复写入 |
-| 普通读取/写入失败，没有源写入冲突 | 回滚未提交批次，保留已提交进度；退出时释放维护保护，正常规则可再次调度 | 保持停写，排查后续传；不能因为消费者已恢复就认定全量成功 |
-| 全量期间检测到匹配规则的源写入或提交 | 标记冲突、暂停相关增量规则；全量任务处理中检测到冲突会中止并记录需要重做 | 保持停写，人工核对、修复和处理积压，再 `restart`；不要盲目重放 inc/dec |
-| 进程退出 | 全量检查点已落在目标库；内存增量任务和运行状态不保证保留 | 重启后先确认数据及缺口，不把“队列空了”当作已同步成功 |
-
-失败恢复期间也需保持停写；如果期间已恢复写入，旧游标之前的数据可能变化，需要核对并重新全量。全量不会删除目标额外记录，漏同步的删除仍需人工清理。正常匹配规则之外、其他进程或原生 SQL 的修改可能检测不到，因此这**不是不停机快照与 CDC 无缝衔接**。
-
-启动自动全量及其扩展入口已移除；升级时删除旧配置中的 `rules[].full`，不再填写 true/false。`full-batch-size` 仍保留，用于人工全量 API 每批读取/提交数量，不是自动全量开关。
-
-#### 实体通配符
-
-`entities` 按写请求 `fromClass.getName()` 匹配并按类缓存结果；增量模式不扫描实体包。表达式是 Java 完整类名，不是表名：
-
-| 表达式 | 含义 |
-| --- | --- |
-| `com.example.video.VideoEntity` | 指定类 |
-| `com.example.video.*` | 当前包内的类，不跨包 |
-| `com.example.video.**` | 当前包及子包内的类 |
-| `com.example.*.entity.**` | 中间一级包通配，entity 下递归 |
-| `com.example.video.*Entity` | 当前包下以 Entity 结尾的类 |
-
-`**` 必须独占一个包段；多个表达式命中同一类只生成一个规则任务。不同规则可以分别转发到不同目标。规则名称不能重复，同一 source/target 应合并在一条规则内；entities 为空、源目标相同、capacity 非正数均启动报错。实体来自继承父类、DTO 或业务投影时，匹配的仍是本次请求的实际 fromClass，不会自动改成其父类。
-
-#### 执行语义
-
-1. 业务通过 Model/Request 正常写入，无须改每个调用点。
-2. RouteSession 的 `before` 已确定最终源组、表名和节点；实际写后过滤器生成独立快照，不保留业务 root。事务回滚会丢弃提交回调。
-3. 最外层提交成功后立即尝试入队，不等待凑批。每条规则只有一个顺序消费者，不同规则可并发。
-4. 目标通过 `RouteSession.replayWrite` 直接重放已准备节点：保留源 ID/字段值，跳过业务 before/after 过滤器，不再次补 ID/默认时间，不递归产生同步任务。目标事务、缓存失效和 SQL 日志仍然生效。
-
-目标的租户隔离、改表名等业务过滤器也不会执行，因此只向明确授权、结构映射兼容的目标组同步。两个数据源应使用相容的字段映射与命名规则，不能借目标过滤器重新改写源表名。目标缓存失效默认跟随其配置，请求显式 clearCache 值会保留。
-
-| 写入类型 | 第一版行为 |
-| --- | --- |
-| 插入 | 重放相同 ID/值，不是 upsert；目标有重复主键时正常报错并暂停 |
-| 任意条件更新/删除 | 重放相同条件与字段节点，包括 inc/dec；影响行数为 0 也可以重放 |
-| 批量操作 | 一个任务携带原请求的节点集合与 batch 选项；容量按节点数计 |
-| `.queue()` | 排队时不捕获，后台实际执行、事务提交后才入同步队列 |
-| EntityCounter | 捕获聚合后实际执行的写请求，不捕获每一次 submit |
-| 懒同步代理 | 代理在提交阶段实际刷出的框架写请求也登记同步任务 |
-| 自定义 SQL / fromClass=null 或 Object.class | 不自动同步 |
-| 混入原始 Expression、第三方自定义节点 | 不静默复制：快照失败，规则暂停并报告可能缺口 |
-
-节点结构由模块独立复制，普通字段值复用 lang 深克隆；无需实体实现 Serializable。日期、集合、Map、原子数字等沿用深克隆能力。无法深克隆的自定义值（例如当前不支持的 record 或没有适用构造器的 Bean）会报告失败，不会共享可变引用冒充快照。同步目标不执行对象生命周期钩子，节点中的源字段值才是同步内容。
-
-#### 状态与人工恢复
-
-通过注入 `com.yulinlin.sync.SyncManager` 查看状态，不提供管理页面或 HTTP 管理端点：
-
-```java
-// 方法体片段，syncManager 由 Spring 注入。
-List<SyncStatus> statuses = syncManager.statuses();
-```
-
-状态包含规则、源/目标、STARTING/RUNNING/FULL_SYNC/PAUSED/CLOSED、待处理任务数/节点数、完成任务数、拒绝请求数、失败任务 ID、最近错误及 `requiresRepair`。RUNNING 表示规则启用，不代表此刻正在执行 SQL；没有任务时不会创建轮询线程。该接口展示增量规则，不列出进度表中的全部全量任务。
-
-- 目标执行失败或任务确认失败：保留队列头，暂停规则，不自动重试、不让后续任务越过。其他规则不受影响。
-- 暂停期间仍可接收新任务，达到容量后拒绝并记录缺口。执行中和失败头任务也占容量；单个请求超过容量同样拒绝。
-- 源提交后的队列满、存储失败不会回滚源事务，也不使业务“自动重试插入”；模块输出中文 ERROR 并更新状态。快照失败也会暂停并标记可能缺口，即便之后源事务回滚，该告警也不会自动解除。
-- `requiresRepair=false` **不表示目标一定没提交**。执行报错也可能需要人工确认，尤其是 inc/dec 和提交结果不确定的情况。
-
-人工确认数据已修复、重试不会重复执行后才调用：
-
-```java
-syncManager.resumeAfterRepair("video-search", false); // 保留并重试头任务
-// 二选一：确认失败头任务已在目标提交，或已经人工补齐其影响：
-syncManager.resumeAfterRepair("video-search", true);  // 丢弃该失败头任务，继续后续任务
-```
-
-`true` 只允许存在失败任务 ID 时使用，不会把“队列满”的正常头任务随意丢弃。调用表示用户已经核对并修复全部缺口，不是自动修复或自动对账。暂停不自动冻结源库；修复期间宜暂停相关源写入。
-
-#### 一致性与第一版边界
-
-- 这叫**请求级单向增量同步**，不是 CDC/数据库复制。只捕获 RouteSession 写入，不捕获数据库客户端、触发器、原生 JDBC 或其他应用直接改库。
-- 增量本身不补历史；可在停写窗口用全量 API 准备初始数据。相同条件在不同库可能命中不同记录，受初始数据、同步延迟、比较规则、排序和时间表达式影响。
-- 每条规则仅保证任务入队顺序，不保证源端并发事务内部的执行顺序。一个源事务中的多次请求是多个目标事务，不保证跨请求原子性；目标再次被其他业务修改也可能产生差异。
-- 内置存储是进程内有界队列；源提交到入队之间、进程崩溃和关闭时都可能丢任务，没有持久化历史、exactly-once 或跨库回滚保证。capacity 限制节点数，不限制单个字段字节数，也不覆盖提交前事务持有的快照。
-- 关闭只停止接收/调度，不强行打断正在执行的目标事务；剩余内存任务记录警告，不承诺排空。重新启动不会自动恢复失败状态与积压，需人工对账。
-- 不做双向冲突处理，也不做级联转发：A→B 的重放不会触发 B→C。需要多个目标时直接配置 A→B、A→C。
-- 全量是按实体主键复制/覆盖，不删除目标额外记录，不是完整数据库备份；只提供人工 API，不提供启动自动全量、创建时间筛选、在线一致性快照或自动对账。全量检查点不等于增量队列具备持久化可靠性。
-
-新增模块本轮仅完成代码和静态核对，回归测试源码位于 admin 测试目录，按要求未编译、未运行测试；尚未验证真实 MySQL/PostgreSQL 服务端组合。
-
+<a id="ai-datasources-routing-默认会话组"></a>
 ### 默认会话组
 
 只注册一个 group 时，无组参数请求自动使用它；有多个 group 时设置应用共享 LoadBalance 的默认组：
@@ -916,7 +911,7 @@ String effective = loadBalance.defaultGroup();
 
 getDefaultGroup 返回配置值，defaultGroup 返回实际默认组；单组时配置并非必需。多组未配置或默认组不存在会报错。primary 是普通组名，不自动优先。
 
-路由优先级为：请求显式 group → 方法 `@JoinSession` → Bean 类或 Repository 接口 `@JoinSession` → 模型 `@JoinSession` → 当前普通会话上下文 → 负载均衡默认组。选择方式举例，DemoUser 定义在第二专题：
+路由优先级为：请求显式 group → 方法 `@JoinSession` → Bean 类或 Repository 接口 `@JoinSession` → 模型 `@JoinSession` → 当前普通会话上下文 → 负载均衡默认组。选择方式举例，DemoUser 定义见[最小实体](#ai-orm-entity)：
 
 ```java
 ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
@@ -926,6 +921,28 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 
 单个可用节点直接返回，但仍检查 cluster、正权重和健康状态；同组多节点继续按权重选择。健康缓存不会把离线默认库悄悄切到另一个组。运行时修改默认组或移除资源应协调在途事务。
 
+---
+
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-datasources-config"></a>
+<!-- source: doc/datasources/config.md -->
+<a id="ai-datasources-config-数据源配置速查"></a>
+## 数据源配置速查
+
+[文档首页](README.md) / [数据源](datasources/README.md)
+
+查询配置入口与接入限制，完整示例见各数据库页面。
+
+<a id="ai-datasources-config-本页导航"></a>
+### 本页导航
+
+- [配置速查](#ai-datasources-config-配置速查)
+- [接入边界与排障](#ai-datasources-config-接入边界与排障)
+
+<a id="ai-datasources-config-配置速查"></a>
 ### 配置速查
 
 | 配置 | 默认 | 说明 |
@@ -972,28 +989,41 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | yulinlin.elasticsearch.schema-mode | NONE | CREATE、VALIDATE 或 NONE |
 | yulinlin.elasticsearch.schema-packages | 空 | Elasticsearch 启动递归扫描实体包 |
 
+<a id="ai-datasources-config-接入边界与排障"></a>
 ### 接入边界与排障
 
 - 单数据源也必须等待容器初始化，不在静态初始化块里查询。所有模块只有配置扫描包并启用相应模式时才处理结构；SQLite/H2 默认模式为 CREATE，MySQL/PostgreSQL/Elasticsearch 默认为 NONE。未扫描的结构由业务迁移工具准备。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
-- 多库事务与多连接事务不是 XA，详细规则见 [第二专题](02-CRUD与统计分析.md#事务使用)。
+- 多库事务与多连接事务不是 XA，详细规则见 [ORM 开发](#ai-relations-transactions-事务使用)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
 - 表或字段不存在：核对实际建表、JoinField 映射和实体基类继承字段。
 - PostgreSQL 报 MySQL 函数错误：检查是否使用了 mysqlSessionFactory 或原始 MySQL SQL。
 - SQLite 原生库在 JDK 25 下可能提示 native-access 警告；部署时按实际环境配置 JVM 原生访问权限，不把警告当成数据库初始化成功的证明。
 - H2 表已存在但字段报不兼容：框架不会迁移旧结构，手动迁移后重启或重建 Session；不要直接删除正在使用的 .mv.db 文件。
 
-内部 Session 创建与扩展规则见 [第五专题](05-扩展开发与维护.md)。
+内部 Session 创建与扩展规则见 [内部维护](internal/README.md)。
 
 ---
 
-<!-- source: doc/02-CRUD与统计分析.md -->
-## ORM CRUD 自定义 SQL 统计分析与事务
+下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
 
-本文从一个用户实体完成 CRUD，再扩展条件查询、SQL JOIN、自定义 SQL、统计模型和事务。数据库接入与 group 注册先看 [第一专题](01-接入与数据源.md)。
+---
 
-阅读导航：[最小实体](#最小实体和配套表) · [CRUD](#crud-完整服务) · [查询条件](#查询条件与结果组织) · [自定义 SQL](#自定义-sql-执行) · [统计分析](#统计分析) · [批量写入](#批量与多连接写入) · [实体计数器](#实体计数器) · [延迟写队列](#延迟写队列) · [事务](#事务使用) · [Repository](#repository-接口) · [边界](#使用边界与排障)
+<a id="ai-orm-entity"></a>
+<!-- source: doc/orm/entity.md -->
+<a id="ai-orm-entity-实体映射与最小模型"></a>
+## 实体映射与最小模型
 
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+定义 DemoUser，后续 CRUD 示例沿用这个模型。
+
+<a id="ai-orm-entity-本页导航"></a>
+### 本页导航
+
+- [最小实体和配套表](#ai-orm-entity-最小实体和配套表)
+
+<a id="ai-orm-entity-最小实体和配套表"></a>
 ### 最小实体和配套表
 
 以下完整类放在 `demo/domain/DemoUser.java`，提供无参构造和 getter/setter。IdEntity 提供 String 主键及插入前的应用侧 ID 生成。
@@ -1024,7 +1054,7 @@ public class DemoUser extends IdEntity<DemoUser> {
 }
 ```
 
-MySQL/PostgreSQL/SQLite/H2 若已在第一专题配置启动扫描，DemoUser 由应用启动阶段创建/校验；否则必须提前准备。下列 DDL 只在自己的示例数据库执行，不把它当作生产迁移脚本：
+MySQL/PostgreSQL/SQLite/H2 若已按[Schema 专题](#ai-datasources-schema)配置启动扫描，DemoUser 由应用启动阶段创建/校验；否则必须提前准备。下列 DDL 只在自己的示例数据库执行，不把它当作生产迁移脚本：
 
 ```sql
 CREATE TABLE ai_demo_user (
@@ -1053,6 +1083,33 @@ SuperEntity 在 IdEntity 上增加 crtTime、uptTime 和填充逻辑，使用它
 
 自定义主键建议同时声明 JoinField、JoinMeta、JoinWhere。重命名主键列时要检查删除、部分更新等实际映射，不仅查看 SELECT SQL。
 
+---
+
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-orm-crud"></a>
+<!-- source: doc/orm/crud.md -->
+<a id="ai-orm-crud-插入更新与删除"></a>
+## 插入、更新与删除
+
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+完整 CRUD Service，以及写入和查询缓存的交互。
+
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+
+<a id="ai-orm-crud-本页导航"></a>
+### 本页导航
+
+- [CRUD 完整服务](#ai-orm-crud-crud-完整服务)
+- [新增用法](#ai-orm-crud-新增用法)
+- [更新用法](#ai-orm-crud-更新用法)
+- [删除用法](#ai-orm-crud-删除用法)
+- [写操作与查询缓存](#ai-orm-crud-写操作与查询缓存)
+
+<a id="ai-orm-crud-crud-完整服务"></a>
 ### CRUD 完整服务
 
 下面完整 Service 使用 mysql 组。对应表已存在、容器已初始化；通过 Spring 代理调用带事务的方法：
@@ -1116,6 +1173,7 @@ public class DemoUserService {
 
 实体也提供 `createSelectWrapper()`、`createInsertWrapper()`、`createUpdateWrapper()`、`createDeleteWrapper()`。不指定组的入口遵循全局默认组选取；多组时不要靠注册顺序。
 
+<a id="ai-orm-crud-新增用法"></a>
 #### 新增用法
 
 以下新增、更新和删除代码均为业务方法体片段，`List` 使用 `java.util.List`，实体沿用上文 DemoUser。
@@ -1138,8 +1196,9 @@ List<DemoUser> users = List.of(firstUser, secondUser);
 int affected = ModelInsertWrapper.newInstance("mysql", users).execute();
 ```
 
-大批量才考虑 `.batch()`；连接数量、提交大小和原子性限制见[批量与多连接写入](#批量与多连接写入)。
+大批量才考虑 `.batch()`；连接数量、提交大小和原子性限制见[批量与多连接写入](#ai-write-sync-batch-批量与多连接写入)。
 
+<a id="ai-orm-crud-更新用法"></a>
 #### 更新用法
 
 对象更新适合“按主键修改非 null 字段”。主键生成 WHERE，其他非 null、可更新字段生成 SET：
@@ -1190,8 +1249,9 @@ second.setStatus(2);
 int affected = ModelUpdateWrapper.newInstance("mysql", List.of(first, second)).execute();
 ```
 
-普通对象更新、自动更新代理和显式 `.field(name, null)` 都跳过 null；它们不能把数据库列清成 NULL。需要清空字段时使用参数化的[自定义写入](#自定义写入)。`@JoinField(update = false)` 字段不参与对象更新；version 字段按当前值加入条件并递增，仍应检查影响行数判断并发冲突。
+普通对象更新、自动更新代理和显式 `.field(name, null)` 都跳过 null；它们不能把数据库列清成 NULL。需要清空字段时使用参数化的[自定义写入](#ai-orm-raw-sql-自定义写入)。`@JoinField(update = false)` 字段不参与对象更新；version 字段按当前值加入条件并递增，仍应检查影响行数判断并发冲突。
 
+<a id="ai-orm-crud-删除用法"></a>
 #### 删除用法
 
 按实体主键删除时，只设置主键即可：
@@ -1234,6 +1294,7 @@ int affected = ModelDeleteWrapper.newInstance("mysql", List.of(first, second)).e
 
 框架不默认拦截全表写入。`ModelDeleteWrapper.newInstance("mysql", DemoUser.class).execute()` 没有 WHERE，带 SET 但没有 WHERE 的更新也可能影响整表；业务入口必须先校验主键、集合和条件。execute 返回影响行数，单条更新/删除通常应检查是否为 1。
 
+<a id="ai-orm-crud-写操作与查询缓存"></a>
 #### 写操作与查询缓存
 
 新增、更新和删除在数据库提交成功后，默认清理本次写入涉及的查询缓存 namespace。全局默认值如下：
@@ -1252,8 +1313,32 @@ int affected = ModelUpdateWrapper.newInstance("mysql", patch)
         .execute();
 ```
 
-写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine`、`cache-ehcache` 或 `cache-redis` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](08-查询缓存.md#失效和一致性)。
+写 Wrapper 只提供 `clearCache(boolean)`，不再提供写操作版 `cache(...)`、`invalidate(...)` 或 `invalidateAll()`。一般业务保留默认 `true`；只有明确接受数据在 TTL 内短暂陈旧时才关闭。回滚或执行失败不清理缓存。`clear-on-write` 属于可选缓存 Provider；未引入 `cache-caffeine`、`cache-ehcache` 或 `cache-redis` 时不会启用该配置，写路径也不会解析失效 namespace。详细规则见[查询缓存专题](#ai-cache-invalidation-失效和一致性)。
 
+---
+
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-orm-query"></a>
+<!-- source: doc/orm/query.md -->
+<a id="ai-orm-query-查询条件分页与结果"></a>
+## 查询条件、分页与结果
+
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+使用 Wrapper 与查询条件对象构建页面查询。
+
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+
+<a id="ai-orm-query-本页导航"></a>
+### 本页导航
+
+- [查询条件与结果组织](#ai-orm-query-查询条件与结果组织)
+- [查询条件对象](#ai-orm-query-查询条件对象)
+
+<a id="ai-orm-query-查询条件与结果组织"></a>
 ### 查询条件与结果组织
 
 以下为业务方法体片段，所用 DemoUser 已在上文定义：
@@ -1282,9 +1367,10 @@ var users = query.selectList();
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
 
+<a id="ai-orm-query-查询条件对象"></a>
 #### 查询条件对象
 
-业务页面查询优先定义 `XxxPo extends PagePo`，在子类业务字段上声明 `@JoinWhere`，一次复用条件、分页与排序。完整的 `PayChannelPo`、Controller 和 `ISuperService.page(po)`示例见[Common 业务开发：页面查询对象](09-项目开发最佳实践.md#页面查询对象pagepo--joinwhere)。本节只解释对象条件如何转换为 WHERE，也适用于不分页的独立查询 DTO。
+业务页面查询优先定义 `XxxPo extends PagePo`，在子类业务字段上声明 `@JoinWhere`，一次复用条件、分页与排序。完整的 `PayChannelPo`、Controller 和 `ISuperService.page(po)`示例见[Common 业务开发：页面查询对象](#ai-practice-models-页面查询对象pagepo--joinwhere)。本节只解释对象条件如何转换为 WHERE，也适用于不分页的独立查询 DTO。
 
 直接把实体作为查询条件：
 
@@ -1338,7 +1424,30 @@ List<DemoUser> users = ModelSelectWrapper
 
 不是所有非 null 属性都自动成为 WHERE 条件。字符串条件优先使用 Java 属性名，使 JoinField 映射生效。没有默认的全表写入保护；UPDATE/DELETE 前业务必须验证主键或条件。
 
-#### 全文匹配与高亮
+---
+
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-orm-search"></a>
+<!-- source: doc/orm/search.md -->
+<a id="ai-orm-search-全文检索与高亮"></a>
+## 全文检索与高亮
+
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+统一 match/highlight API、中文分词和数据库差异。
+
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+
+<a id="ai-orm-search-本页导航"></a>
+### 本页导航
+
+- [全文匹配与高亮](#ai-orm-search-全文匹配与高亮)
+
+<a id="ai-orm-search-全文匹配与高亮"></a>
+### 全文匹配与高亮
 
 PostgreSQL 中文全文检索先在完整表实体上标记需要建立索引的文本字段：
 
@@ -1382,13 +1491,36 @@ List<Video> videos = ModelSelectWrapper.newInstance("postgresql", Video.class)
         .selectList();
 ```
 
-只有同一查询中实际出现原生 `match(field, ...)` 的字段才调用 `ts_headline`。单独写 `highlight()`、字段未声明 `fullText=true`、原始 SQL查询，都会返回普通原字段。计数只解析 WHERE，不生成高亮表达式。公共高亮标记与片段设置在 `yulinlin.postgresql.highlight`，PostgreSQL 专属摘要长度在 `yulinlin.postgresql.full-text`；pg_jieba 的安装和完整 YAML 见[PostgreSQL 中文全文检索](01-接入与数据源.md#postgresql-中文全文检索)。
+只有同一查询中实际出现原生 `match(field, ...)` 的字段才调用 `ts_headline`。单独写 `highlight()`、字段未声明 `fullText=true`、原始 SQL查询，都会返回普通原字段。计数只解析 WHERE，不生成高亮表达式。公共高亮标记与片段设置在 `yulinlin.postgresql.highlight`，PostgreSQL 专属摘要长度在 `yulinlin.postgresql.full-text`；pg_jieba 的安装和完整 YAML 见[PostgreSQL 中文全文检索](#ai-datasources-postgresql-postgresql-中文全文检索)。
 
 MySQL、SQLite、H2 当前把 `match()` 解释为 `%关键词%` LIKE，并忽略 `highlight()`；这只是兼容回退，大表检索应改用 PostgreSQL 原生全文能力或 Elasticsearch。Elasticsearch 的 `match()` 使用原生 MatchQuery；MongoDB 保持现有正则兼容语义。
 
-#### SQL JOIN
+---
 
-SQL JOIN 与第三专题的 JoinQuery 不是同一功能。以下完整投影类假设 sys_user、sys_dept 表存在，列名与示例一致；使用 Lombok 生成访问方法：
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-orm-join"></a>
+<!-- source: doc/orm/join.md -->
+<a id="ai-orm-join-sql-join"></a>
+## SQL JOIN
+
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+SQL 联表查询；与应用侧 JoinQuery 关联加载区分。
+
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+
+<a id="ai-orm-join-本页导航"></a>
+### 本页导航
+
+- [SQL JOIN](#ai-orm-join-sql-join-1)
+
+<a id="ai-orm-join-sql-join-1"></a>
+### SQL JOIN
+
+SQL JOIN 与[应用侧 JoinQuery](#ai-relations-query) 不是同一功能。以下完整投影类假设 sys_user、sys_dept 表存在，列名与示例一致；使用 Lombok 生成访问方法：
 
 ```java
 package demo.dto;
@@ -1411,10 +1543,37 @@ public class UserDepartmentView {
 
 方法体查询：`ModelSelectWrapper.newInstance("mysql", UserDepartmentView.class).eq("id", id).selectList()`。更多表可用 JoinTableList。表表达式、别名和 ON 是可信代码，不能直接拼接 HTTP 输入；不能复用旧文档的 JoinPrimary、lambda().eq 或 getSql 调用来猜测当前 API。
 
+---
+
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-orm-raw-sql"></a>
+<!-- source: doc/orm/raw-sql.md -->
+<a id="ai-orm-raw-sql-自定义-sql"></a>
+## 自定义 SQL
+
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+QueryRequest 和 ExecuteRequest 的参数化原始 SQL。
+
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+
+<a id="ai-orm-raw-sql-本页导航"></a>
+### 本页导航
+
+- [自定义 SQL 执行](#ai-orm-raw-sql-自定义-sql-执行)
+- [查询列表与单条](#ai-orm-raw-sql-查询列表与单条)
+- [自定义写入](#ai-orm-raw-sql-自定义写入)
+- [占位符与安全](#ai-orm-raw-sql-占位符与安全)
+
+<a id="ai-orm-raw-sql-自定义-sql-执行"></a>
 ### 自定义 SQL 执行
 
 SQL 文本由调用方提供，框架不会跨数据库翻译它。所有 Request 的便利执行方法仍走 RouteSession，需要初始化好的会话。
 
+<a id="ai-orm-raw-sql-查询列表与单条"></a>
 #### 查询列表与单条
 
 完整 imports 加方法体片段：
@@ -1443,6 +1602,7 @@ QueryRequest.newInstance(sql, params, clazz) 的 Map.class 返回按列标签组
 
 原始 CommandNode 不自动补分页或计数 SQL。需要时在可信 SQL 中明确写 LIMIT/OFFSET 或 COUNT，并用 selectList/selectOne 读取；不要把包装器分页能力直接套到任意原始命令。
 
+<a id="ai-orm-raw-sql-自定义写入"></a>
 #### 自定义写入
 
 ```java
@@ -1460,6 +1620,7 @@ Integer affected = update.execute();
 
 Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数。引入缓存 Provider 后，自定义写 SQL 默认继承 `yulinlin.cache.clear-on-write`；开启时因为无法可靠推导目标表，会在提交成功后清理全部 ORM 查询缓存，也可调用 `update.clearCache(false)` 关闭本次清理。未引入 Provider 时没有查询缓存，因此也不执行这项全量失效判定。
 
+<a id="ai-orm-raw-sql-占位符与安全"></a>
 #### 占位符与安全
 
 ```text
@@ -1474,8 +1635,35 @@ SQL Node：where id=?，绑定列表：[7]
 
 当前编码缓冲区不承诺 null 参数值可正常 put：Map.of 本身也不接受 null。查询 NULL 用 IS NULL，清列可用固定的 SET column=NULL SQL；需要可空动态参数应先核对并验证对应编码路径。缺少键可能被绑定成 null，不当作可靠的参数校验。
 
+---
+
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-orm-analytics"></a>
+<!-- source: doc/orm/analytics.md -->
+<a id="ai-orm-analytics-统计分析"></a>
+## 统计分析
+
+[文档首页](README.md) / [ORM 开发](orm/README.md)
+
+指标、分组、日期筛选和统计结果模型。
+
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+
+<a id="ai-orm-analytics-本页导航"></a>
+### 本页导航
+
+- [统计分析](#ai-orm-analytics-统计分析-1)
+- [注解模型](#ai-orm-analytics-注解模型)
+- [分组求和与日期筛选](#ai-orm-analytics-分组求和与日期筛选)
+- [指标与维度速查](#ai-orm-analytics-指标与维度速查)
+
+<a id="ai-orm-analytics-统计分析-1"></a>
 ### 统计分析
 
+<a id="ai-orm-analytics-注解模型"></a>
 #### 注解模型
 
 下面保留 MetricsTable 的业务结构。name 用于分组，metrics 用于 SUM；dateStr 映射 crt_time，默认不作为分组输出。
@@ -1519,6 +1707,7 @@ CREATE TABLE sta_metrics (
 
 大范围 SUM/COUNT 推荐用 Long/long 或 BigDecimal 等适当结果类型，避免 int 溢出、截断；AVG 也不应假定整数结果。编码器的 Java 类型和目标数据库返回类型一起验证。
 
+<a id="ai-orm-analytics-分组求和与日期筛选"></a>
 #### 分组求和与日期筛选
 
 ```java
@@ -1537,6 +1726,7 @@ var totals = ModelGroupWrapper.newInstance("mysql", MetricsTable.class)
 
 new MetricsTable("foo") 只赋值，不自动生成 WHERE，因为 name 没有 JoinWhere。筛选用 `.eq("name", "foo")`；要让对象值参与条件则明确加 JoinWhere。
 
+<a id="ai-orm-analytics-指标与维度速查"></a>
 #### 指标与维度速查
 
 | 类型 | 支持入口 |
@@ -1560,240 +1750,29 @@ var daily = ModelGroupWrapper.newInstance("mysql", MetricsTable.class)
 
 MySQL/PostgreSQL/H2 使用各自日期与区间解析器；SQLite 当前不支持这两个自动分组入口，需写 strftime 等专用 SQL。TEXT 日期须统一格式与时区；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
 
-### 批量与多连接写入
+---
 
-方法体片段，usersToInsert 为已准备好的 DemoUser 集合：
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
 
-```java
-ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();         // 普通 JDBC batch
-ModelInsertWrapper.newInstance("mysql", usersToInsert).batch().execute(); // 申请多连接路径
-```
+---
 
-```yaml
-yulinlin:
-  mysql:
-    parallel-connections: 4
-    execute-batch-size: 256
-  postgresql:
-    parallel-connections: 2
-    execute-batch-size: 128
-  h2:
-    parallel-connections: 4
-    execute-batch-size: 256
-  sqlite:
-    execute-batch-size: 256
-```
+<a id="ai-orm-filters"></a>
+<!-- source: doc/orm/filters.md -->
+<a id="ai-orm-filters-请求与结果过滤器"></a>
+## 请求与结果过滤器
 
-这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接；调用 `.batch()` 时，把整批数据均匀分成最多 4 个大组，一组一个任务/连接。同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。
+[文档首页](README.md) / [ORM 开发](orm/README.md)
 
-只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池会自动限制有效并发数，其他连接池应按其容量设置 parallel-connections。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+通过 RouteSession 增强修改表名、请求和结果。
 
-executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
 
-多个连接有各自的本地事务，中途提交失败无法撤销已成功提交的连接；跨连接未提交数据也不保证可读。严格单库原子性和事务内读己之写使用 parallel-connections: 1。
+<a id="ai-orm-filters-本页导航"></a>
+### 本页导航
 
-### 实体计数器
+- [请求与结果增强（过滤器）](#ai-orm-filters-请求与结果增强过滤器)
 
-`common` 的 `EntityCounter` 面向播放量、点击量、热度等数值累加。`update(...)` 表示按主键更新已有记录，`insert(entity)` 表示按维度聚合插入新记录；`execute()` 立即执行，`submit()` 交给后台聚合。旧 `newInstance(...)` 已移除，调用方统一改为 `update(...)`。一次更新 Builder 只描述一行，但同一行可以同时修改多个字段：
-
-```java
-import com.yulinlin.common.model.EntityCounter;
-
-EntityCounter.update("mysql", VideoEntity.class, videoId)
-        .inc(VideoEntity::getViewCount, 1)
-        .inc(VideoEntity::getHotValue, 5)
-        .dec(VideoEntity::getRemainingQuota, 1)
-        .submit();
-```
-
-多行由业务代码正常循环，不提供容易混淆的链式 `.id(...)` 批量语法：
-
-```java
-for (VideoStat stat : stats) {
-    EntityCounter.update("mysql", VideoEntity.class, stat.videoId())
-            .inc(VideoEntity::getViewCount, stat.views())
-            .inc(VideoEntity::getHotValue, stat.hotValue())
-            .submit();
-}
-```
-
-不传数据源时复用 RouteSession 的默认路由规则；单组自动选择，多组使用 `yulinlin.datasource.default-group`，实体上的 `@JoinSession` 仍可参与路由：
-
-```java
-EntityCounter.update(VideoEntity.class, videoId)
-        .inc(VideoEntity::getViewCount)
-        .submit();
-```
-
-终结方法有两种，Builder 终结后不能再次执行或提交：
-
-| 方法 | 行为 | 返回值 | 事务 |
-| --- | --- | --- | --- |
-| `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 加入当前路由事务，包括适配后的 `@Transactional` |
-| `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
-
-聚合键是“调用线程解析出的数据源组 + 实体类型 + 主键”，字段增量保存在该行下面。默认选库和显式指定相同组时可以合并，模型更新与链式更新也共用聚合区。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
-
-```yaml
-yulinlin:
-  data:
-    counter:
-      flush-interval: 1m
-      flush-size: 1024
-      clear-cache: false
-```
-
-`flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
-
-上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc(field, x)` 表示加上 x，`dec(field, x)` 表示减去 x，两者都支持正负整数、小数，零不变；`dec(field, -0.5)` 等价于 `inc(field, 0.5)`。不传数量默认 1。
-
-数量支持 `Byte/Short/Integer/Long/Float/Double`、`BigInteger/BigDecimal`、`AtomicInteger/AtomicLong/LongAdder/DoubleAdder`，不接受 null、NaN、无穷大或未支持的自定义 Number 类型。链式调用时立即读取数字快照，之后修改原子类不会改变已记录增量。内部统一使用 BigDecimal 精确聚合，不再受 long 范围限制；正负增量抵消为零时不生成该字段更新。浮点数已有的运算误差不会自动修复，精确小数建议 `new BigDecimal("0.1")`。最终写入仍受数据库列类型、范围和精度约束，不会自动修改表结构。
-
-```java
-EntityCounter.update("mysql", VideoEntity.class, videoId)
-        .inc(VideoEntity::getHeat, new BigDecimal("0.75"))
-        .dec(VideoEntity::getHeat, new BigDecimal("-0.25"))
-        .submit(); // 本次净增 1；改用 execute() 可立即执行
-```
-
-默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
-
-这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
-
-#### 通过模型提交更新增量
-
-只需要设置主键和本次的数字增量，不必逐个调用 `inc/dec`；原来的链式 API 仍保留。
-
-```java
-VideoEntity delta = new VideoEntity();
-delta.setId(videoId);
-delta.setViewCount(10L);       // 数据库原值 + 10，不是设置为 10
-delta.setHotValue(5L);        // 同一行的另一个计数
-delta.setRemainingQuota(-1L); // 数据库原值 - 1
-
-EntityCounter.update("mysql", delta).submit();
-// 替代选择：EntityCounter.update(delta).submit(); // 默认选库
-// 替代选择：int affected = EntityCounter.update(delta).clearCache(true).execute();
-```
-
-字段规则：
-
-| 字段 | 模型更新行为 |
-| --- | --- |
-| `@JoinMeta(primaryKey=true)` | 必须恰好一个且值非空，仅生成主键条件；即使是数字也不参与累加，允许 `update=false` |
-| 可更新数字字段 | 正值增加、负值减少，null 和 0 忽略；支持多个字段 |
-| 字符串、时间、枚举、布尔等非数字字段 | 忽略，不作为条件或覆盖赋值 |
-| `@JoinField(exist=false/update=false)`、静态、transient、合成字段 | 不参与增量更新 |
-
-支持 byte/short/int/long/float/double 及包装类、BigInteger、BigDecimal、AtomicInteger、AtomicLong、LongAdder、DoubleAdder。原子类读取当前值或 sum，不修改/清零调用对象；NaN、无穷和不支持的 Number 子类拒绝提交。数字增量在内存中用 BigDecimal 合并，避免大整数或小数被转成 long 截断；不承诺数据库浮点列的十进制精度。
-
-注意：
-
-- 必须使用新建的“增量模型”，不要将查回的完整实体直接传入，否则所有非零可更新数字（包括状态码、排序值、默认值）都会成为增量。此接口不是普通 `update(entity)`。
-- 在 `execute/submit` 时读取快照，随后修改实体或原子类不会改变已提交数据；同一对象重复提交仍会重复累计。不要并发修改同一个模型来期待多字段整体原子快照。
-- 仅生成数字加减和主键条件，不调用实体 `updateBefore`，不自动更新时间或执行版本号乐观锁逻辑。无需通过无参构造器复制实体。
-- 所有增量为空/零时 `execute()` 返回 0，`submit()` 不入队；同一窗口相反增量抵消后不执行 SQL。主键不存在则更新 0 行，不会自动插入。
-- SQL 更新字段必须是支持算术运算的数据库数字列。BigDecimal/BigInteger 自动建表仍沿用原存储规则；如果列为 TEXT/VARCHAR，尤其 PostgreSQL，需要业务先迁移为合适的 NUMERIC 列，本功能不自动改列。最终数值范围/精度由数据库决定；列值为 NULL 时也不自动补零。
-- 模型和链式计数更新共享刷新间隔、阈值、缓存策略和失败恢复机制；`execute()` 可加入当前事务，`submit()` 必须在事务外调用。进程内聚合不是可靠消息队列。
-
-#### 按维度聚合插入统计数据
-
-`EntityCounter.insert(entity)` 不要求数据库中已有记录。它读取提交对象：全部非空数字字段分别求和，全部非空非数字字段的 `toString()` 作为维度；时间也作为维度，不截断为分钟。`null` 忽略，`0` 仍是有效数字，`false` 是维度。`@JoinWhere` 只影响查询条件，不控制这里的分组。
-
-```java
-import com.yulinlin.common.domain.SuperEntity;
-import com.yulinlin.common.model.EntityCounter;
-import com.yulinlin.data.core.anno.JoinTable;
-import lombok.Data;
-import java.util.concurrent.atomic.DoubleAdder;
-
-@Data
-@JoinTable("sta_metrics")
-public class StaMetricsEntity extends SuperEntity<StaMetricsEntity> {
-    private String name;
-    private String channel;
-    private String deviceType;
-    private String osName;
-    private DoubleAdder metrics = new DoubleAdder();
-}
-```
-
-业务每次构造一份新增贡献即可：
-
-```java
-StaMetricsEntity stat = new StaMetricsEntity();
-stat.setName("播放量");
-stat.setChannel("渠道A");
-stat.setDeviceType("web");
-stat.setOsName("Windows");
-stat.getMetrics().add(1.5);
-
-EntityCounter.insert("mysql", stat).submit();       // 默认一分钟聚合插入
-// 不指定数据源：EntityCounter.insert(stat).submit();
-// 立即插入：int affected = EntityCounter.insert(stat).execute();
-// 单次覆盖缓存策略：EntityCounter.insert(stat).clearCache(true).submit();
-```
-
-三个入口示例是替代选择，不应把同一份贡献重复提交。`submit()` 返回 void，不代表已落库；活动事务中拒绝 submit，`execute()` 则立即插入并加入当前事务。Builder 只能终结一次。
-
-分组键为“调用线程解析出的数据源组 + 实体类型 + 非数字字段名/字符串值集合”，不是简单拼接字符串。相同维度的 `metrics=1.5` 和 `metrics=2.5` 合成一条 `metrics=4.0` 的新记录；维度不同则分别插入。下一轮继续生成新记录，不查询旧记录、不做 upsert。省略数据源时复用实体 `@JoinSession`、当前注解选库作用域和默认组规则，提交时固定组名，避免后台线程丢失调用方选库上下文；路由过滤器仍在实际执行时运行。
-
-| 数字类型 | 插入聚合规则 |
-| --- | --- |
-| byte/Byte、short/Short、int/Integer、long/Long | 同名字段相加，超过原类型范围时拒绝本次提交，不部分更新其他字段 |
-| float/Float、double/Double | 同名字段相加，拒绝 NaN/无穷及结果溢出；不承诺十进制精度 |
-| BigInteger、BigDecimal | 内存中精确相加，不转成 double；数据库列容量仍由表结构决定 |
-| AtomicInteger、AtomicLong | 提交时读取数值快照，累加后仍按原字段类型还原 |
-| LongAdder、DoubleAdder | 提交时读取 sum 快照，不保留或清零调用者的累加器 |
-
-一行可以有多个数值字段，数字的正负值和零都允许。内部用不可变精确值求和，浮点字段在还原时转回原类型。`Boolean/boolean/AtomicBoolean` 是维度；AtomicReference、原子数组、LongAccumulator/DoubleAccumulator 以及其他自定义 Number 暂不支持，直接报错，不静默取 long 导致截断。声明为 Number/Object 的字段如果实际数字类型在提交间变化，也会拒绝合并；推荐声明具体数字类型。
-
-补充约束：
-
-- 实体须有 `@JoinTable`、可用的无参构造器和可写字段。静态、transient、合成字段与 `@JoinField(exist=false)` 不参与；`update=false` 不影响插入。
-- null 不是通配符：`channel=null` 与 `channel=A` 不同组；数字字段的 null 不增加维度，也不贡献数值。
-- `submit/execute` 时复制维度值并读取数字快照，之后修改原实体不影响已提交数据。复杂维度对象需支持框架 deepClone；推荐字符串、枚举、布尔和时间等简单类型，并保证 toString 稳定。同一对象重复提交会重复累计；不要并发修改它的多个字段来期待整体原子快照，Adder.sum 本身也不保证并发下的严格原子快照。
-- 不预填主键、创建时间。它们为 null 时不进入分组，真正构造插入请求时由 `insertBefore` 补齐。如果业务已经赋值，非数字 ID/时间也会成为维度，数字 ID 则与其他数字一样累加；框架不特殊排除，所以统计模型不应提前设置数字主键。
-- 维度以对象实际 toString 为准。例如 DateTime 默认字符串到秒，LocalDateTime 可含小数秒；不同字符串必定分组，不自动统一精度、时区或大小写。
-- 刷新间隔复用上面的 `yulinlin.data.counter` 配置，默认 1m，达到 1024 个待处理组可提前刷新。它不是自然分钟窗口；需要分钟报表时，业务自行设置统一分钟字符串维度。
-- 每个数据源/实体的插入分组使用 JDBC 批处理，但不主动拆多连接；仍通过标准 RouteSession、编解码器、日志和缓存失效路径执行。与按主键更新模式的聚合区隔离，不混成同一种请求。
-- 失败插入保留已构造的请求和生成主键，下一轮重试，不和新窗口重新求和；不会重新生成 ID 重复插入。但不保证 exactly-once：提交结果不确定、过滤器或回调异常、缺少唯一约束等仍需业务处理。失败组不会因其他组成功而丢弃；持续失败会积压，flush-size 不是容量上限。
-
-MySQL/PostgreSQL/H2/SQLite 自动建表已把原子数字和 Adder 映射为对应数字类型，AtomicBoolean 对应布尔存储；Byte/Short、AtomicInteger/AtomicLong/AtomicBoolean 的标量编解码也已注册。旧表如果把这些字段建成了 TEXT，不自动做破坏性改列，请按业务数据手动迁移。BigDecimal/BigInteger 延续各数据库模块原有存储规则。
-
-### 延迟写队列
-
-适合任意插入、更新和删除的延后批量执行。它只合并请求节点，不会把相同主键的重复数值增量先求和；播放量、点击量、热度等高频计数优先使用上一节的 `EntityCounter.submit()`。三种普通写操作使用同一个入口：
-
-```java
-ModelInsertWrapper.newInstance("mysql", users).queue().execute();
-ModelUpdateWrapper.newInstance("mysql", user).queue().execute();
-ModelDeleteWrapper.newInstance("mysql", User.class)
-        .eq(User::getId, id)
-        .queue()
-        .execute();
-```
-
-`execute()` 在节点成功进入内存队列后立即返回 `0`，不代表数据库影响了零行，也不返回自增主键。Wrapper 创建时已经把对象当时的字段值生成到 `INode`；入队后重新给实体字段赋值不会改变这次写入，Node 中原本保存的 List、Map、Date 等可变值引用则不要再原地修改。普通请求不调用 `.queue()`，仍按原方式立即执行。
-
-```yaml
-yulinlin:
-  data:
-    queue:
-      flush-interval: 1m
-      flush-size: 1024
-      concurrency: 4
-      retry-count: 3
-```
-
-`flush-size` 按当前活动队列的 Node 总数计算，不按 Wrapper 调用次数，也不按单个分组计算。总数达到阈值时会立即异步刷新当前整个队列快照，不必等待 `flush-interval`；例如多个分组各有数百个 Node，合计达到默认的 `1024` 也会立即刷新。刷新快照再按实际 `EntitySession` 实例、请求类型和 `fromClass` 统一分组；该阈值不拆分请求，也不改变事务边界。
-
-不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才按 `clearCache` 规则清理查询缓存。队列合并同组请求时，任一请求显式 `clearCache(true)` 就清理；全部显式为 `false` 才不清理；其余组合继续继承全局配置。
-
-这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。队列没有硬容量上限；如果持续生产速度高于数据库写入速度，待执行和待重试 Node 会继续占用内存，应在业务入口限流并监控积压。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
-
-队列不会为每个入队对象打印日志。开启 `com.yulinlin.data.core.queue.WriteQueueManager=DEBUG` 后，每个非空刷新快照输出一条摘要，包括触发方式、Session/分组/Node 数、影响行数、耗时和剩余积压；失败、重试和最终丢弃仍分别使用 WARN/ERROR。
-
+<a id="ai-orm-filters-请求与结果增强过滤器"></a>
 ### 请求与结果增强（过滤器）
 
 实现 `IFilter` 或 `IRequestFilter` 并注册成 Spring Bean，即可自动加入过滤链。`order()` 从小到大执行，同序保留注册顺序。过滤器是共享实例，不要将当前用户、请求或分表名存入实例字段。
@@ -1841,116 +1820,30 @@ public com.yulinlin.data.core.filter.IRequestFilter userTableFilter() {
 
 after 不代表事务已经提交，提交成功通知使用 `TransactionUtil.afterCommit`。路由作用域按实际入栈次数清理，复用 Request 或过滤器异常不会通过旧 `sessionChange` 标记误弹外层路由。
 
-### 事务使用
+---
 
-#### 框架路由事务
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
 
-以下完整 Service 方法片段假设 mysql/sqlite 两组及业务表均已准备：
+---
 
-```java
-import com.yulinlin.data.core.anno.JoinTransaction;
+<a id="ai-orm-repository"></a>
+<!-- source: doc/orm/repository.md -->
+<a id="ai-orm-repository-repository-接口"></a>
+## Repository 接口
 
-@JoinTransaction
-public void saveBusinessData() {
-    ModelInsertWrapper.newInstance("mysql", mysqlUsers).batch().execute();
-    ModelInsertWrapper.newInstance("sqlite", localUsers).execute();
-}
-```
+[文档首页](README.md) / [ORM 开发](orm/README.md)
 
-放在 Spring 管理的 Service public 方法上，通过代理调用。也可使用回调：
+方法查询、缓存注解、多数据源与 Service 职责。
 
-```java
-SessionUtil.route().transaction(() -> {
-    ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();
-    return null;
-});
-```
+示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
 
-`RouteSession` 是业务 CRUD 和事务的唯一入口。没有外层事务时，一次写请求由 RouteSession 自动开始并结束事务；普通查询不主动开启事务，多个独立请求不自动合成一个业务事务。RouteSession 定义边界并登记参与者，`TransactionListenerManager` 统一维护当前线程的业务上下文，各 Session 只管理自己的连接资源。
+<a id="ai-orm-repository-本页导航"></a>
+### 本页导航
 
-同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
+- [Repository 接口](#ai-orm-repository-repository-接口-1)
+- [Service 与 Repository 的职责边界](#ai-orm-repository-service-与-repository-的职责边界)
 
-#### Spring 事务注解兼容
-
-继续使用 `org.springframework.transaction.annotation.Transactional`。JDBC 模块自动注册默认优先的 `yulinlinTransactionManager`，Spring 标准注解拦截器解析注解后，由这个轻量适配器调用 RouteSession。它不创建 Spring JDBC 事务、不绑定 Spring 连接、不注册 Spring 同步回调。原有重复的 `SpringTransactionAop` 已移除，默认 Boot JDBC 事务管理器自动配置会退让。
-
-```java
-import org.springframework.transaction.annotation.Transactional;
-
-@Transactional(rollbackFor = Exception.class)
-public void createOrder() throws Exception {
-    // 在 Service 中通过 Repository / Wrapper 执行业务；所有数据源加入同一路由事务。
-}
-```
-
-- 支持默认 `REQUIRED`：内层加入同一业务上下文，最外层才提交；内层回滚会标记整个事务 rollback-only。
-- `rollbackFor`、`noRollbackFor` 及其类名规则由 Spring 标准拦截器解析。默认对 `RuntimeException` / `Error` 回滚，对受检异常默认提交；业务需要受检异常也回滚时使用上例。已经发生 SQL 失败等导致 rollback-only 的事务不能被 `noRollbackFor` 强行提交。
-- 目前仅支持默认隔离级别、默认超时和 `readOnly=false`。非默认传播方式（包括 `REQUIRES_NEW` / `NESTED`）、隔离级别、超时或 `readOnly=true` 会在进入业务方法前明确报错，不静默假装支持。
-- 必须从 Spring 代理外部调用；不要叠加 `@JoinTransaction` 和 `@Transactional`，也不要认为业务异步线程会继承事务。框架 `.batch()` 由内部显式传递连接池，不等于自动传播业务线程上下文。
-- 数据源仍使用原来的 Spring Bean 配置，但连接由框架独立取得和管理。原生 JdbcTemplate、MyBatis、JPA 不会加入此事务；不能把混合使用当成统一提交。
-- 若项目另外指定了默认事务管理器、有其他 `@Primary` 管理器，或使用 `TransactionManagementConfigurer`，请明确使用 `@Transactional(transactionManager = "yulinlinTransactionManager", rollbackFor = Exception.class)`。显式指定其他管理器不进入本适配器，框架写请求会按自己的边界独立提交。
-- 不提供 Spring `TransactionSynchronizationManager` / `@TransactionalEventListener` 的同步生命周期。提交后业务使用 `TransactionUtil.afterCommit`；手动 `TransactionTemplate` 只有选择本适配器时才进入框架事务。
-
-迁移时更新配套的 core、jdbc 及所用数据库模块，移除业务手动注册的旧 `SpringTransactionAop`。不要同时保留另一套拦截相同 `@Transactional` 方法的自定义事务切面。
-
-#### 排查事务是否提交
-
-开启 `yulinlin.data.transaction-log: true`（默认关闭），按 SQL 日志里的同一个 `txId` 查看开启、嵌套深度、数据源参与和连接的最终处理。SQL 日志中的 `affected=1` 只表示 JDBC 执行影响一行，不代表事务已经提交；事务日志关闭时 SQL 仍保留 ID，没有框架事务的查询显示 `txId=none`。连接均由框架持有，最终查看每个连接的 `JDBC连接提交成功` 或回滚日志。`数据源事务提交方法已返回`、`框架事务上下文已清理` 都不是物理提交凭证，多库/多连接要逐一核对，不能凭一个资源成功推断全部成功。配置、字段和日志事件详见[事务诊断日志](01-接入与数据源.md#事务诊断日志)。
-
-#### 提交成功回调
-
-业务需要在数据库提交成功后刷新权限、清理业务缓存或发送进程内通知时，使用 `com.yulinlin.data.core.transaction.TransactionUtil.afterCommit(Runnable)`：
-
-```java
-@Transactional
-@JoinSync
-public void changeNickname(String id, String nickname) {
-    UserEntity user = userRepository.findByIdEq(id);
-    user.setNickname(nickname);
-    TransactionUtil.afterCommit(() -> security.refresh(id));
-}
-```
-
-上例是方法片段，`userRepository` 为业务仓库，`security` 为注入的 `ISecurityManager`。刷新指定用户资料；若是当前用户，则更新本线程快照，不续期或撤销 JWT。实际业务还应保留输入校验。无状态 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
-
-| 场景 | 行为 |
-| --- | --- |
-| 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
-| 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
-| 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
-| `@Transactional` 使用框架适配器 | 与路由事务完全一致，不等待其他 Spring 事务 |
-| 仅有其他 Spring 管理器的事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
-| 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
-| 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
-| 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
-
-回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
-
-回调开始前，框架 JDBC 连接已完成提交与释放。因此回调中再次调用 `SessionUtil.route().transaction(...)` 会建立新的框架事务；这只是旧事务结束后的新事务，不代表支持活动事务内的 `REQUIRES_NEW`。若另外包在原生 Spring 事务中，两者完全独立，本回调不会等待该原生事务，也不能保证它提交成功。
-
-提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
-
-具体 Session 的 `startTransaction/commitTransaction/rollbackTransaction` 是管理器调用的资源生命周期，不再转发管理器，也不维护业务嵌套深度。业务代码不得手动调用它们，否则会绕过统一的代理写回、跨数据源协调、缓存失效和回调；JDBC 无活动资源的写操作会报错。
-
-#### 路由是唯一业务入口
-
-以下为方法体片段，两个 Request 已构造，并明确指定各自的数据源组：
-
-```java
-insertRequest.setSession("mysql");
-updateRequest.setSession("sqlite");
-RouteSession route = SessionUtil.route();
-route.transaction(() -> {
-    route.insert(insertRequest);
-    route.update(updateRequest);
-    return null;
-});
-```
-
-`route.isOpenTransaction()` 表示当前线程是否存在业务事务；具体 Session 的同名方法只表示自身资源是否已开启，不等于新的业务事务。业务事务必须在开启它的同一线程结束。
-
-嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
-
+<a id="ai-orm-repository-repository-接口-1"></a>
 ### Repository 接口
 
 Repository 根据方法名生成普通 Wrapper 查询。引入模块后自动启用，不再需要扫描注解：
@@ -2000,6 +1893,7 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 Repository 必须从 Spring 容器注入后调用，不能自行创建代理。显式 Request group 仍高于注解；最终选中的 group 和 cluster 会进入查询缓存 Key，因此不同数据源不会共用查询缓存。
 
+<a id="ai-orm-repository-service-与-repository-的职责边界"></a>
 #### Service 与 Repository 的职责边界
 
 推荐把一个完整的业务事务放在 Service 层：Service 方法使用 `@Transactional`（或框架 `@JoinTransaction`）定义事务边界，需要 setter 自动回写时再同时添加 `@JoinSync`。Repository 主要声明查询方法、`@JoinCache` 缓存策略，以及确实需要的 `@JoinSession` 数据源路由。
@@ -2060,29 +1954,171 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 接口级配置只影响查询，写方法不会继承它。写方法直接添加 `@JoinCache`、TTL 非法或 namespace 为空，会在 Repository 代理创建阶段失败；已引入缓存 Provider 时，Repository 的 insert/update/delete 按 `yulinlin.cache.clear-on-write` 决定是否在提交成功后清理解析出的表缓存。需要单次覆盖时使用写 Wrapper 或 `ExecuteRequest.clearCache(boolean)`。基础对象在关联代理处理前进入缓存，懒加载和批量预加载会按关联实体单独查询并继承入口缓存模式，因此普通懒加载关系不需要额外声明关联表 namespace；`namespaces` 主要用于无法从查询节点识别全部依赖的自定义 SQL 或非懒加载聚合。
 
-### 使用边界与排障
+---
 
-- 更新通常跳过 null；普通 copyProperties 或自动更新代理的 null 跳过不等于数据库清列。
-- insertBefore/updateBefore 可能填充字段，表结构必须匹配实体实际继承字段。
-- 查询缓存保存查询结果；标准写操作默认在事务提交成功后清理相关表命名空间，`clearCache(false)` 会关闭单次清理，TTL 是最终兜底。要求事务内读己之写或绝对强一致的查询使用 `CacheMode.NONE`。
-- selectOne 返回 null 时先处理“未找到”，不将它解释成解析错误或唯一性保证。
-- 日期范围为空先核对列类型、格式、时区与条件，不默认归咎于数据库驱动。
-- 表达式、JOIN、JSON 路径、行锁按目标库核对；没有跨库 SQL 自动翻译器。
-- NoSuchMethodError 先检查编译与运行时 JAR 是否一致；源码修复不等于已经替换部署产物。
-
-关联增强见 [第三专题](03-关联查询与代理.md)，工具与复制语义见 [第四专题](04-工具类.md)，源码扩展及验收记录见 [第五专题](05-扩展开发与维护.md)。
+下一步：返回[ORM 开发主题目录](orm/README.md)按需选择相关专题。
 
 ---
 
-<!-- source: doc/03-关联查询与代理.md -->
-## 关联查询与代理
+<a id="ai-relations-transactions"></a>
+<!-- source: doc/relations/transactions.md -->
+<a id="ai-relations-transactions-事务与提交后回调"></a>
+## 事务与提交后回调
 
-本文说明 JoinQuery、JoinLazy 和事务托管自动更新：如何组装用户角色菜单、批量加载列表关联，以及在事务提交前写回 setter 修改。
+[文档首页](README.md) / [关联与事务](relations/README.md)
 
-阅读导航：[行为速查](#行为速查) · [级联案例](#用户角色菜单级联) · [复杂条件](#复杂查询条件) · [懒加载](#懒加载) · [批量预加载](#列表批量预加载) · [自动更新](#自动更新) · [会话与边界](#会话与代理边界)
+路由事务、Spring 注解兼容和 afterCommit。
 
-接入和实体定义见 [第一专题](01-接入与数据源.md)与 [第二专题](02-CRUD与统计分析.md)。这里是应用侧追加查询和 CGLIB 代理，不是 SQL JOIN，也不是 JPA 的实体管理。
+<a id="ai-relations-transactions-本页导航"></a>
+### 本页导航
 
+- [事务使用](#ai-relations-transactions-事务使用)
+- [框架路由事务](#ai-relations-transactions-框架路由事务)
+- [Spring 事务注解兼容](#ai-relations-transactions-spring-事务注解兼容)
+- [排查事务是否提交](#ai-relations-transactions-排查事务是否提交)
+- [提交成功回调](#ai-relations-transactions-提交成功回调)
+- [路由是唯一业务入口](#ai-relations-transactions-路由是唯一业务入口)
+
+<a id="ai-relations-transactions-事务使用"></a>
+### 事务使用
+
+<a id="ai-relations-transactions-框架路由事务"></a>
+#### 框架路由事务
+
+以下完整 Service 方法片段假设 mysql/sqlite 两组及业务表均已准备：
+
+```java
+import com.yulinlin.data.core.anno.JoinTransaction;
+
+@JoinTransaction
+public void saveBusinessData() {
+    ModelInsertWrapper.newInstance("mysql", mysqlUsers).batch().execute();
+    ModelInsertWrapper.newInstance("sqlite", localUsers).execute();
+}
+```
+
+放在 Spring 管理的 Service public 方法上，通过代理调用。也可使用回调：
+
+```java
+SessionUtil.route().transaction(() -> {
+    ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();
+    return null;
+});
+```
+
+`RouteSession` 是业务 CRUD 和事务的唯一入口。没有外层事务时，一次写请求由 RouteSession 自动开始并结束事务；普通查询不主动开启事务，多个独立请求不自动合成一个业务事务。RouteSession 定义边界并登记参与者，`TransactionListenerManager` 统一维护当前线程的业务上下文，各 Session 只管理自己的连接资源。
+
+同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
+
+<a id="ai-relations-transactions-spring-事务注解兼容"></a>
+#### Spring 事务注解兼容
+
+继续使用 `org.springframework.transaction.annotation.Transactional`。JDBC 模块自动注册默认优先的 `yulinlinTransactionManager`，Spring 标准注解拦截器解析注解后，由这个轻量适配器调用 RouteSession。它不创建 Spring JDBC 事务、不绑定 Spring 连接、不注册 Spring 同步回调。原有重复的 `SpringTransactionAop` 已移除，默认 Boot JDBC 事务管理器自动配置会退让。
+
+```java
+import org.springframework.transaction.annotation.Transactional;
+
+@Transactional(rollbackFor = Exception.class)
+public void createOrder() throws Exception {
+    // 在 Service 中通过 Repository / Wrapper 执行业务；所有数据源加入同一路由事务。
+}
+```
+
+- 支持默认 `REQUIRED`：内层加入同一业务上下文，最外层才提交；内层回滚会标记整个事务 rollback-only。
+- `rollbackFor`、`noRollbackFor` 及其类名规则由 Spring 标准拦截器解析。默认对 `RuntimeException` / `Error` 回滚，对受检异常默认提交；业务需要受检异常也回滚时使用上例。已经发生 SQL 失败等导致 rollback-only 的事务不能被 `noRollbackFor` 强行提交。
+- 目前仅支持默认隔离级别、默认超时和 `readOnly=false`。非默认传播方式（包括 `REQUIRES_NEW` / `NESTED`）、隔离级别、超时或 `readOnly=true` 会在进入业务方法前明确报错，不静默假装支持。
+- 必须从 Spring 代理外部调用；不要叠加 `@JoinTransaction` 和 `@Transactional`，也不要认为业务异步线程会继承事务。框架 `.batch()` 由内部显式传递连接池，不等于自动传播业务线程上下文。
+- 数据源仍使用原来的 Spring Bean 配置，但连接由框架独立取得和管理。原生 JdbcTemplate、MyBatis、JPA 不会加入此事务；不能把混合使用当成统一提交。
+- 若项目另外指定了默认事务管理器、有其他 `@Primary` 管理器，或使用 `TransactionManagementConfigurer`，请明确使用 `@Transactional(transactionManager = "yulinlinTransactionManager", rollbackFor = Exception.class)`。显式指定其他管理器不进入本适配器，框架写请求会按自己的边界独立提交。
+- 不提供 Spring `TransactionSynchronizationManager` / `@TransactionalEventListener` 的同步生命周期。提交后业务使用 `TransactionUtil.afterCommit`；手动 `TransactionTemplate` 只有选择本适配器时才进入框架事务。
+
+迁移时更新配套的 core、jdbc 及所用数据库模块，移除业务手动注册的旧 `SpringTransactionAop`。不要同时保留另一套拦截相同 `@Transactional` 方法的自定义事务切面。
+
+<a id="ai-relations-transactions-排查事务是否提交"></a>
+#### 排查事务是否提交
+
+开启 `yulinlin.data.transaction-log: true`（默认关闭），按 SQL 日志里的同一个 `txId` 查看开启、嵌套深度、数据源参与和连接的最终处理。SQL 日志中的 `affected=1` 只表示 JDBC 执行影响一行，不代表事务已经提交；事务日志关闭时 SQL 仍保留 ID，没有框架事务的查询显示 `txId=none`。连接均由框架持有，最终查看每个连接的 `JDBC连接提交成功` 或回滚日志。`数据源事务提交方法已返回`、`框架事务上下文已清理` 都不是物理提交凭证，多库/多连接要逐一核对，不能凭一个资源成功推断全部成功。配置、字段和日志事件详见[事务诊断日志](operations/sql-log.md#事务诊断日志)。
+
+<a id="ai-relations-transactions-提交成功回调"></a>
+#### 提交成功回调
+
+业务需要在数据库提交成功后刷新权限、清理业务缓存或发送进程内通知时，使用 `com.yulinlin.data.core.transaction.TransactionUtil.afterCommit(Runnable)`：
+
+```java
+@Transactional
+@JoinSync
+public void changeNickname(String id, String nickname) {
+    UserEntity user = userRepository.findByIdEq(id);
+    user.setNickname(nickname);
+    TransactionUtil.afterCommit(() -> security.refresh(id));
+}
+```
+
+上例是方法片段，`userRepository` 为业务仓库，`security` 为注入的 `ISecurityManager`。刷新指定用户资料；若是当前用户，则更新本线程快照，不续期或撤销 JWT。实际业务还应保留输入校验。无状态 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
+
+| 场景 | 行为 |
+| --- | --- |
+| 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
+| 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
+| 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
+| `@Transactional` 使用框架适配器 | 与路由事务完全一致，不等待其他 Spring 事务 |
+| 仅有其他 Spring 管理器的事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
+| 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
+| 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
+| 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
+
+回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
+
+回调开始前，框架 JDBC 连接已完成提交与释放。因此回调中再次调用 `SessionUtil.route().transaction(...)` 会建立新的框架事务；这只是旧事务结束后的新事务，不代表支持活动事务内的 `REQUIRES_NEW`。若另外包在原生 Spring 事务中，两者完全独立，本回调不会等待该原生事务，也不能保证它提交成功。
+
+提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
+
+具体 Session 的 `startTransaction/commitTransaction/rollbackTransaction` 是管理器调用的资源生命周期，不再转发管理器，也不维护业务嵌套深度。业务代码不得手动调用它们，否则会绕过统一的代理写回、跨数据源协调、缓存失效和回调；JDBC 无活动资源的写操作会报错。
+
+<a id="ai-relations-transactions-路由是唯一业务入口"></a>
+#### 路由是唯一业务入口
+
+以下为方法体片段，两个 Request 已构造，并明确指定各自的数据源组：
+
+```java
+insertRequest.setSession("mysql");
+updateRequest.setSession("sqlite");
+RouteSession route = SessionUtil.route();
+route.transaction(() -> {
+    route.insert(insertRequest);
+    route.update(updateRequest);
+    return null;
+});
+```
+
+`route.isOpenTransaction()` 表示当前线程是否存在业务事务；具体 Session 的同名方法只表示自身资源是否已开启，不等于新的业务事务。业务事务必须在开启它的同一线程结束。
+
+嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
+
+---
+
+下一步：返回[关联与事务主题目录](relations/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-relations-query"></a>
+<!-- source: doc/relations/query.md -->
+<a id="ai-relations-query-关联查询"></a>
+## 关联查询
+
+[文档首页](README.md) / [关联与事务](relations/README.md)
+
+JoinQuery 级联、动态值、固定值和复杂查询条件。
+
+<a id="ai-relations-query-本页导航"></a>
+### 本页导航
+
+- [行为速查](#ai-relations-query-行为速查)
+- [用户角色菜单级联](#ai-relations-query-用户角色菜单级联)
+- [动态值和固定值](#ai-relations-query-动态值和固定值)
+- [复杂查询条件](#ai-relations-query-复杂查询条件)
+
+<a id="ai-relations-query-行为速查"></a>
 ### 行为速查
 
 | 配置/注解 | 加载 | 修改 |
@@ -2095,6 +2131,7 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 ORM 查询得到的模型统一由 EntityProxyFactory 增强。一个实体最多只有一层代理；同一拦截器处理 JoinLazy getter 与持久化 setter，不再叠加 LazyProxy/SyncProxy。自己 new 出来的 DTO 仍需调用 RouteSession 的兼容代理入口。
 
+<a id="ai-relations-query-用户角色菜单级联"></a>
 ### 用户角色菜单级联
 
 以下完整 DTO 放在 demo.dto.RouterDetails。引用的三个业务实体必须由应用提供，不依赖 admin 模块；每个目标实体需有表映射、无参构造、getter/setter 和明确类型的 ID。
@@ -2153,6 +2190,7 @@ RouterDetails details = SessionUtil.callable("mysql", () ->
 
 即时关联按反射字段顺序处理，不是依赖拓扑排序。示例按 user → roles → menus 放置，但复杂图不能仅靠反射顺序保证正确，必要时分步查询或采用下面的懒字段方案。路由的默认递归深度保护是 6，不等于循环关联可以安全展开。
 
+<a id="ai-relations-query-动态值和固定值"></a>
 #### 动态值和固定值
 
 | JoinQuery.value | 含义 |
@@ -2168,6 +2206,7 @@ RouterDetails details = SessionUtil.callable("mysql", () ->
 
 List/Set 的元素类型必须可推断，不使用原始 List、List<?> 或不明确泛型。无匹配时单对象为 null，集合为空；单对象匹配键应保证唯一，否则取第一条。
 
+<a id="ai-relations-query-复杂查询条件"></a>
 #### 复杂查询条件
 
 `wheres` 用于根据当前父对象的多个属性构造关联查询。下面的对象会查询指定视频下、状态可见、创建时间较新且正文包含关键词的前 20 条评论：
@@ -2272,6 +2311,28 @@ private Long visibleCommentCount;
 
 这里的 `model` 会进入 `count()` 分支，不是用来替代 `List<CommentEntity>` 泛型声明的通用参数。
 
+---
+
+下一步：返回[关联与事务主题目录](relations/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-relations-lazy"></a>
+<!-- source: doc/relations/lazy.md -->
+<a id="ai-relations-lazy-懒加载与批量预加载"></a>
+## 懒加载与批量预加载
+
+[文档首页](README.md) / [关联与事务](relations/README.md)
+
+首次访问触发加载；主键关系按 IN 批量预加载。
+
+<a id="ai-relations-lazy-本页导航"></a>
+### 本页导航
+
+- [懒加载](#ai-relations-lazy-懒加载)
+- [列表批量预加载](#ai-relations-lazy-列表批量预加载)
+
+<a id="ai-relations-lazy-懒加载"></a>
 ### 懒加载
 
 在上面的三个关联字段上各加 JoinLazy；其余类结构不变：
@@ -2317,6 +2378,7 @@ SessionUtil.route().transaction(() ->
 - 一次成功加载包括 null/空结果，不反复查询；失败不标记完成，可重试；显式 setter 值不被后续批量赋值覆盖。
 - 循环懒加载会报错，仍应避免循环图。
 
+<a id="ai-relations-lazy-列表批量预加载"></a>
 ### 列表批量预加载
 
 普通关联会汇集同批父对象的关联键，去重后按 IN 分批查询，再按目标属性建立索引分配。默认 batchSize 为 512，表示每批去重键数，不是结果行数或事务提交大小。
@@ -2339,6 +2401,30 @@ SessionUtil.route().transaction(() ->
 
 `@JoinQuery(value = "${ids}", batchSize = 256)` 可调每批 IN 键上限。关联集合不保证输入 ID 顺序；复杂 wheres/model 分支仍可能 N+1，不把全部关联规则都描述成自动 IN。
 
+---
+
+下一步：返回[关联与事务主题目录](relations/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-relations-auto-update"></a>
+<!-- source: doc/relations/auto-update.md -->
+<a id="ai-relations-auto-update-代理自动更新"></a>
+## 代理自动更新
+
+[文档首页](README.md) / [关联与事务](relations/README.md)
+
+事务内 setter 跟踪、代理生命周期及限制。
+
+<a id="ai-relations-auto-update-本页导航"></a>
+### 本页导航
+
+- [自动更新](#ai-relations-auto-update-自动更新)
+- [会话与代理边界](#ai-relations-auto-update-会话与代理边界)
+- [修改跟踪的限制](#ai-relations-auto-update-修改跟踪的限制)
+- [常见问题](#ai-relations-auto-update-常见问题)
+
+<a id="ai-relations-auto-update-自动更新"></a>
 ### 自动更新
 
 自动更新捕获事务内的 setter 修改，在提交前统一更新数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。现有 `ProxyChanges` 按需保存在管理器的统一 `TransactionContext` 中，代理工厂不再维护独立事务 ThreadLocal；主对象和懒加载出的关联代理共用这份记录。单次查询开启：
@@ -2383,12 +2469,13 @@ public void rename(String id, String name) {
 
 `@JoinSync` 只开启当前调用作用域的自动更新，不创建事务；需配合 `@Transactional`、`@JoinTransaction` 或 `RouteSession.transaction(...)`。它不再允许标在字段上。
 
-在 Spring 项目中，推荐把 `@Transactional` 和 `@JoinSync` 一起放在 Service 的 public 业务方法上，让查询、setter 修改与提交共享同一个边界。Repository 保持查询声明，通常只配置 `@JoinCache` 和必要的 `@JoinSession`。Repository 方法也可用 `@JoinSync` 精确指定该查询返回代理，但后续 setter 必须仍位于外层 Service 的活动事务内；不建议把它当作默认分层方式。代理对象不能在创建它的事务结束后继续自动更新。只读 Service 不需要 `@JoinSync`。Repository 完整示例见[第二专题](02-CRUD与统计分析.md#service-与-repository-的职责边界)。
+在 Spring 项目中，推荐把 `@Transactional` 和 `@JoinSync` 一起放在 Service 的 public 业务方法上，让查询、setter 修改与提交共享同一个边界。Repository 保持查询声明，通常只配置 `@JoinCache` 和必要的 `@JoinSession`。Repository 方法也可用 `@JoinSync` 精确指定该查询返回代理，但后续 setter 必须仍位于外层 Service 的活动事务内；不建议把它当作默认分层方式。代理对象不能在创建它的事务结束后继续自动更新。只读 Service 不需要 `@JoinSync`。Repository 完整示例见[ORM 开发](#ai-orm-repository-service-与-repository-的职责边界)。
 
 主对象的关联查询继承相同策略。懒字段首次 getter 得到的实体或集合元素也是同一层代理，因此在原事务内调用关联实体 setter 同样会写回对应表。
 
 通常直接使用 `.autoUpdate()` 或 `@JoinSync`，不再手动调用 `getSyncProxy`；旧公开方法只用于已有代码迁移。
 
+<a id="ai-relations-auto-update-会话与代理边界"></a>
 ### 会话与代理边界
 
 字段可以指定独立会话，下面是已有 DTO 中的字段片段：
@@ -2411,6 +2498,7 @@ LocalUserEntity 与 localUserId 由业务提供。未指定时关联上下文保
 | size | 正值只在 wheres/model 分支分页，不作用于普通 primary/value 分支 |
 | model | 当前进入 count 分支，不是替代集合泛型的通用参数 |
 
+<a id="ai-relations-auto-update-修改跟踪的限制"></a>
 #### 修改跟踪的限制
 
 - 目标必须是可更新实体，有完整非 null 主键；创建/提交校验主键，禁止代理改主键。
@@ -2422,8 +2510,9 @@ LocalUserEntity 与 localUserId 由业务提供。未指定时关联上下文保
 - 支持的 Integer/int、Long/long 版本字段按原始版本条件递增；写入数不匹配视为乐观锁失败，不承诺全部 Wrapper 都具备相同版本机制。
 - 代理绑定原始线程与统一业务事务上下文，结束后不能继续 setter 修改。缓存保存未增强数据，读取时复制并创建当前查询代理，不能复用旧事务代理。
 
-同步写回统一发生在框架物理提交前，不依赖 Spring 的提交回调。`@Transactional` 只适配到同一路由事务，目前 `readOnly=true` 会在进入业务方法前被拒绝；普通只读查询无需声明该属性。高级传播与分布式一致性仍按 [第二专题](02-CRUD与统计分析.md#事务使用)的边界理解。
+同步写回统一发生在框架物理提交前，不依赖 Spring 的提交回调。`@Transactional` 只适配到同一路由事务，目前 `readOnly=true` 会在进入业务方法前被拒绝；普通只读查询无需声明该属性。高级传播与分布式一致性仍按 [ORM 开发](#ai-relations-transactions-事务使用)的边界理解。
 
+<a id="ai-relations-auto-update-常见问题"></a>
 ### 常见问题
 
 | 问题 | 检查 |
@@ -2435,601 +2524,1308 @@ LocalUserEntity 与 localUserId 由业务提供。未指定时关联上下文保
 | setter 后没更新 | 是否同步代理、原始事务、非 null 值与可靠主键 |
 | 缓存命中复制失败 | 模型是否满足深克隆边界，是否包含流/连接等资源 |
 
-实现职责与验证范围在 [第五专题](05-扩展开发与维护.md)，不要把历史测试记录解释成当前全部业务示例已运行。
+实现职责与验证范围在 [内部维护](internal/README.md)，不要把历史测试记录解释成当前全部业务示例已运行。
 
 ---
 
-<!-- source: doc/04-工具类.md -->
-## HTTP 与 lang 工具类
+下一步：返回[关联与事务主题目录](relations/README.md)按需选择相关专题。
 
-本文面向外部项目，说明 HTTP 客户端以及 `lang` 模块全部公开类型。仅使用这些工具不要求定义 ORM 实体；依赖选择见 [第一专题](01-接入与数据源.md#模块选择)。
+---
 
-阅读导航：[依赖](#lang-模块定位) · [HTTP](#http-请求) · [反射与克隆](#反射复制与深克隆) · [JSON](#json-转换) · [日期金额分页](#日期金额与分页) · [缓存资源池](#轻量缓存与资源池) · [并发工具](#并发与调度) · [事件](#进程内事件) · [Lambda 与泛型](#lambda泛型与包扫描) · [完整类型目录](#lang-公开类型目录)
+<a id="ai-write-sync-incremental"></a>
+<!-- source: doc/write-sync/incremental.md -->
+<a id="ai-write-sync-incremental-增量同步"></a>
+## 增量同步
 
-### lang 模块定位
+[文档首页](README.md) / [批量与同步](write-sync/README.md)
 
-只使用基础工具时可以直接引入：
+轻量异步同步、实体规则、状态恢复及一致性限制。
+
+补齐历史数据请阅读[人工全量与主键续传](#ai-write-sync-full)，按要求业务停写后操作。
+
+<a id="ai-write-sync-incremental-本页导航"></a>
+### 本页导航
+
+- [数据源增量同步](#ai-write-sync-incremental-数据源增量同步)
+- [实体通配符](#ai-write-sync-incremental-实体通配符)
+- [执行语义](#ai-write-sync-incremental-执行语义)
+- [状态与人工恢复](#ai-write-sync-incremental-状态与人工恢复)
+- [一致性与第一版边界](#ai-write-sync-incremental-一致性与第一版边界)
+
+<a id="ai-write-sync-incremental-数据源增量同步"></a>
+### 数据源增量同步
+
+`data-sync` 是可选模块。增量模式把经过框架 RouteSession 的写请求，在源事务提交成功后异步重放到目标组；复用 `INode`，不把 MySQL SQL 原文发送给 PostgreSQL。另提供 MySQL/PostgreSQL 全量 API，按主键分页复制，并在目标库保存检查点。
+
+当前采用**轻量同步：日常增量正常运行，全量只在人工维护时调用**。启动只校验数据源组并启动增量消费，不扫描实体或执行全量。内部暂停的是增量消费者，不是业务接口或数据库写权限；全量前必须由业务停写，不能把暂停消费当作不停写同步方案。
 
 ```xml
 <dependency>
     <groupId>com.yulinlin</groupId>
-    <artifactId>lang</artifactId>
+    <artifactId>data-sync</artifactId>
     <version>3.0</version>
 </dependency>
 ```
 
-`lang` 不是零依赖 JAR：JSON API 使用 Jackson，注解、泛型扫描与 AOP 扩展使用 Spring/AspectJ。若项目已经引入完整框架，无需重复声明。
+先按[多数据源注册](#ai-datasources-routing)配置 MySQL、PostgreSQL 两个数据源。`source` / `target` 是框架注册的 **group**，不是 Spring DataSource Bean 名；规则内未注册组会阻止同步模块启动。业务表需通过原有 Schema 配置或迁移脚本准备；全量 API 只自动创建自身的进度表。
 
-本页把 API 分为三类：
+```yaml
+yulinlin:
+  sync:
+    enabled: true                  # 默认 false；不引入模块或关闭时不注册同步过滤器
+    capacity: 10000                # 每条规则最多保留的写节点数，不是字节数
+    full-batch-size: 1000           # 全量 API 每批读取/提交条数，1～10000；与增量 capacity 无关
+    rules:
+      - name: video-search         # 可省略，默认 mysql->postgresql
+        source: mysql
+        target: postgresql
+        entities:
+          - com.example.video.VideoEntity
+          - com.example.video.CommentEntity
+```
 
-- 业务工具：`JsonUtil`、`ReflectionUtil`、`DateTime`、`Page`、`StringUtil` 等，可直接调用。
-- 轻量基础设施：`ExpiryMap`、`SmartCache`、`ResourcePool`、事件和线程工具，调用方需要管理生命周期与并发边界。
-- 框架扩展 SPI：AOP、JSON 格式器、代理和安全响应接口，只有扩展框架时才实现或直接调用。
+<a id="ai-write-sync-incremental-实体通配符"></a>
+#### 实体通配符
 
-### HTTP 请求
+`entities` 按写请求 `fromClass.getName()` 匹配并按类缓存结果；增量模式不扫描实体包。表达式是 Java 完整类名，不是表名：
 
-公共类型在 `com.yulinlin.data.core.http`：HttpRequestClient、HttpRequest、HttpUtil、HttpResponse、HttpFile、HttpRequestException。底层基于 Spring RestClient，调用同步阻塞。
+| 表达式 | 含义 |
+| --- | --- |
+| `com.example.video.VideoEntity` | 指定类 |
+| `com.example.video.*` | 当前包内的类，不跨包 |
+| `com.example.video.**` | 当前包及子包内的类 |
+| `com.example.*.entity.**` | 中间一级包通配，entity 下递归 |
+| `com.example.video.*Entity` | 当前包下以 Entity 结尾的类 |
 
-下面是完整 Service。复用客户端，每次调用创建新的请求对象；地址是示例，需替换为自己的服务：
+`**` 必须独占一个包段；多个表达式命中同一类只生成一个规则任务。不同规则可以分别转发到不同目标。规则名称不能重复，同一 source/target 应合并在一条规则内；entities 为空、源目标相同、capacity 非正数均启动报错。实体来自继承父类、DTO 或业务投影时，匹配的仍是本次请求的实际 fromClass，不会自动改成其父类。
+
+<a id="ai-write-sync-incremental-执行语义"></a>
+#### 执行语义
+
+1. 业务通过 Model/Request 正常写入，无须改每个调用点。
+2. RouteSession 的 `before` 已确定最终源组、表名和节点；实际写后过滤器生成独立快照，不保留业务 root。事务回滚会丢弃提交回调。
+3. 最外层提交成功后立即尝试入队，不等待凑批。每条规则只有一个顺序消费者，不同规则可并发。
+4. 目标通过 `RouteSession.replayWrite` 直接重放已准备节点：保留源 ID/字段值，跳过业务 before/after 过滤器，不再次补 ID/默认时间，不递归产生同步任务。目标事务、缓存失效和 SQL 日志仍然生效。
+
+目标的租户隔离、改表名等业务过滤器也不会执行，因此只向明确授权、结构映射兼容的目标组同步。两个数据源应使用相容的字段映射与命名规则，不能借目标过滤器重新改写源表名。目标缓存失效默认跟随其配置，请求显式 clearCache 值会保留。
+
+| 写入类型 | 第一版行为 |
+| --- | --- |
+| 插入 | 重放相同 ID/值，不是 upsert；目标有重复主键时正常报错并暂停 |
+| 任意条件更新/删除 | 重放相同条件与字段节点，包括 inc/dec；影响行数为 0 也可以重放 |
+| 批量操作 | 一个任务携带原请求的节点集合与 batch 选项；容量按节点数计 |
+| `.queue()` | 排队时不捕获，后台实际执行、事务提交后才入同步队列 |
+| EntityCounter | 捕获聚合后实际执行的写请求，不捕获每一次 submit |
+| 懒同步代理 | 代理在提交阶段实际刷出的框架写请求也登记同步任务 |
+| 自定义 SQL / fromClass=null 或 Object.class | 不自动同步 |
+| 混入原始 Expression、第三方自定义节点 | 不静默复制：快照失败，规则暂停并报告可能缺口 |
+
+节点结构由模块独立复制，普通字段值复用 lang 深克隆；无需实体实现 Serializable。日期、集合、Map、原子数字等沿用深克隆能力。无法深克隆的自定义值（例如当前不支持的 record 或没有适用构造器的 Bean）会报告失败，不会共享可变引用冒充快照。同步目标不执行对象生命周期钩子，节点中的源字段值才是同步内容。
+
+<a id="ai-write-sync-incremental-状态与人工恢复"></a>
+#### 状态与人工恢复
+
+通过注入 `com.yulinlin.sync.SyncManager` 查看状态，不提供管理页面或 HTTP 管理端点：
 
 ```java
-package demo.service;
+// 方法体片段，syncManager 由 Spring 注入。
+List<SyncStatus> statuses = syncManager.statuses();
+```
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.yulinlin.data.core.http.HttpRequestClient;
-import com.yulinlin.data.core.http.HttpResponse;
+状态包含规则、源/目标、STARTING/RUNNING/FULL_SYNC/PAUSED/CLOSED、待处理任务数/节点数、完成任务数、拒绝请求数、失败任务 ID、最近错误及 `requiresRepair`。RUNNING 表示规则启用，不代表此刻正在执行 SQL；没有任务时不会创建轮询线程。该接口展示增量规则，不列出进度表中的全部全量任务。
+
+- 目标执行失败或任务确认失败：保留队列头，暂停规则，不自动重试、不让后续任务越过。其他规则不受影响。
+- 暂停期间仍可接收新任务，达到容量后拒绝并记录缺口。执行中和失败头任务也占容量；单个请求超过容量同样拒绝。
+- 源提交后的队列满、存储失败不会回滚源事务，也不使业务“自动重试插入”；模块输出中文 ERROR 并更新状态。快照失败也会暂停并标记可能缺口，即便之后源事务回滚，该告警也不会自动解除。
+- `requiresRepair=false` **不表示目标一定没提交**。执行报错也可能需要人工确认，尤其是 inc/dec 和提交结果不确定的情况。
+
+人工确认数据已修复、重试不会重复执行后才调用：
+
+```java
+syncManager.resumeAfterRepair("video-search", false); // 保留并重试头任务
+// 二选一：确认失败头任务已在目标提交，或已经人工补齐其影响：
+syncManager.resumeAfterRepair("video-search", true);  // 丢弃该失败头任务，继续后续任务
+```
+
+`true` 只允许存在失败任务 ID 时使用，不会把“队列满”的正常头任务随意丢弃。调用表示用户已经核对并修复全部缺口，不是自动修复或自动对账。暂停不自动冻结源库；修复期间宜暂停相关源写入。
+
+<a id="ai-write-sync-incremental-一致性与第一版边界"></a>
+#### 一致性与第一版边界
+
+- 这叫**请求级单向增量同步**，不是 CDC/数据库复制。只捕获 RouteSession 写入，不捕获数据库客户端、触发器、原生 JDBC 或其他应用直接改库。
+- 增量本身不补历史；可在停写窗口用全量 API 准备初始数据。相同条件在不同库可能命中不同记录，受初始数据、同步延迟、比较规则、排序和时间表达式影响。
+- 每条规则仅保证任务入队顺序，不保证源端并发事务内部的执行顺序。一个源事务中的多次请求是多个目标事务，不保证跨请求原子性；目标再次被其他业务修改也可能产生差异。
+- 内置存储是进程内有界队列；源提交到入队之间、进程崩溃和关闭时都可能丢任务，没有持久化历史、exactly-once 或跨库回滚保证。capacity 限制节点数，不限制单个字段字节数，也不覆盖提交前事务持有的快照。
+- 关闭只停止接收/调度，不强行打断正在执行的目标事务；剩余内存任务记录警告，不承诺排空。重新启动不会自动恢复失败状态与积压，需人工对账。
+- 不做双向冲突处理，也不做级联转发：A→B 的重放不会触发 B→C。需要多个目标时直接配置 A→B、A→C。
+- 全量是按实体主键复制/覆盖，不删除目标额外记录，不是完整数据库备份；只提供人工 API，不提供启动自动全量、创建时间筛选、在线一致性快照或自动对账。全量检查点不等于增量队列具备持久化可靠性。
+
+新增模块本轮仅完成代码和静态核对，回归测试源码位于 admin 测试目录，按要求未编译、未运行测试；尚未验证真实 MySQL/PostgreSQL 服务端组合。
+
+---
+
+下一步：返回[批量与同步主题目录](write-sync/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-write-sync-full"></a>
+<!-- source: doc/write-sync/full.md -->
+<a id="ai-write-sync-full-人工全量同步与续传"></a>
+## 人工全量同步与续传
+
+[文档首页](README.md) / [批量与同步](write-sync/README.md)
+
+全量由人工调用，基于主键进度续传；操作前必须业务停写。
+
+前置配置与失败恢复见[增量同步](#ai-write-sync-incremental)。这里是人工全量，不是业务持续写入期间的无缝快照同步。
+
+<a id="ai-write-sync-full-本页导航"></a>
+### 本页导航
+
+- [全量 API：自动读取主键进度](#ai-write-sync-full-全量-api自动读取主键进度)
+- [人工全量流程：业务停写，内部暂停增量](#ai-write-sync-full-人工全量流程业务停写内部暂停增量)
+
+<a id="ai-write-sync-full-全量-api自动读取主键进度"></a>
+### 全量 API：自动读取主键进度
+
+完成下面的停写、排空步骤后，注入 `com.yulinlin.sync.DataSyncClient` 调用；无需自己查询最后一条记录或记录主键。人工 API 不要求实体命中增量 `entities`，调用方显式传入实体类，并自行确认权限和迁移范围：
+
+```java
+import com.yulinlin.sync.DataSyncClient;
+import com.yulinlin.sync.SyncResult;
 import org.springframework.stereotype.Service;
-import java.time.Duration;
-import java.util.Map;
 
 @Service
-public class RemoteApiService {
-    private final HttpRequestClient client;
+public class VideoSyncService {
+    private final DataSyncClient dataSyncClient;
 
-    public RemoteApiService(HttpRequestClient client) { this.client = client; }
+    public VideoSyncService(DataSyncClient dataSyncClient) {
+        this.dataSyncClient = dataSyncClient;
+    }
 
-    public Map<String, Object> createOrder(String token, String productId) {
-        HttpResponse response = client.post("https://api.example.com/orders")
-                .bearerToken(token)
-                .json(Map.of("productId", productId, "quantity", 1))
-                .timeout(Duration.ofSeconds(5))
-                .execute();
-        return response.bodyAs(new TypeReference<Map<String, Object>>() {});
+    // 前提：已停写、在途事务结束、相关增量队列排空。
+    // 不加 @Transactional；人工触发后台维护任务，方法阻塞到完成或失败。
+    public SyncResult syncVideos() {
+        return dataSyncClient.sync("mysql", "postgresql", VideoEntity.class);
+    }
+
+    // 明确开启新一轮：从头复制，但不清空目标表。
+    public SyncResult restartVideos() {
+        return dataSyncClient.restart("mysql", "postgresql", VideoEntity.class);
     }
 }
 ```
 
-以下为业务方法体片段，采用静态入口：
-
-```java
-import com.yulinlin.data.core.http.HttpUtil;
-import com.yulinlin.data.core.http.HttpResponse;
-import java.util.Map;
-
-HttpResponse response = HttpUtil.get("https://api.example.com/users")
-        .query("page", 1).query("size", 20)
-        .header("X-Request-Id", "demo")
-        .execute();
-
-String text = response.getBodyAsString();
-int status = response.getStatus();
-
-HttpUtil.post("https://api.example.com/forms")
-        .form(Map.of("name", "alice", "enabled", true))
-        .execute();
-```
-
-| 能力 | 入口 |
-| --- | --- |
-| HTTP 方法 | get/post/put/patch/delete；其他方法 request(HttpMethod, url) |
-| 查询与头 | query(name, value)、header(name, value)、headers(HttpHeaders) |
-| 认证 | basicAuth(user, password)、bearerToken(token) |
-| JSON | json(Object) |
-| 普通表单 | form(name, value)、form(Map<String,Object>) |
-| 其他 body | body(Object, MediaType) |
-| 响应 | getStatus、getStatusCode、getHeaders、getBody、getBodyAsString、bodyAs |
-
-query 的 null 值会忽略。同一个请求只使用一种 body 类型，不能混合 json 与 form；请求构造器是可变对象，不跨线程共享。
-
-### 上传与下载
-
-```java
-import com.yulinlin.data.core.http.HttpFile;
-import com.yulinlin.data.core.http.HttpUtil;
-import java.nio.file.Path;
-import java.time.Duration;
-
-// multipart 普通字段和文件一起上传，不使用 form() 混入。
-HttpUtil.post("https://api.example.com/files")
-        .multipart("category", "invoice")
-        .file("file", HttpFile.of(Path.of("upload/invoice.pdf")))
-        .execute();
-
-// 大文件流式落盘。
-HttpUtil.get("https://api.example.com/export")
-        .timeout(Duration.ofSeconds(60))
-        .downloadTo(Path.of("download/export.zip"));
-```
-
-HttpFile 支持 of(Path)、of(filename, byte[], MediaType)、of(filename, InputStream, MediaType)。输入流上传不保证可重放，不重复使用已消费的原流。
-
-execute 会把响应 body 放入内存，大文件优先 downloadTo。下载会创建父目录并覆盖同名文件，失败可能留下部分文件，不保证原子替换；返回响应 body 为空，内容已写磁盘。业务需校验目标路径，不能直接信任远端路径。
-
-### 超时与错误处理
-
-Spring 注入客户端默认 10 秒，配置如下：
+仅用人工 API 时可以不配置增量规则：
 
 ```yaml
 yulinlin:
-  http:
-    timeout: 10s
+  sync:
+    enabled: true
+    full-batch-size: 1000
+    rules: []
 ```
 
-单次 `timeout(Duration)` 覆盖默认值，必须为正数。同一 Duration 同时配置连接和响应读取超时，不提供独立链式 connectTimeout/readTimeout；不是覆盖网络、重定向、写盘等全部阶段的严格总截止时间。
-
-静态 HttpUtil 默认也为 10 秒，但不自动读取 Spring 配置。`HttpUtil.withTimeout(duration)` 返回新客户端；`HttpUtil.setClient(client)` 替换静态默认客户端，应在初始化阶段明确配置，不在请求处理中反复切换。
-
-`new HttpRequestClient(restClient, mapper)` 沿用给定客户端设置，不自动添加默认超时。单次 timeout 目前会新建底层客户端，大量相同超时请求优先复用预配置客户端。
-
-#### 判断是否为 404
-
-```java
-boolean missing = HttpUtil.isNotFound("https://api.example.com/resource");
-```
-
-它执行 GET，不是 HEAD；只有明确 HTTP 404 返回 true。超时、网络错误和其他状态返回 false，所以 false 不证明存在或健康。成功响应按普通请求读入内存，不适合检查超大文件。
-
-带认证的检查或需要区分其他失败时，自己处理异常：
-
-```java
-import com.yulinlin.data.core.http.HttpRequestException;
-
-try {
-    HttpUtil.get("https://api.example.com/resource").bearerToken(token).execute();
-} catch (HttpRequestException error) {
-    Integer status = error.getStatusCode(); // 网络错误可能为 null。
-    if (!Integer.valueOf(404).equals(status)) throw error;
-    // 业务处理确实不存在。
-}
-```
-
-普通 4xx/5xx、网络调用与部分 JSON 解码失败包装为 HttpRequestException；参数校验和非法 URI 不保证都包装。204 空响应不当作 JSON 解析。不假定自动重试、自动跟随重定向或异步能力存在。
-
-用户提供 URL 时校验协议、目的地址与内网访问策略，防止 SSRF；不要无差别记录 token、cookie、密码及错误响应体。
-
-### 反射复制与深克隆
-
-以下完整普通 Bean 不依赖 ORM；作为本节和 JSON 示例模型：
-
-```java
-package demo.tools;
-
-import java.util.ArrayList;
-import java.util.List;
-
-public class ToolUser {
-    private String name;
-    private List<String> tags = new ArrayList<>();
-    public ToolUser() { }
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-    public List<String> getTags() { return tags; }
-    public void setTags(List<String> tags) { this.tags = tags; }
-}
-```
-
-业务方法体片段：
-
-```java
-import com.yulinlin.data.lang.reflection.ReflectionUtil;
-import demo.tools.ToolUser;
-
-ToolUser user = ReflectionUtil.newInstance(ToolUser.class);
-ReflectionUtil.invokeSetter(user, "name", "alice");
-Object name = ReflectionUtil.invokeGetter(user, "name");
-
-ReflectionUtil.PropertyAccess access = ReflectionUtil.property(ToolUser.class, "name");
-access.set(user, "bob");
-Object value = access.get(user);
-
-ToolUser deep = ReflectionUtil.deepClone(user);
-ToolUser target = new ToolUser();
-ReflectionUtil.copyProperties(user, target);
-```
-
-| API | 语义 |
+| 调用 / 状态 | 行为 |
 | --- | --- |
-| newInstance(Class) | 可访问无参构造 |
-| invokeGetter/invokeSetter | 名称和嵌套路径；不推定中间对象自动创建 |
-| invokeMethod(bean, name, args...) | 根据名称和参数找方法；歧义报错，变长参数传声明数组 |
-| property(Class, name) | 单一属性访问器，可缓存；不是嵌套路径解析器 |
-| clone(value) | 浅复制 |
-| deepClone(value) / clone(value, true) | 对象图深复制，null 返回 null |
-| copyProperties(source, target) | 同名属性深复制到已有目标；跳过缺少属性及源 null |
+| 首次 `sync(source, target, class)` | 主键升序，从第一批开始 |
+| 中断或失败后再次 `sync(...)` | 保持停写且源数据未变化时，从 `主键 > 最后成功主键` 继续，不使用 OFFSET；若已恢复写入，先核对是否需 `restart` |
+| 已完成后再次 `sync(...)` | 返回已有完成结果，本次复制数为 0；不会自动追加源库新增数据 |
+| `restart(...)` | 新任务 ID、清零该任务进度，从头按主键新增或覆盖；不删除目标额外数据 |
+| 映射、主键结构或实际连接指纹变化 | 拒绝沿用旧进度，核对后使用 `restart` |
+| 检测到全量期间源写入 | 暂停相关增量规则，全量进度标记 `RESTART_REQUIRED`；停写、人工修复并排空规则后 `restart`，不能直接续传 |
 
-深克隆覆盖支持的 Bean、集合、Map 键值、数组和可变值，保留对象图的循环与共享引用。每次调用使用独立身份跟踪上下文，不把 DeepCopies 改成跨请求共享单例。
+`SyncResult` 返回 `taskId/source/target/entity/status/lastPrimaryKey/completedRows/rowsThisRun/batchesThisRun/elapsedMillis`。`completedRows` 是本轮累计复制的源行数，`rowsThisRun` 是这次调用确认提交的源行数，不是数据库 UPDATE 的 changed-rows；覆盖相同值也计入复制数。失败会抛异常，并保留可恢复的检查点。
 
-整体 deepClone(list) 保留跨元素共享关系；逐条 deepClone 不保留跨调用共享关系。这两种方式不能仅凭速度互换。
+**主键与字段要求：**
 
-使用限制：
+- 使用完整单表 `@JoinTable` 实体，主键声明 `@JoinMeta(primaryKey = true)`，且与两端实际单列主键一致；不要求实体 `autoSchema=true`。
+- 主键支持 `String`、byte/short/int/long 及其包装类、`BigInteger`；不支持复合主键、浮点主键、UUID Java 类型。主键不能为空，需保持稳定；字符串按源数据库排序，不执行数字“+1”。
+- 复制实体声明的持久化字段，包括 `null`、`update=false`、ID 和时间；跳过 `exist=false`、计算字段、关联加载字段。使用源 CoderManager 解码、目标 CoderManager 编码，复用对应 Session 的值读取/绑定策略。
+- 拒绝聚合投影和 JoinTableList 联表实体。不经过业务过滤器、代理、自动补时间或增量回放；不能依赖租户过滤器限制迁移范围，也不支持动态分表。应由有权限的维护代码调用，模块不公开 HTTP 管理接口。
+- 仅支持 MySQL/PostgreSQL。目标 MySQL 业务表与进度表必须是 InnoDB；触发器、生成列、自增序列、额外唯一约束、字段范围和排序规则需人工确认。复制显式主键不会自动调整 PostgreSQL sequence；序列型主键后续插入前应自行校准。
 
-- Bean 需要无参构造和可写属性；record、不可写 final 字段、线程/流/连接不作为通用复制目标。
-- 不自动把嵌套实体转换为另一种 DTO，也不自动转换集合泛型。
-- 不可变值可以复用；包装集合可能变成普通可变集合，不保证保留不可修改/同步包装语义。
-- copyProperties 失败可能已部分修改目标，没有回滚；null 跳过不等于 SQL NULL 更新。
-- 私有成员访问仍受 Java 模块 opens 限制，不绕过任意访问控制。
-- 当前基于 MethodHandle，ReflectAsmUtil 是弃用兼容入口；Kryo 不是 lang 的克隆后端。
-- 性能实测必须看相同模型、粒度和环境；历史 JMH 数据在 [第五专题](05-扩展开发与维护.md#历史克隆基准)，不作当前通用排名。
+**进度、事务和日志：**
 
-### JSON 转换
+进度存入目标连接默认库/schema 的 `yulinlin_sync_progress`，任务按源 group + 目标 group + 实体类区分；每个任务只保存最新一轮进度，不保存所有历史轮次。需要该表的建表和读写权限，业务表需 SELECT/INSERT/UPDATE 权限。每批数据和检查点使用同一目标连接提交，失败回滚本批；已提交批次不回滚。目标按主键区分 INSERT/UPDATE，不使用 MySQL 任意唯一键冲突覆盖。每批提交后主动清理目标实体缓存。
 
-```java
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.yulinlin.data.lang.json.JsonUtil;
-import demo.tools.ToolUser;
-import java.util.List;
+运行全量时持有源、目标各一个维护连接；目标事务按批提交，不使用多连接批处理。相同任务通过目标库会话锁防止重复运行。进程异常退出后可续传，连接断开后的锁释放以数据库为准；持久化 RUNNING 不代表仍有工作线程。不要同时用不同 group 别名/不同实体启动对同一物理表的全量任务。
 
-String json = JsonUtil.toJson(new ToolUser());
-ToolUser user = JsonUtil.parseJson(json, ToolUser.class);
-List<ToolUser> users = JsonUtil.parseJson("[]", new TypeReference<List<ToolUser>>() {});
+日志示例（数值仅示意）：
+
+```text
+全量同步开始 源=mysql 目标=postgresql 实体=com.example.VideoEntity 任务=... 每批=1000 恢复主键=2000 累计完成=2000
+全量同步进度 源=mysql 目标=postgresql 实体=com.example.VideoEntity 本批=1000 本次完成=1000 累计完成=3000 最后成功主键=3000 本批耗时=120ms
+全量同步完成 源=mysql 目标=postgresql 实体=com.example.VideoEntity 本次完成=1000 累计完成=3000 批次=1 总耗时=135ms
 ```
 
-JsonUtil.to(source, Target.class) 经 JSON 做类型转换，受 Jackson 注解/配置影响，不是对象图克隆，不保持任意循环与对象身份。
+不预先 COUNT 全表，所以不提供百分比。异常日志提示排查和续传；提交确认异常时，以目标进度表实际值为准，不用旧内存游标覆盖已提交进度。
 
-`JsonUtil` 独立模式有自有 mapper；starter 会用 Spring `ObjectMapper` 替换它。`setMapper` 是进程级全局设置，应在启动阶段完成，不能在并发请求中来回切换。`HttpUtil` 静态客户端的 mapper 是另一套，不自动与 `JsonUtil` 同步。
+<a id="ai-write-sync-full-人工全量流程业务停写内部暂停增量"></a>
+### 人工全量流程：业务停写，内部暂停增量
 
-`YulinlinSimpModule` 自动支持以下值：
+按下面的顺序操作，无需业务再写一套暂停/恢复增量消费者的代码：
 
-| Java 类型 | JSON 形式 |
-| --- | --- |
-| DateTime | `yyyy-MM-dd HH:mm:ss` 字符串 |
-| Money、Coin | JSON 数字 |
-| LongAdder、DoubleAdder | 当前累计值 |
+1. **业务停写**：关闭相关源/目标业务写入口，覆盖所有应用实例、定时任务及其他程序的写入。先停止产生新任务，再让 EntityCounter、`.queue()` 和在途事务处理完；不能只暂停 HTTP 接口。
+2. **排空增量**：保持增量消费正常运行，等待提交后的同步任务完成。用 `syncManager.statuses()` 核对写向本次目标组的规则无积压、无错误。不要先关闭整个同步模块，否则不能排空。
+3. **人工调用**：在业务事务之外调用 `sync(source, target, class)`，需要重新覆盖全部历史数据时调用 `restart(...)`。API 会再次检查规则是否空闲；尚在执行、积压、已暂停或被其他全量占用时直接报错，不自动等待、不丢弃任务。状态计数只是观察入口，最终以 API 检查为准。
+4. **内部暂停**：检查通过后，本进程所有写向该目标 group 的增量规则进入维护保护，不再调度消费；不只是当前实体或当前源组。随后逐批复制，业务行与检查点同批提交。
+5. **完成并恢复**：API 正常返回时释放内部维护保护，未处于错误暂停状态的规则恢复正常调度。核对结果、日志和规则状态后，再由业务恢复写入。正常全量完成不需要调用 `resumeAfterRepair`。
 
-手动创建 Jackson mapper 时这样注册：
+**内部暂停不等于业务停写。** 不会拦截用户请求、不撤销源事务，也不会停止其他应用实例、原生 SQL 或数据库客户端的修改。若其他源组的规则也写向这个目标 group，同样需要协调它们的停写。目标读取未被禁止，但全量按批提交，期间可能看到部分新、部分旧的数据，不能把它当作整表原子切换。
 
-```java
-ObjectMapper mapper = new ObjectMapper();
-mapper.registerModule(new YulinlinSimpModule());
-JsonUtil.setMapper(mapper);
-```
-
-`DateTimeStrJsonSerializer` 输出“刚刚、N 分钟前”等相对文本；`EnumSerializer` 输出实现 `IEnum` 的 label。它们没有加入 `YulinlinSimpModule`，必须通过 Jackson 注解或模块显式注册。`EnumFormat` 也是扩展构件，不会自动接管全部枚举。
-
-`JsonUtil.clone` 是保留的 JSON 往返接口，只适合 Jackson 可序列化模型；异构集合、循环引用和对象身份不可靠。通用深克隆优先使用 `ReflectionUtil.deepClone`。
-
-### 日期、金额与分页
-
-#### DateTime
-
-`DateTime` 是基于 `LocalDateTime` 的不可变包装：`plus*`、`with*`、`beginOf*`、`endOf*` 都返回新对象，不修改原值。
-
-```java
-DateTime now = DateTime.now();
-DateTime tomorrow = now.plusDays(1);
-DateTime dayStart = now.beginOfDay();
-DateTime dayEnd = now.endOfDay();
-
-DateTime a = DateTime.parse("2026-10-10 12:30:00");
-DateTime b = DateTime.parse("20261010123000");
-DateTime c = DateTime.parse("2026/10/10", "yyyy/MM/dd");
-long millis = a.getTime();
-Date legacy = a.toDate();
-```
-
-默认解析支持 `yyyy-MM-dd HH:mm:ss`、`yyyyMMddHHmmss`、日期/月/年简写，以及 10 位秒时间戳和 13 位毫秒时间戳。时间戳和 `Date` 转换使用 JVM 默认时区；跨时区协议优先直接使用 `Instant`、`OffsetDateTime`。`isDate` 只是快速形态判断，不是严格日期校验。
-
-#### Money、Coin 与 CodeObject
-
-```java
-Money price = Money.of(12.34);
-long stored = price.encode();       // 1234
-Money decoded = new Money();
-decoded.decode(stored);             // 12.34
-
-Coin coin = Coin.of(8.5);
-long coinStored = coin.encode();    // 85
-```
-
-`Money` 固定两位缩放，`Coin` 固定一位缩放；两者都继承 `Currency<Double>` 并实现 `CodeObject<Long>`。由于内部是 `Double`，不适合要求严格十进制精度、超大金额或复杂舍入的财务场景，这些场景使用 `BigDecimal`。
-
-`CodeObject<T>` 是数据库值编解码约定：`encode` 输出持久化值，`decode` 把持久化值写回当前对象。
-
-#### Page
-
-```java
-Page<User> page = Page.of(users, total);
-Page<UserDto> dtoPage = page.map(this::toDto);
-Page<User> active = page.filter(User::isActive);
-List<User> second = Page.page(users, 2, 20);
-page.putValue("traceId", traceId);
-```
-
-`Page.page` 是从 1 开始的内存分页，不发 SQL，要求 `pageNumber >= 1`、`pageSize > 0`。`map` 遇到 null 会从返回 Page 的 total 中扣除；`filter` 保留原 total，适合“当前页后处理”，不表示重新统计数据库总数。`shuffle`、`random` 返回新 Page，不修改原 list；`randomOne` 不接受空列表。
-
-#### ListString
-
-```java
-ListString<Long> ids = new ListString<>();
-ids.decode("10,20,30", Long.class);
-String value = ids.encode();
-
-ListString<String> tags = ListString.ofString("java,jdk25");
-```
-
-默认分隔符是进程级静态字段 `ListString.splitStr`。支持 String、Integer、Long、Double、Byte、Float；内容本身包含分隔符时不能无损往返，也不处理转义。业务优先保持默认逗号，避免运行期间修改全局分隔符。
-
-### 字符串、随机数与 ID
-
-```java
-String field = StringUtil.columnToJava("user_name"); // userName
-String column = StringUtil.javaToColumn("userName"); // user_name
-String text = StringUtil.removeLine(" a\n b\t");     // ab
-String rendered = StringUtil.renderString("hi ${name}", Map.of("name", "Lin"));
-
-int value = RandomUtil.randomInt(10); // [0, 10)
-char tokenChar = RandomUtil.randomChar();
-
-Snowflake snowflake = new Snowflake(1, 2);
-long id = snowflake.nextId();
-```
-
-- `StringUtil.isNull` 只判断 null 或空串，不等价于 `isBlank`；`removeLine` 会移除 ASCII 空白。
-- `renderString` 是简单 `${key}` 替换，不是表达式引擎；值不能为 null。
-- `RandomUtil` 基于 `ThreadLocalRandom`，适合抽样和非安全随机，不能生成密码、token、IV 或密钥。
-- `Snowflake` 的 workerId 和 dataCenterId 均为 0～31；同一时间范围内的不同进程必须使用不同组合。`nextId` 是同步线程安全的，时钟大幅回拨会拒绝生成。
-
-#### WeightedSelector
-
-```java
-WeightedSelector<String> selector = new WeightedSelector<>();
-selector.add("A", 1);
-selector.add("B", 3);
-String selected = selector.select();
-```
-
-权重小于等于 0 会忽略；没有正权重项时 `select` 抛异常。添加操作同步并发布到并发有序表，热点选择路径不使用共享 `Random`，支持并发读取；`list` 返回不可修改视图。
-
-### 轻量缓存与资源池
-
-这些类不替代第八专题的 ORM 查询缓存。它们只管理当前 JVM 内的普通对象。
-
-#### ExpiryMap
-
-```java
-try {
-    ExpiryMap<String, User> cache = new ExpiryMap<>(
-            30, TimeUnit.SECONDS, 20_000, 5,
-            expired -> expired.forEach(this::afterRemoval));
-
-    User user = cache.get("u:1", key -> loadUser(key));
-    cache.invalidate("u:1");
-    cache.shutdown();
-} catch (RuntimeException error) {
-    // loader 异常原样传播
-}
-```
-
-TTL 是写入后过期；`randomTtl` 单位为秒，会在基础 TTL 上随机增加 0～N 秒。`get(key, loader)` 对同一 key 使用 `ConcurrentHashMap.compute`，避免同一时刻重复加载。容量是轻量近似上限，不提供 Caffeine 的精确淘汰算法。清理任务使用全局守护调度器；每个实例使用完都调用 `shutdown`，移除回调在框架线程池异步执行。key、value、loader 返回值均不要使用 null。
-
-#### SmartCache
-
-`SmartCache` 是轻量级 stale-while-revalidate 缓存。首次访问同步加载；TTL 内直接返回缓存；TTL 到期后的第一个请求只提交一次虚拟线程刷新，并立即返回旧值，其他并发请求不会重复刷新。
-
-```java
-try (SmartCache<List<User>> cache = SmartCache.of(this::loadUsers, 60)) {
-    List<User> users = cache.get();
-    cache.refresh();       // 强制同步刷新
-    cache.refreshAsync();  // 合并并发刷新请求
-}
-```
-
-默认 `autoRefresh=false`，没有访问就不会刷新，适合“缓存 60 秒，过期后的下一次访问刷新一次”的业务。需要即使无人访问也定时更新时，显式使用：
-
-```java
-SmartCache<List<User>> cache = SmartCache.of(this::loadUsers, 60, true);
-```
-
-`autoRefresh=true` 按 TTL 周期在虚拟线程刷新。实例不再使用时应调用 `close()`；关闭后的实例不能继续 `get/refresh`。刷新成功后重新计算完整 TTL；刷新失败会记录日志并保留旧值；supplier 返回 `null` 也不会覆盖旧值，两种情况都会在最多 5 秒后允许访问触发重试，避免连续请求形成刷新风暴。
-
-带 key 的工厂用于进程内共享：
-
-```java
-SmartCache<User> cache = SmartCache.of("user:" + userId, () -> loadUser(userId), 60);
-```
-
-`SmartCache.of(key, ...)` 会复用同一实例，同 key 第一次创建时的值类型、supplier、TTL 和 `autoRefresh` 配置生效，因此不要让不同业务或不同类型共用一个 key。带 key 实例调用 `close()` 后会从全局注册表移除，再次调用 `of(key, ...)` 会创建新实例；`clearAllCache()` 会原子移除并关闭当前全部带 key 实例。`clear()` 与后台刷新互斥，清空后下一次 `get()` 会同步加载。
-
-#### ResourcePool
-
-```java
-ResourcePool<Client> pool = new ResourcePool<>(8, Client::new);
-Client client = pool.acquire();
-try {
-    client.call();
-} finally {
-    pool.release(client); // 每次 acquire 必须且只能 release 一次
-}
-pool.close(); // 关闭当时空闲的资源
-```
-
-继承 `ResourcePool` 并覆盖 `protected close(T)` 可定义资源关闭动作。工厂异常不会泄漏许可证。该类不跟踪借出对象，重复 release 会破坏容量约束；`close` 也不会等待正在使用的对象，复杂连接池优先使用成熟池实现。
-
-### 并发与调度
-
-#### SegmentLock
-
-```java
-SegmentLock locks = new SegmentLock(64);
-locks.execute(userId, () -> updateUser(userId));
-Order order = locks.executeWithReturn(orderId, () -> loadOrder(orderId));
-```
-
-相同 key 一定进入同一段，不同 key 可能碰撞到同一锁。段数创建后固定；构造参数必须大于 0。它适合短临界区，不提供跨进程锁。
-
-#### ThreadUtil
-
-```java
-Future<Result> ioFuture = ThreadUtil.submit(this::blockingHttpOrJdbcCall);
-Future<Result> explicitIo = ThreadUtil.submitVirtual(this::blockingHttpOrJdbcCall);
-Future<Result> cpuFuture = ThreadUtil.submitCpu(this::calculate);
-ThreadUtil.submit(this::refresh, 500);       // 延迟约 500 ms 执行一次
-ScheduledFuture<?> task = ThreadUtil.schedule(this::blockingPoll, 1_000);
-ScheduledFuture<?> cpuTask = ThreadUtil.scheduleCpu(this::calculate, 1_000);
-
-ThreadUtil.set("trace", traceId);
-try {
-    useTrace(ThreadUtil.get("trace"));
-} finally {
-    ThreadUtil.clear();
-}
-```
-
-`ThreadUtil.submit` 默认使用 JDK 25 一任务一虚拟线程；`submitVirtual` 是语义更明确的同义入口，适合 HTTP、文件、网络、等待锁等阻塞任务。CPU 密集计算或必须由线程池限制并发的任务使用 `submitCpu`，其平台线程数按可用处理器数量固定。虚拟线程不会让单次计算更快，也不会自动限制数据库连接或远端接口并发，因此 ORM 批量写入仍使用 Session 的连接并发配置。
-
-`schedule` 与 `scheduleVirtual` 都由轻量调度器触发、在虚拟线程执行，并在上一次尚未完成时跳过重叠执行；CPU 定时任务使用 `scheduleCpu`。`submitVirtual(task, delay)` 是一次性延迟虚拟任务。`startThread` 使用虚拟线程循环执行，回调返回 `false`、线程被中断时停止。ThreadLocal 数据必须在 finally 中 clear。Spring 应用有复杂隔离、监控或优雅停机要求时仍可注入自己的 `TaskExecutor`/`TaskScheduler`。
-
-### 进程内事件
-
-```java
-final class UserCreated { }
-
-final class UserCreatedHandler implements IEventHandler<UserCreated> {
-    public void handle(UserCreated event) { /* ... */ }
-}
-
-EventPublishManager.instance().register(new UserCreatedHandler());
-EventPublishManager.instance().publish(new UserCreated());
-EventPublishManager.instance().asyncPublish(new UserCreated());
-```
-
-`IEvent` 提供 `publish`/`asyncPublish` 默认方法。处理器按事件的精确运行时 Class 分组，不向父类或接口传播；重复 register 会重复执行。注册表支持并发读写，适合启动期间注册、运行期间高频发布。同步发布的异常直接中断后续处理器；异步发布通过 `ThreadUtil` 使用虚拟线程，不返回 Future，调用方无法等待，也不会自动汇总错误。需要可靠投递、持久化、重试或跨进程通信时使用消息队列。
-
-自定义隔离实例可以继承 `AbstractEventPublishManager<MyManager>`；全局默认实例是 `EventPublishManager.instance()`。
-
-### Lambda、泛型与包扫描
-
-#### LambdaUtils
-
-```java
-LambdaPropertyFunction<User> property = User::getUsername;
-String method = LambdaUtils.lambdaMethodName(property);          // getUsername
-Field field = LambdaUtils.lambdaMethodNameToField(property);     // username
-Class<User> owner = LambdaUtils.lambdaMethodNameToClassName(property);
-```
-
-参数必须是可序列化 Lambda，通常使用 `LambdaPropertyFunction<T>`。不要传普通 `Function`、匿名内部类或任意对象。实现只缓存 lambda class 的 `writeReplace` 访问器，不缓存捕获参数，因此不会把首个捕获对象长期保留。
-
-#### GenericUtil
-
-```java
-Class<?> entityType = GenericUtil.forClass(UserRepositoryImpl.class, BaseRepository.class, 0);
-Class<?> elementType = GenericUtil.forField(User.class.getDeclaredField("roles"), 0);
-Class<?> returnType = GenericUtil.forMethodReturnType(method, 0);
-Class<?> parameterType = GenericUtil.forMethodParameter(method, 0, 0);
-```
-
-解析不到具体类型时返回 null。`GenericUtil` 只在首次调用时进入 Spring `ResolvableType`，之后按源/声明类使用 `ClassValue` 缓存类、字段、方法参数和返回值的最终类型；解析失败的 null 也会缓存。类卸载时其缓存可一起回收，测试或动态类替换可调用 `clearCache(Class<?>)` 或 `clearCache()`。
-
-`BaseGeneric`、`GenericClass`、`GenericField`、`GenericMethod` 是旧的链式泛型模型，仍为兼容保留；新外部代码优先用 `GenericUtil`。`GenericClass.newInstance` 同样使用 `ClassValue` 缓存，不阻止类加载器卸载。
-
-#### AnnotationUtil 与 ScanUtils
-
-```java
-JoinTable table = AnnotationUtil.findAnnotation(User.class, JoinTable.class);
-Marker marker = AnnotationUtil.findAnnotation(method, Marker.class, 0); // 第 0 个参数上的注解
-
-Set<Class<?>> services = ScanUtils.scanSubclass(
-        "com.example.**.service", BaseService.class, true);
-```
-
-`AnnotationUtil` 使用 Spring 合成注解规则；AspectJ 重载用于切面内部。`ScanUtils.scanClass(path, false)` 返回具体类，传 true 返回接口或抽象类；扫描会读取 class 元数据并加载匹配 Class，但不会初始化静态代码。通配路径依赖 Spring resource pattern，库/应用边界上优先传明确根包，避免扫描整个 classpath。
-
-### 序列化、元组与框架扩展
-
-#### Java 序列化
-
-```java
-byte[] bytes = SerializableUtil.serialize(value);
-Object restored = SerializableUtil.unSerialize(bytes);
-SerializableType copy = SerializableUtil.clone(value);
-```
-
-整个对象图必须实现 `Serializable`。Java 原生序列化通常比专用编码慢、体积大，且反序列化不可信字节存在安全风险；只处理本进程生成且可信的数据，不作为 HTTP、消息队列或跨语言协议。普通克隆使用 `ReflectionUtil.deepClone`。
-
-#### 元组
-
-```java
-MutablePair<String, Integer> pair = MutablePair.of("count", 3);
-String left = pair.getLeft();
-
-MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, true);
-```
-
-这些类是轻量位置容器，没有值语义的 equals/hashCode，也没有公开修改器。跨层 API、缓存 key 或领域模型优先定义 record/明确 DTO。
-
-#### 框架扩展 SPI
-
-| 类型 | 用途 | 外部使用建议 |
+| 情况 | 内部处理 | 业务操作 |
 | --- | --- | --- |
-| BaseAnnotationBeanPostProcessor | 基于类/方法注解创建 Spring Advisor | 仅扩展框架 AOP；实现 getAnnotation 和 invoke |
-| MethodHandlesUtil | privateLookupIn 和父接口 default/special 方法句柄 | 代理框架内部使用；受 JPMS opens 限制 |
-| ProxyUtil | Spring CGLIB 子类代理 | JDK 25 优先接口/JDK Proxy；final 类和模块边界受限 |
-| ReflectAsmUtil | 旧反射入口 | 已弃用，转用 ReflectionUtil；clear 是兼容空操作 |
-| DateTimeJsonFormat、MoneyJsonFormat、CoinJsonFormat | Jackson serializer/deserializer 工厂 | 通常直接注册 YulinlinSimpModule |
-| LongAdderJsonFormat、DoubleAdderJsonFormat | Adder JSON 数值格式 | 通常直接注册 YulinlinSimpModule |
-| DateTimeStrJsonSerializer、EnumSerializer、EnumFormat | 可选展示/枚举格式 | 必须显式配置，不会由默认模块自动启用 |
-| IEnum | label/value 枚举约定 | ORM EnumCoder 会优先持久化 value |
-| CryptoDataResponse | 响应 data 可被安全模块替换的契约 | starter 的 R 已实现；普通项目按需实现 |
+| 全量正常完成 | 释放维护保护，正常规则恢复调度 | 核对后恢复写入 |
+| 普通读取/写入失败，没有源写入冲突 | 回滚未提交批次，保留已提交进度；退出时释放维护保护，正常规则可再次调度 | 保持停写，排查后续传；不能因为消费者已恢复就认定全量成功 |
+| 全量期间检测到匹配规则的源写入或提交 | 标记冲突、暂停相关增量规则；全量任务处理中检测到冲突会中止并记录需要重做 | 保持停写，人工核对、修复和处理积压，再 `restart`；不要盲目重放 inc/dec |
+| 进程退出 | 全量检查点已落在目标库；内存增量任务和运行状态不保证保留 | 重启后先确认数据及缺口，不把“队列空了”当作已同步成功 |
 
-### lang 公开类型目录
+失败恢复期间也需保持停写；如果期间已恢复写入，旧游标之前的数据可能变化，需要核对并重新全量。全量不会删除目标额外记录，漏同步的删除仍需人工清理。正常匹配规则之外、其他进程或原生 SQL 的修改可能检测不到，因此这**不是不停机快照与 CDC 无缝衔接**。
 
-下面按包列出当前全部公开类型，便于外部 AI 判断准确入口。未列为首选的兼容类型也没有删除。
-
-| 包 | 公开类型 | 定位 |
-| --- | --- | --- |
-| `lang.aop` | BaseAnnotationBeanPostProcessor、AnnotationAdvisor | Spring AOP 扩展 SPI |
-| `lang.cache` | ExpiryMap、ResourcePool | JVM 轻量过期缓存、资源池 |
-| `lang.enums` | IEnum | 枚举 label/value 契约 |
-| `lang.event` | AbstractEventPublishManager、EventPublishManager、IEvent、IEventHandler | JVM 内同步/异步事件 |
-| `lang.json` | JsonUtil、YulinlinSimpModule、DateTimeJsonFormat、DateTimeStrJsonSerializer、MoneyJsonFormat、CoinJsonFormat、LongAdderJsonFormat、DoubleAdderJsonFormat、EnumFormat、EnumSerializer | Jackson 转换与扩展 |
-| `lang.lambda` | LambdaPropertyFunction、LambdaUtils | 可序列化属性方法引用解析 |
-| `lang.lazy` | SmartCache | 首次同步、过期异步刷新的单值缓存 |
-| `lang.reflection` | ReflectionUtil、GenericUtil、AnnotationUtil、SerializableUtil、MethodHandlesUtil、ProxyUtil、ReflectAsmUtil | 反射、泛型、注解、序列化和代理 |
-| `lang.security` | CryptoDataResponse | security 模块响应加密 SPI |
-| `lang.tuple` | Triple、MutablePair、MutableTriple | 轻量位置容器 |
-| `lang.util` | DateTime、Page、StringUtil、RandomUtil、Snowflake、WeightedSelector、SegmentLock、ThreadUtil、ListString、CodeObject、Currency、Money、Coin、ClassUtil、ScanUtils、BaseGeneric、GenericClass、GenericField、GenericMethod | 通用值、并发、扫描和兼容泛型工具 |
-
-`DeepCopies`、`ValueCopies`、`HandleAccess` 是包内实现，不是外部 API。
-
-### 常见问题
-
-| 问题 | 优先检查 |
-| --- | --- |
-| ReflectionUtil.property 的 NoSuchMethodError | 编译与运行时 lang/core 是否同一产物 |
-| DTO 复制字段缺失 | 名称、可写属性、null 跳过及嵌套类型是否相容 |
-| 克隆列表后共享引用不同 | 整体克隆还是每元素独立调用 |
-| SmartCache 过期仍拿到旧值 | 这是 stale-while-revalidate；首次加载才阻塞 |
-| ExpiryMap 实例不再使用 | 调用 shutdown 取消该实例清理任务 |
-| ResourcePool 后续 acquire 卡住 | 检查每次借出是否恰好 release 一次 |
-| Lambda 解析失败 | 参数是否为 LambdaPropertyFunction/其他可序列化 Lambda |
-| DateTime 时间戳偏移 | JVM 默认时区是否符合业务协议 |
-| Java 反序列化是否能处理请求数据 | 不要反序列化不可信输入 |
-| HTTP 超时配置没生效 | Spring 客户端、静态客户端、手动构造和单次覆盖分别核对 |
-| 下载成功但 body 为空 | downloadTo 内容在文件中 |
-| 404 检查返回 false | 不代表存在，需区分网络/状态异常 |
-
-本文按当前源码和 JDK 25 行为核对；HTTP 地址、文件路径及业务类型是示例，需要替换。工具类是进程内能力，不自动提供分布式一致性、持久化、重试或安全随机。
+启动自动全量及其扩展入口已移除；升级时删除旧配置中的 `rules[].full`，不再填写 true/false。`full-batch-size` 仍保留，用于人工全量 API 每批读取/提交数量，不是自动全量开关。
 
 ---
 
-<!-- source: doc/06-接口安全.md -->
-## 接口安全
+下一步：返回[批量与同步主题目录](write-sync/README.md)按需选择相关专题。
 
-`security` 模块提供 Spring MVC JSON 接口加解密、本机接口限流，以及基于公共注解的登录、角色和权限检查。默认加密协议是 `AES/CBC/PKCS5Padding + UTF-8 key + UTF-8 IV + 标准 Base64`；每种设备可以使用独立密钥，也可以单独切换为 AES-GCM。限流由 Caffeine 保存短期计数，鉴权使用 Spring AOP，不依赖 Spring Security、Redis 或 ORM。
+---
 
-阅读顺序：[完整配置](#完整主配置) · [登录方案对比](#jwt-与-sa-token-如何选择) · [登录接入](#安全管理器) · [组件扩展](#常用组件扩展入口) · [自定义安全实现](#接入外部安全框架) · [自定义拦截器](#自定义登录拦截器) · [接口限流](#接口限流) · [鉴权声明](#鉴权声明注解) · [配置规则](#配置项与默认值) · [接口注解](#接口注解) · [CBC 前端对接](#默认-cbc-前端对接) · [排除路径](#明文排除路径) · [GCM](#可选-aes-gcm) · [手动 API](#手动使用) · [安全边界](#安全边界与限制)
+<a id="ai-write-sync-batch"></a>
+<!-- source: doc/write-sync/batch.md -->
+<a id="ai-write-sync-batch-批量与多连接写入"></a>
+## 批量与多连接写入
 
+[文档首页](README.md) / [批量与同步](write-sync/README.md)
+
+批次大小、连接并发和事务提交是不同概念。
+
+<a id="ai-write-sync-batch-本页导航"></a>
+### 本页导航
+
+- [批量与多连接写入](#ai-write-sync-batch-批量与多连接写入-1)
+
+<a id="ai-write-sync-batch-批量与多连接写入-1"></a>
+### 批量与多连接写入
+
+方法体片段，usersToInsert 为已准备好的 DemoUser 集合：
+
+```java
+ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();         // 普通 JDBC batch
+ModelInsertWrapper.newInstance("mysql", usersToInsert).batch().execute(); // 申请多连接路径
+```
+
+```yaml
+yulinlin:
+  mysql:
+    parallel-connections: 4
+    execute-batch-size: 256
+  postgresql:
+    parallel-connections: 2
+    execute-batch-size: 128
+  h2:
+    parallel-connections: 4
+    execute-batch-size: 256
+  sqlite:
+    execute-batch-size: 256
+```
+
+这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接；调用 `.batch()` 时，把整批数据均匀分成最多 4 个大组，一组一个任务/连接。同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。
+
+只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池会自动限制有效并发数，其他连接池应按其容量设置 parallel-connections。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+
+executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
+
+多个连接有各自的本地事务，中途提交失败无法撤销已成功提交的连接；跨连接未提交数据也不保证可读。严格单库原子性和事务内读己之写使用 parallel-connections: 1。
+
+---
+
+下一步：返回[批量与同步主题目录](write-sync/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-write-sync-counter"></a>
+<!-- source: doc/write-sync/counter.md -->
+<a id="ai-write-sync-counter-entitycounter-聚合插入与更新"></a>
+## EntityCounter 聚合插入与更新
+
+[文档首页](README.md) / [批量与同步](write-sync/README.md)
+
+点击量自增、模型增量和按非数字维度聚合插入。
+
+<a id="ai-write-sync-counter-本页导航"></a>
+### 本页导航
+
+- [实体计数器](#ai-write-sync-counter-实体计数器)
+- [通过模型提交更新增量](#ai-write-sync-counter-通过模型提交更新增量)
+- [按维度聚合插入统计数据](#ai-write-sync-counter-按维度聚合插入统计数据)
+
+<a id="ai-write-sync-counter-实体计数器"></a>
+### 实体计数器
+
+`common` 的 `EntityCounter` 面向播放量、点击量、热度等数值累加。`update(...)` 表示按主键更新已有记录，`insert(entity)` 表示按维度聚合插入新记录；`execute()` 立即执行，`submit()` 交给后台聚合。旧 `newInstance(...)` 已移除，调用方统一改为 `update(...)`。一次更新 Builder 只描述一行，但同一行可以同时修改多个字段：
+
+```java
+import com.yulinlin.common.model.EntityCounter;
+
+EntityCounter.update("mysql", VideoEntity.class, videoId)
+        .inc(VideoEntity::getViewCount, 1)
+        .inc(VideoEntity::getHotValue, 5)
+        .dec(VideoEntity::getRemainingQuota, 1)
+        .submit();
+```
+
+多行由业务代码正常循环，不提供容易混淆的链式 `.id(...)` 批量语法：
+
+```java
+for (VideoStat stat : stats) {
+    EntityCounter.update("mysql", VideoEntity.class, stat.videoId())
+            .inc(VideoEntity::getViewCount, stat.views())
+            .inc(VideoEntity::getHotValue, stat.hotValue())
+            .submit();
+}
+```
+
+不传数据源时复用 RouteSession 的默认路由规则；单组自动选择，多组使用 `yulinlin.datasource.default-group`，实体上的 `@JoinSession` 仍可参与路由：
+
+```java
+EntityCounter.update(VideoEntity.class, videoId)
+        .inc(VideoEntity::getViewCount)
+        .submit();
+```
+
+终结方法有两种，Builder 终结后不能再次执行或提交：
+
+| 方法 | 行为 | 返回值 | 事务 |
+| --- | --- | --- | --- |
+| `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 加入当前路由事务，包括适配后的 `@Transactional` |
+| `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
+
+聚合键是“调用线程解析出的数据源组 + 实体类型 + 主键”，字段增量保存在该行下面。默认选库和显式指定相同组时可以合并，模型更新与链式更新也共用聚合区。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
+
+```yaml
+yulinlin:
+  data:
+    counter:
+      flush-interval: 1m
+      flush-size: 1024
+      clear-cache: false
+```
+
+`flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
+
+上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc(field, x)` 表示加上 x，`dec(field, x)` 表示减去 x，两者都支持正负整数、小数，零不变；`dec(field, -0.5)` 等价于 `inc(field, 0.5)`。不传数量默认 1。
+
+数量支持 `Byte/Short/Integer/Long/Float/Double`、`BigInteger/BigDecimal`、`AtomicInteger/AtomicLong/LongAdder/DoubleAdder`，不接受 null、NaN、无穷大或未支持的自定义 Number 类型。链式调用时立即读取数字快照，之后修改原子类不会改变已记录增量。内部统一使用 BigDecimal 精确聚合，不再受 long 范围限制；正负增量抵消为零时不生成该字段更新。浮点数已有的运算误差不会自动修复，精确小数建议 `new BigDecimal("0.1")`。最终写入仍受数据库列类型、范围和精度约束，不会自动修改表结构。
+
+```java
+EntityCounter.update("mysql", VideoEntity.class, videoId)
+        .inc(VideoEntity::getHeat, new BigDecimal("0.75"))
+        .dec(VideoEntity::getHeat, new BigDecimal("-0.25"))
+        .submit(); // 本次净增 1；改用 execute() 可立即执行
+```
+
+默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
+
+这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
+
+<a id="ai-write-sync-counter-通过模型提交更新增量"></a>
+#### 通过模型提交更新增量
+
+只需要设置主键和本次的数字增量，不必逐个调用 `inc/dec`；原来的链式 API 仍保留。
+
+```java
+VideoEntity delta = new VideoEntity();
+delta.setId(videoId);
+delta.setViewCount(10L);       // 数据库原值 + 10，不是设置为 10
+delta.setHotValue(5L);        // 同一行的另一个计数
+delta.setRemainingQuota(-1L); // 数据库原值 - 1
+
+EntityCounter.update("mysql", delta).submit();
+// 替代选择：EntityCounter.update(delta).submit(); // 默认选库
+// 替代选择：int affected = EntityCounter.update(delta).clearCache(true).execute();
+```
+
+字段规则：
+
+| 字段 | 模型更新行为 |
+| --- | --- |
+| `@JoinMeta(primaryKey=true)` | 必须恰好一个且值非空，仅生成主键条件；即使是数字也不参与累加，允许 `update=false` |
+| 可更新数字字段 | 正值增加、负值减少，null 和 0 忽略；支持多个字段 |
+| 字符串、时间、枚举、布尔等非数字字段 | 忽略，不作为条件或覆盖赋值 |
+| `@JoinField(exist=false/update=false)`、静态、transient、合成字段 | 不参与增量更新 |
+
+支持 byte/short/int/long/float/double 及包装类、BigInteger、BigDecimal、AtomicInteger、AtomicLong、LongAdder、DoubleAdder。原子类读取当前值或 sum，不修改/清零调用对象；NaN、无穷和不支持的 Number 子类拒绝提交。数字增量在内存中用 BigDecimal 合并，避免大整数或小数被转成 long 截断；不承诺数据库浮点列的十进制精度。
+
+注意：
+
+- 必须使用新建的“增量模型”，不要将查回的完整实体直接传入，否则所有非零可更新数字（包括状态码、排序值、默认值）都会成为增量。此接口不是普通 `update(entity)`。
+- 在 `execute/submit` 时读取快照，随后修改实体或原子类不会改变已提交数据；同一对象重复提交仍会重复累计。不要并发修改同一个模型来期待多字段整体原子快照。
+- 仅生成数字加减和主键条件，不调用实体 `updateBefore`，不自动更新时间或执行版本号乐观锁逻辑。无需通过无参构造器复制实体。
+- 所有增量为空/零时 `execute()` 返回 0，`submit()` 不入队；同一窗口相反增量抵消后不执行 SQL。主键不存在则更新 0 行，不会自动插入。
+- SQL 更新字段必须是支持算术运算的数据库数字列。BigDecimal/BigInteger 自动建表仍沿用原存储规则；如果列为 TEXT/VARCHAR，尤其 PostgreSQL，需要业务先迁移为合适的 NUMERIC 列，本功能不自动改列。最终数值范围/精度由数据库决定；列值为 NULL 时也不自动补零。
+- 模型和链式计数更新共享刷新间隔、阈值、缓存策略和失败恢复机制；`execute()` 可加入当前事务，`submit()` 必须在事务外调用。进程内聚合不是可靠消息队列。
+
+<a id="ai-write-sync-counter-按维度聚合插入统计数据"></a>
+#### 按维度聚合插入统计数据
+
+`EntityCounter.insert(entity)` 不要求数据库中已有记录。它读取提交对象：全部非空数字字段分别求和，全部非空非数字字段的 `toString()` 作为维度；时间也作为维度，不截断为分钟。`null` 忽略，`0` 仍是有效数字，`false` 是维度。`@JoinWhere` 只影响查询条件，不控制这里的分组。
+
+```java
+import com.yulinlin.common.domain.SuperEntity;
+import com.yulinlin.common.model.EntityCounter;
+import com.yulinlin.data.core.anno.JoinTable;
+import lombok.Data;
+import java.util.concurrent.atomic.DoubleAdder;
+
+@Data
+@JoinTable("sta_metrics")
+public class StaMetricsEntity extends SuperEntity<StaMetricsEntity> {
+    private String name;
+    private String channel;
+    private String deviceType;
+    private String osName;
+    private DoubleAdder metrics = new DoubleAdder();
+}
+```
+
+业务每次构造一份新增贡献即可：
+
+```java
+StaMetricsEntity stat = new StaMetricsEntity();
+stat.setName("播放量");
+stat.setChannel("渠道A");
+stat.setDeviceType("web");
+stat.setOsName("Windows");
+stat.getMetrics().add(1.5);
+
+EntityCounter.insert("mysql", stat).submit();       // 默认一分钟聚合插入
+// 不指定数据源：EntityCounter.insert(stat).submit();
+// 立即插入：int affected = EntityCounter.insert(stat).execute();
+// 单次覆盖缓存策略：EntityCounter.insert(stat).clearCache(true).submit();
+```
+
+三个入口示例是替代选择，不应把同一份贡献重复提交。`submit()` 返回 void，不代表已落库；活动事务中拒绝 submit，`execute()` 则立即插入并加入当前事务。Builder 只能终结一次。
+
+分组键为“调用线程解析出的数据源组 + 实体类型 + 非数字字段名/字符串值集合”，不是简单拼接字符串。相同维度的 `metrics=1.5` 和 `metrics=2.5` 合成一条 `metrics=4.0` 的新记录；维度不同则分别插入。下一轮继续生成新记录，不查询旧记录、不做 upsert。省略数据源时复用实体 `@JoinSession`、当前注解选库作用域和默认组规则，提交时固定组名，避免后台线程丢失调用方选库上下文；路由过滤器仍在实际执行时运行。
+
+| 数字类型 | 插入聚合规则 |
+| --- | --- |
+| byte/Byte、short/Short、int/Integer、long/Long | 同名字段相加，超过原类型范围时拒绝本次提交，不部分更新其他字段 |
+| float/Float、double/Double | 同名字段相加，拒绝 NaN/无穷及结果溢出；不承诺十进制精度 |
+| BigInteger、BigDecimal | 内存中精确相加，不转成 double；数据库列容量仍由表结构决定 |
+| AtomicInteger、AtomicLong | 提交时读取数值快照，累加后仍按原字段类型还原 |
+| LongAdder、DoubleAdder | 提交时读取 sum 快照，不保留或清零调用者的累加器 |
+
+一行可以有多个数值字段，数字的正负值和零都允许。内部用不可变精确值求和，浮点字段在还原时转回原类型。`Boolean/boolean/AtomicBoolean` 是维度；AtomicReference、原子数组、LongAccumulator/DoubleAccumulator 以及其他自定义 Number 暂不支持，直接报错，不静默取 long 导致截断。声明为 Number/Object 的字段如果实际数字类型在提交间变化，也会拒绝合并；推荐声明具体数字类型。
+
+补充约束：
+
+- 实体须有 `@JoinTable`、可用的无参构造器和可写字段。静态、transient、合成字段与 `@JoinField(exist=false)` 不参与；`update=false` 不影响插入。
+- null 不是通配符：`channel=null` 与 `channel=A` 不同组；数字字段的 null 不增加维度，也不贡献数值。
+- `submit/execute` 时复制维度值并读取数字快照，之后修改原实体不影响已提交数据。复杂维度对象需支持框架 deepClone；推荐字符串、枚举、布尔和时间等简单类型，并保证 toString 稳定。同一对象重复提交会重复累计；不要并发修改它的多个字段来期待整体原子快照，Adder.sum 本身也不保证并发下的严格原子快照。
+- 不预填主键、创建时间。它们为 null 时不进入分组，真正构造插入请求时由 `insertBefore` 补齐。如果业务已经赋值，非数字 ID/时间也会成为维度，数字 ID 则与其他数字一样累加；框架不特殊排除，所以统计模型不应提前设置数字主键。
+- 维度以对象实际 toString 为准。例如 DateTime 默认字符串到秒，LocalDateTime 可含小数秒；不同字符串必定分组，不自动统一精度、时区或大小写。
+- 刷新间隔复用上面的 `yulinlin.data.counter` 配置，默认 1m，达到 1024 个待处理组可提前刷新。它不是自然分钟窗口；需要分钟报表时，业务自行设置统一分钟字符串维度。
+- 每个数据源/实体的插入分组使用 JDBC 批处理，但不主动拆多连接；仍通过标准 RouteSession、编解码器、日志和缓存失效路径执行。与按主键更新模式的聚合区隔离，不混成同一种请求。
+- 失败插入保留已构造的请求和生成主键，下一轮重试，不和新窗口重新求和；不会重新生成 ID 重复插入。但不保证 exactly-once：提交结果不确定、过滤器或回调异常、缺少唯一约束等仍需业务处理。失败组不会因其他组成功而丢弃；持续失败会积压，flush-size 不是容量上限。
+
+MySQL/PostgreSQL/H2/SQLite 自动建表已把原子数字和 Adder 映射为对应数字类型，AtomicBoolean 对应布尔存储；Byte/Short、AtomicInteger/AtomicLong/AtomicBoolean 的标量编解码也已注册。旧表如果把这些字段建成了 TEXT，不自动做破坏性改列，请按业务数据手动迁移。BigDecimal/BigInteger 延续各数据库模块原有存储规则。
+
+---
+
+下一步：返回[批量与同步主题目录](write-sync/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-write-sync-queue"></a>
+<!-- source: doc/write-sync/queue.md -->
+<a id="ai-write-sync-queue-延迟写队列"></a>
+## 延迟写队列
+
+[文档首页](README.md) / [批量与同步](write-sync/README.md)
+
+请求快照、分组、定时或阈值刷新及失败边界。
+
+<a id="ai-write-sync-queue-本页导航"></a>
+### 本页导航
+
+- [延迟写队列](#ai-write-sync-queue-延迟写队列-1)
+
+<a id="ai-write-sync-queue-延迟写队列-1"></a>
+### 延迟写队列
+
+适合任意插入、更新和删除的延后批量执行。它只合并请求节点，不会把相同主键的重复数值增量先求和；播放量、点击量、热度等高频计数优先使用 [EntityCounter.submit()](#ai-write-sync-counter)。三种普通写操作使用同一个入口：
+
+```java
+ModelInsertWrapper.newInstance("mysql", users).queue().execute();
+ModelUpdateWrapper.newInstance("mysql", user).queue().execute();
+ModelDeleteWrapper.newInstance("mysql", User.class)
+        .eq(User::getId, id)
+        .queue()
+        .execute();
+```
+
+`execute()` 在节点成功进入内存队列后立即返回 `0`，不代表数据库影响了零行，也不返回自增主键。Wrapper 创建时已经把对象当时的字段值生成到 `INode`；入队后重新给实体字段赋值不会改变这次写入，Node 中原本保存的 List、Map、Date 等可变值引用则不要再原地修改。普通请求不调用 `.queue()`，仍按原方式立即执行。
+
+```yaml
+yulinlin:
+  data:
+    queue:
+      flush-interval: 1m
+      flush-size: 1024
+      concurrency: 4
+      retry-count: 3
+```
+
+`flush-size` 按当前活动队列的 Node 总数计算，不按 Wrapper 调用次数，也不按单个分组计算。总数达到阈值时会立即异步刷新当前整个队列快照，不必等待 `flush-interval`；例如多个分组各有数百个 Node，合计达到默认的 `1024` 也会立即刷新。刷新快照再按实际 `EntitySession` 实例、请求类型和 `fromClass` 统一分组；该阈值不拆分请求，也不改变事务边界。
+
+不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才按 `clearCache` 规则清理查询缓存。队列合并同组请求时，任一请求显式 `clearCache(true)` 就清理；全部显式为 `false` 才不清理；其余组合继续继承全局配置。
+
+这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。队列没有硬容量上限；如果持续生产速度高于数据库写入速度，待执行和待重试 Node 会继续占用内存，应在业务入口限流并监控积压。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
+
+队列不会为每个入队对象打印日志。开启 `com.yulinlin.data.core.queue.WriteQueueManager=DEBUG` 后，每个非空刷新快照输出一条摘要，包括触发方式、Session/分组/Node 数、影响行数、耗时和剩余积压；失败、重试和最终丢弃仍分别使用 WARN/ERROR。
+
+---
+
+下一步：返回[批量与同步主题目录](write-sync/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-config"></a>
+<!-- source: doc/cache/config.md -->
+<a id="ai-cache-config-缓存选择与公共配置"></a>
+## 缓存选择与公共配置
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+可选实现、默认缓存选择、TTL 和启动规则。
+
+<a id="ai-cache-config-本页导航"></a>
+### 本页导航
+
+- [公共配置](#ai-cache-config-公共配置)
+- [选择实现](#ai-cache-config-选择实现)
+- [启动规则](#ai-cache-config-启动规则)
+
+<a id="ai-cache-config-公共配置"></a>
+### 公共配置
+
+```yaml
+yulinlin:
+  cache:
+    ttl: 10m
+    table-ttl:
+      sys_user: 30m
+      video: 5m
+      "mysql.sys_config": 1h
+    ttl-in-key: false
+    clear-on-write: true
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `default` | 不指定 | 单实现自动选中；多个实现共存时必须指定 `caffeine`、`ehcache` 或 `redis` |
+| `ttl` | `10m` | 查询缓存默认有效期 |
+| `table-ttl` | `{}` | 按物理表名覆盖 ORM 查询 TTL；也可写 `group.table` 精确区分数据源，所有值必须大于 `0` |
+| `ttl-in-key` | `false` | TTL 是否参与 ORM 查询缓存 Key；不影响 `CacheClient` 业务缓存 |
+| `clear-on-write` | `true` | 成功写入后是否默认清理相关 ORM 查询缓存 |
+
+`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理默认缓存中的相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存或广播到其他缓存实现。`QueryCacheProperties` 由 cache-core 自动配置注册；未引入 Provider 且未显式指定 default 时使用空缓存，写路径不执行 namespace 解析和失效处理。
+
+ORM 查询 TTL 的优先级为：请求 `.cache(Duration)` 或 Repository 方法 `@JoinCache(ttl=...)`、`group.table`、普通表名、全局 `ttl`。JOIN、`JoinTableList` 或显式声明多个缓存 namespace 时，每张表先按该顺序得到 TTL，最终使用最短值；未配置的表以全局 TTL 参与比较。自定义 SQL 无法识别资源时使用全局 TTL，调用 `cacheNamespaces("table_name")` 后可以参与表级规则。
+
+`table-ttl` 只调整已经显式启用的 ORM 查询缓存时间，不控制是否缓存。业务不需要缓存时不调用 `.cache()`，或者使用 `.cache(false)` / `CacheMode.NONE`；表级 TTL 和全局 TTL 都必须大于 `0`。这套规则不影响 `CacheClient` 业务缓存，也不改变写入后的 namespace 失效逻辑。表名按框架解析后的物理资源名匹配，不写实体类名。
+
+普通 `sys_user` 规则对所有数据源组中的同名表生效；`mysql.sys_user` 表示“group 为 mysql、物理表为 sys_user”的精确规则，不会修改 SQL 表名。两者同时存在时，mysql 组使用精确规则，其他组继续使用普通表规则。一般项目只写物理表名，确实存在跨数据源同名表且 TTL 不同时再加 group。
+
+默认关闭时，只要查询条件、数据源和 namespace 版本相同，不同 TTL 的查询就会复用同一个缓存条目。已有条目被命中时不会修改其过期时间；`REFRESH`或未命中重新写入时，才使用本次请求的 TTL。这样可以减少重复数据并提高缓存复用率。
+
+需要让不同 TTL 的相同查询完全隔离时开启：
+
+```yaml
+yulinlin:
+  cache:
+    ttl-in-key: true
+```
+
+开启后，解析出的全局、表级或请求级 TTL 会参与物理 Key，同一查询使用不同 TTL 时会保存为不同条目。namespace 名称和版本始终参与 Key，不受此开关影响。
+
+<a id="ai-cache-config-选择实现"></a>
+### 选择实现
+
+三个实现可以同时引入，固定名称为 `caffeine`、`ehcache`、`redis`，不用再配置各模块的 group。它们都会传递引入 `cache-core`，业务不需要重复声明。示例（需引入对应模块，并按 Redis 专题配置连接）：
+
+```yaml
+yulinlin:
+  cache:
+    default: redis
+    ttl: 10m
+    caffeine:
+      maximum-size: 10000
+    ehcache:
+      directory: data/cache
+    redis:
+      key-prefix: dev
+```
+
+- 没有实现且省略 default：照常启动，ORM 无缓存，客户端未命中。
+- 只有一个已注册实现：无需配置 default，兼容原有用法。
+- 多个实现：必须明确指定 default，禁止按 Bean 顺序随机挑选。
+- 显式 default 或客户端指定的缓存名称不存在：明确报错，不回退。缓存名称重复也报错。判断依据是实际注册的 Provider，不是只看 YAML 配置块；例如没有 RedisConnectionFactory 时不会注册 Redis Provider。
+- ORM 的 `.cache()`、CacheMode、TTL、`@JoinCache` 用法不变，只使用默认实现，不增加缓存名参数；配置默认缓存并不会自动让所有查询启用缓存。
+- 客户端可指定其他实现，缓存内容各自独立，不自动复制，不按多个 Provider 依次查找，也不广播清理。
+
+公共 ttl 等配置由这些实现复用；每个实现的容量、持久化、序列化等配置继续独立。选择在启动时固定，修改默认值需要重启。`table-ttl` 中的 `group.table` 仍指**数据源 group**，不是缓存名称。
+
+`cache-redis` 自带的 Caffeine L1 属于 `redis`，不依赖、不注册 `cache-caffeine` Provider。只引入 Redis 模块仍然算一个缓存实现；同时引入 cache-caffeine 后，独立的 caffeine 与 redis 内部 L1 也不会共享数据。
+
+<a id="ai-cache-config-启动规则"></a>
+### 启动规则
+
+| 项目依赖 | 启动结果 |
+| --- | --- |
+| 不引入缓存模块 | 正常启动；`cacheClient.getCache().available()`为 false，缓存优先查询直接访问数据源 |
+| 只引入 `cache-caffeine` | 启用内存缓存 |
+| 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
+| 只引入 `cache-redis` | 启用 Redis L2；默认同时启用模块内置 Caffeine L1 |
+| 多个实现且已配置 `yulinlin.cache.default` | 正常启动；ORM 仅使用默认实现，客户端可显式选择 |
+| 多个实现但未配置 default | 启动报错，要求指定默认缓存 |
+| 显式指定未注册名称 / 名称重复 | 报错，不静默回退 |
+
+第一种情况下不会创建 `QueryCacheProperties`，也不会因 `clearCache(true)` 解析表 namespace。这不是“空缓存执行一遍失效”，而是写路径直接跳过整套缓存失效逻辑。
+
+Session 的缓存由对应工厂在 `create(...)` 内初始化，`RouteSession.registerSession` 只登记已配置完成的节点，不再注入或覆盖缓存。JDBC、Elasticsearch、MongoDB 工厂与 RouteSession 使用容器中的同一个 QueryCache：Session 负责查询缓存，路由负责协调写后失效；没有 Provider 时统一使用 NoOpQueryCache。
+
+第三方数据源继承 `AbstractSession` 时，由工厂调用其 `setQueryCache`；该初始化方法不属于 `EntitySession` 执行接口。直接实现 `EntitySession` 时，由自有工厂完成缓存集成，不要求额外实现缓存 setter。工厂和路由必须复用同一个缓存 Bean，不要各自创建 Provider，否则查询与失效可能操作不同的缓存。
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-caffeine"></a>
+<!-- source: doc/cache/caffeine.md -->
+<a id="ai-cache-caffeine-caffeine-内存缓存"></a>
+## Caffeine 内存缓存
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+引入依赖、容量、淘汰和统计配置。
+
+<a id="ai-cache-caffeine-本页导航"></a>
+### 本页导航
+
+- [Caffeine 内存缓存](#ai-cache-caffeine-caffeine-内存缓存-1)
+
+<a id="ai-cache-caffeine-caffeine-内存缓存-1"></a>
+### Caffeine 内存缓存
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>cache-caffeine</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+调用链为 `Caffeine → 数据源`。它适合追求最低本地延迟、允许应用重启后缓存消失的服务。
+
+```yaml
+yulinlin:
+  cache:
+    ttl: 10m
+    ttl-in-key: false
+    caffeine:
+      initial-capacity: 128
+      maximum-size: 10000
+      expiration-policy: after-write
+      use-system-scheduler: false
+      executor: common-pool
+      record-stats: false
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `initial-capacity` | `16` | Caffeine 内部表的初始容量；只影响扩容次数，不会一次性创建全部缓存对象 |
+| `maximum-size` | `10000` | 最大条目数；ORM 查询缓存与 `CacheClient` 业务缓存共用该容量 |
+| `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
+| `use-system-scheduler` | `false` | 使用 JDK 系统调度器更及时地触发过期维护；关闭时由正常读写维护，过期项仍不会被命中 |
+| `executor` | `common-pool` | `common-pool` 异步执行维护任务；`direct` 在调用线程执行，少一次调度但可能增加请求延迟 |
+| `record-stats` | `false` | 是否记录命中率、淘汰数和加载统计；需要观测时显式开启，默认关闭以减少热点路径计数开销 |
+
+`expiration-policy`同时作用于 ORM 查询缓存和业务缓存。请求级 `cache(Duration)` 或 `Cache.set(..., Duration)` 仍决定各条目的 TTL，策略只决定读取命中后是否重新开始计时。大多数接口服务建议保留 `after-write + common-pool`；会话类热点数据才考虑 `after-access`。
+
+需要监控时先配置 `record-stats: true`，再直接注入具体实现：
+
+```java
+@Resource
+private CaffeineQueryCache caffeineQueryCache;
+
+long entries = caffeineQueryCache.estimatedSize();
+CacheStats stats = caffeineQueryCache.stats();
+caffeineQueryCache.cleanUp(); // 主动执行待处理的过期和容量淘汰维护
+```
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-ehcache"></a>
+<!-- source: doc/cache/ehcache.md -->
+<a id="ai-cache-ehcache-ehcache-持久化缓存"></a>
+## Ehcache 持久化缓存
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+内存与磁盘容量、持久化及配置边界。
+
+<a id="ai-cache-ehcache-本页导航"></a>
+### 本页导航
+
+- [Ehcache 持久化缓存](#ai-cache-ehcache-ehcache-持久化缓存-1)
+
+<a id="ai-cache-ehcache-ehcache-持久化缓存-1"></a>
+### Ehcache 持久化缓存
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>cache-ehcache</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+调用链为 `Ehcache Heap → Ehcache Disk → 数据源`。Ehcache 自己管理内存热点层和磁盘层，不需要再引入 Caffeine。
+
+```yaml
+yulinlin:
+  cache:
+    ttl: 10m
+    ttl-in-key: false
+    ehcache:
+      directory: ./data/cache
+      heap-entries: 10000
+      offheap-size-mb: 0
+      disk-size-mb: 1024
+      persistent: true
+      expiration-policy: after-write
+      disk-threads: 2
+      serializer: json
+      maximum-entry-size-mb: 16
+      record-statistics: false
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `directory` | `data/cache` | 磁盘缓存目录，同一时间只能由一个 CacheManager 占用 |
+| `heap-entries` | `10000` | JVM 堆内热点条目数，ORM 查询与 `CacheClient` 共用 |
+| `offheap-size-mb` | `0` | JVM 直接内存中的可选中间层；`0` 表示关闭。可降低大缓存对 GC 的影响，速度通常快于磁盘，但会增加序列化、内存复制和进程总内存占用 |
+| `disk-size-mb` | `1024` | 整个 Ehcache 磁盘层的容量上限，不是单条缓存上限；空间满后淘汰旧条目。Ehcache 磁盘资源池要求设置有限容量，不提供无限增长模式 |
+| `persistent` | `true` | 是否在正常关闭并重启后保留磁盘缓存 |
+| `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
+| `disk-threads` | `2` | Ehcache 磁盘层固定工作线程数；本地 SSD 通常使用 `2` 到 `4` |
+| `serializer` | `json` | Value 格式：`json`、`smile` 或 `kryo` |
+| `maximum-entry-size-mb` | `16` | 单条序列化结果上限，超出后记录并跳过，防止一个大列表挤占缓存 |
+| `record-statistics` | `false` | 是否记录框架层命中、未命中、写入、超大条目和序列化失败计数；需要观测时显式开启 |
+
+正常关闭时框架调用 `close()`。即使 `persistent: true`，缓存仍应被视为可丢失数据；缓存损坏或反序列化失败会删除对应项并回源查询。缓存量不大时保持 `offheap-size-mb: 0` 即可；只有缓存较大或 GC 压力明显时才建议从 `256` 或 `512` MB 开始启用。容器内存预算必须同时包含 Heap、Off-Heap、线程栈和 JVM 自身开销。
+
+Ehcache 的业务 Value 统一保存为带序列化格式和 TTL 的原始 `byte[]`，Heap、Off-Heap、Disk 不再额外保存一个 Java 包装对象。格式信息随条目保存，因此切换 `json`、`smile` 或 `kryo` 后仍可读取尚未过期的其他格式条目。
+
+需要监控时先配置 `record-statistics: true`，再直接注入具体实现读取和重置统计：
+
+```java
+@Resource
+private EhcacheQueryCache ehcacheQueryCache;
+
+EhcacheQueryCache.Stats stats = ehcacheQueryCache.stats();
+ehcacheQueryCache.resetStatistics();
+```
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-redis"></a>
+<!-- source: doc/cache/redis.md -->
+<a id="ai-cache-redis-redis-与可选本地缓存"></a>
+## Redis 与可选本地缓存
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+Redis 连接、L1 开关、同步与异步写入。
+
+<a id="ai-cache-redis-本页导航"></a>
+### 本页导航
+
+- [Redis 共享缓存与可选 Caffeine L1](#ai-cache-redis-redis-共享缓存与可选-caffeine-l1)
+
+<a id="ai-cache-redis-redis-共享缓存与可选-caffeine-l1"></a>
+### Redis 共享缓存与可选 Caffeine L1
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>cache-redis</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+模块使用 Spring Boot 默认的 Lettuce 和 `RedisConnectionFactory`，不需要业务代码创建 `RedisClient`。默认调用链为 `Caffeine L1 → Redis L2 → 数据源`；关闭 L1 后为 `Redis → 数据源`。
+
+```yaml
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+
+yulinlin:
+  cache:
+    ttl: 10m
+    ttl-in-key: false
+    clear-on-write: true
+    redis:
+      key-prefix: video:prod
+      write-mode: async
+      batch-size: 128
+      serializer: smile
+      maximum-entry-size-mb: 16
+      record-statistics: false
+      caffeine:
+        enabled: true
+        maximum-size: 10000
+```
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `key-prefix` | `dev` | 隔离不同系统、环境和版本的 Redis Key；默认用于本地开发，生产环境建议显式设置为“项目名:环境” |
+| `write-mode` | `async` | `async` 先写 L1，再由虚拟线程写 Redis；`sync` 在当前线程完成 Redis 写入 |
+| `batch-size` | `128` | 一次 Redis Pipeline 最多提交多少条；收到第一条任务就立即提交当前已有任务，不会等队列凑满 128 条 |
+| `serializer` | `smile` | Redis Value 格式：`smile`、`json` 或 `kryo`；JSON 系列使用 Jackson Blackbird |
+| `maximum-entry-size-mb` | `16` | 单条序列化结果上限；超出后跳过缓存，避免大列表占满 Redis 和异步队列 |
+| `record-statistics` | `false` | 是否记录 L1/Redis 命中、未命中、写入失败和异步丢弃统计；默认关闭热点计数 |
+| `caffeine.enabled` | `true` | 是否启用进程内 L1；关闭后每次缓存读取和版本判断都访问 Redis |
+| `caffeine.maximum-size` | `10000` | L1 最大条目数，ORM 查询与 `CacheClient` 共用 |
+
+`async`只用于写入普通缓存值。删除、namespace 失效、单条件分区失效和清空操作始终同步写 Redis，避免旧缓存继续可达。后台线程取到第一条任务后立即 `drainTo` 当时已经存在的任务，并使用 Pipeline 批量发送；`batch-size`是单批上限，不是等待阈值。异步队列满时仅跳过该条 Redis L2 写入，查询仍可回源，不做重试。
+
+`caffeine.enabled=true` 适合单实例或允许一个 L1 TTL 内短暂不一致的业务。每个节点的 L1 和本地版本快照互不广播，其他节点更新数据后，本节点可能继续命中旧 L1，直到条目过期。需要多个实例都立即依据 Redis 版本读取时设置为 `false`；本模块不引入 Pub/Sub、分布式锁或强一致协议。
+
+L1 与 Redis 使用同一个解析后的 TTL，但 Redis 命中后重新放入 L1 会从当前时间重新计算该 TTL，因此 L1 最晚可能比 Redis 条目多存活一个 TTL。单机加速场景可以接受；需要严格以 Redis 过期时间为准时关闭 L1。
+
+Redis 中保存的是 Smile/JSON/Kryo 原始字节，不做 Base64。缓存值带有版本、序列化格式和 TTL 信封，因此修改 `serializer` 后仍能读取未过期的旧格式条目。使用 `smile` 或 `json` 时，实体和业务缓存对象必须符合 Jackson 反序列化要求。
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-serialization"></a>
+<!-- source: doc/cache/serialization.md -->
+<a id="ai-cache-serialization-缓存序列化"></a>
+## 缓存序列化
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+格式选择、兼容性与失败处理。
+
+<a id="ai-cache-serialization-本页导航"></a>
+### 本页导航
+
+- [序列化格式选择](#ai-cache-serialization-序列化格式选择)
+
+<a id="ai-cache-serialization-序列化格式选择"></a>
+### 序列化格式选择
+
+| 格式 | 适合场景 | 特点 |
+| --- | --- | --- |
+| `json` | 兼容性、可排障性优先 | 默认用于 Ehcache；文本可读，类升级和跨版本排障最直观 |
+| `smile` | 性能、体积与兼容性的平衡 | Redis 默认；二进制 JSON，仍复用项目 Jackson 配置 |
+| `kryo` | 复杂对象、循环引用、希望使用成熟二进制格式 | Kryo 5 二进制对象图；无需预注册业务类，实例通过线程安全对象池复用，适配虚拟线程 |
+
+Kryo 本身不是线程安全的，框架使用线程安全对象池复用实例，不会在每个虚拟线程中创建一份 `ThreadLocal`。Kryo 会在缓存字节中携带 Java 类型信息，框架无法预先注册全部业务实体，因此只应用于可信缓存存储；不要让用户提交的任意字节直接进入 Redis 或 Ehcache 磁盘目录。读取失败时，框架会删除损坏条目并回源数据源。
+
+`kryo` 更适合可丢弃、短生命周期缓存，不应把缓存字节当作长期持久化协议。实体字段结构或 Kryo 版本发生较大变化时，旧条目可能无法读取，但框架会删除该条目并重新查询数据源。它不经过 Jackson，因此 Jackson 自定义序列化器不会作用于 Kryo 格式。
+
+Kryo 不需要额外 JVM 参数，启用方式如下：
+
+```yaml
+yulinlin:
+  cache:
+    ehcache:
+      serializer: kryo
+    # 使用 cache-redis 时改为：
+    # redis:
+    #   serializer: kryo
+```
+
+需要观测时开启统计并注入具体实现：
+
+```java
+@Resource
+private RedisQueryCache redisQueryCache;
+
+RedisQueryCache.Stats stats = redisQueryCache.stats();
+long localEntries = redisQueryCache.estimatedLocalSize();
+redisQueryCache.resetStatistics();
+```
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-query"></a>
+<!-- source: doc/cache/query.md -->
+<a id="ai-cache-query-orm-查询缓存"></a>
+## ORM 查询缓存
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+cache()、CacheMode、默认 TTL 和查询行为。
+
+<a id="ai-cache-query-本页导航"></a>
+### 本页导航
+
+- [启用查询缓存](#ai-cache-query-启用查询缓存)
+- [CacheMode](#ai-cache-query-cachemode)
+
+<a id="ai-cache-query-启用查询缓存"></a>
+### 启用查询缓存
+
+`cache()` 不传参数时使用系统默认值 `yulinlin.cache.ttl`，默认 10 分钟；`cache(Duration)` 只覆盖当前查询：
+
+```java
+List<SysUser> users = ModelSelectWrapper
+        .newInstance("mysql", SysUser.class)
+        .cache() // 使用 yulinlin.cache.ttl
+        .where(where -> where.eq("status", 1))
+        .selectList();
+
+List<SysUser> shortLived = ModelSelectWrapper
+        .newInstance("mysql", SysUser.class)
+        .cache(Duration.ofSeconds(30))
+        .where(where -> where.eq("status", 1))
+        .selectList();
+```
+
+自定义 SQL 同样支持缓存：
+
+```java
+QueryRequest<SysUser> request = QueryRequest.newInstance(
+        "select * from sys_user where status = #{status}",
+        Map.of("status", 1),
+        SysUser.class
+);
+request.setSession("mysql");
+request.cache(); // 默认 TTL；也可 cache(Duration.ofSeconds(30))
+List<SysUser> users = request.selectList();
+```
+
+列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。级联查询、批量预加载和懒加载会继承入口查询的缓存模式与请求级 TTL。
+
+同一条查询使用不同 TTL 时会生成不同物理 Key，互不覆盖。默认 `after-write` 下读取不会续期；Provider 配置为 `after-access` 时，命中会按该条目的 TTL 重新计时。
+
+<a id="ai-cache-query-cachemode"></a>
+### CacheMode
+
+`CacheMode`明确控制一次查询是否读缓存、访问数据源和写缓存：
+
+| 模式 | 读缓存 | 未命中访问数据源 | 写缓存 |
+| --- | --- | --- | --- |
+| `NONE` | 否 | 是 | 否 |
+| `CACHE_ONLY` | 是 | 否 | 否 |
+| `READ_THROUGH` | 是 | 是 | 是 |
+| `REFRESH` | 否 | 是 | 是 |
+
+```java
+// cache() 等价于 READ_THROUGH
+List<SysUser> cached = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .cache(CacheMode.READ_THROUGH)
+        .selectList();
+
+// 只允许读取已有缓存；未命中抛出 CacheMissException，绝不查询数据库
+List<SysUser> offline = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .cache(CacheMode.CACHE_ONLY)
+        .selectList();
+
+// 强制查询数据库并覆盖缓存
+List<SysUser> refreshed = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .cache(CacheMode.REFRESH, Duration.ofMinutes(5))
+        .selectList();
+```
+
+未调用 `cache(...)` 时为 `NONE`。没有引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`仍能查询数据源，但不会保存结果；`CACHE_ONLY`一定抛出 `CacheMissException`。
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-client"></a>
+<!-- source: doc/cache/client.md -->
+<a id="ai-cache-client-cacheclient-业务缓存"></a>
+## CacheClient 业务缓存
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+选择缓存对象，读写、回源、批量和清理。
+
+<a id="ai-cache-client-本页导航"></a>
+### 本页导航
+
+- [业务缓存：CacheClient 管理，Cache 操作](#ai-cache-client-业务缓存cacheclient-管理cache-操作)
+
+<a id="ai-cache-client-业务缓存cacheclient-管理cache-操作"></a>
+### 业务缓存：CacheClient 管理，Cache 操作
+
+框架始终暴露一个可注入的 `CacheClient` Bean，仅负责选择、查看缓存。通过它获取 `Cache` 对象后进行业务数据读写。两个接口位于 `com.yulinlin.data.core.cache`，不要与 Spring 的同名 Cache 接口混用。业务缓存与 ORM 使用独立的 Key 和版本域，数据库写操作不会误删验证码、接口结果等业务缓存。
+
+```java
+@Resource
+private CacheClient cacheClient;
+
+Cache cache = cacheClient.getCache();
+cache.set("user", "10001", user); // 使用系统默认 TTL
+cache.set("user", "10002", user, Duration.ofMinutes(30));
+
+SysUser cachedUser = cache.get("user", "10001", SysUser.class);
+boolean exists = cache.exists("user", "10001");
+cache.remove("user", "10001");
+cache.clear("user"); // 整个业务命名空间立即失效
+cache.clear();       // 只清理当前实现的业务缓存，不清理 ORM 查询缓存
+```
+
+选择指定实现，不改变全局默认缓存：
+
+```java
+Cache local = cacheClient.getCache("caffeine");
+Cache redis = cacheClient.getCache("redis");
+local.set("user", "10001", user);
+redis.set("user", "10001", user, Duration.ofMinutes(5));
+
+SysUser loaded = redis.getOrLoad(
+        "user", "10003", SysUser.class, Duration.ofMinutes(5),
+        () -> loadUser("10003")); // loadUser 是业务自行提供的方法
+
+String defaultName = cacheClient.defaultName();
+boolean hasRedis = cacheClient.contains("redis");
+Set<String> names = cacheClient.names();
+Map<String, Cache> caches = cacheClient.caches(); // 只读视图
+```
+
+单实现不必配置默认值；多实现必须配置 `yulinlin.cache.default`。每个实现复用一个 `Cache` 对象及其加载锁，默认选择与显式选择同一实现得到同一个对象。名称不存在直接报错；`contains` 对不存在、null 或空白名称返回 false。不提供运行时注册、删除或切换默认值。
+
+`Cache.name()` / `available()` 描述当前缓存；`clear(namespace)` 仅清当前实现的对应业务命名空间，`clear()` 仅清当前实现的全部业务缓存。都不会广播到其他实现，不执行 Redis FLUSHDB，也不清 ORM 缓存。
+
+API 迁移：旧 `cacheClient.get/set/...` 改成 `cacheClient.getCache().get/set/...`；旧 `named(name)` 改成 `getCache(name)`；旧命名空间 `invalidate(namespace)` 改成缓存对象上的 `clear(namespace)`。不再保留管理对象上的数据操作方法，避免职责混淆。
+
+集合等泛型数据使用 Jackson `TypeReference`：
+
+```java
+List<SysUser> users = cache.get(
+        "user-list", "enabled",
+        new TypeReference<List<SysUser>>() {}
+);
+```
+
+`getOrLoad`支持 Class 和 TypeReference，均有默认 TTL 和指定 TTL 两种重载。单进程同一缓存对象内使用分段锁和二次检查，不保证跨进程只回源一次；加载结果为 null 时不写入缓存，加载异常向调用方传递：
+
+```java
+SysUser loadedUser = cache.getOrLoad(
+        "user", userId, SysUser.class, Duration.ofMinutes(10),
+        () -> userService.findById(userId)
+);
+
+List<SysUser> users = cache.getOrLoad(
+        "user-list", "enabled", new TypeReference<List<SysUser>>() {},
+        () -> loadEnabledUsers());
+
+cache.setAll("user", Map.of("10001", user1, "10002", user2));
+cache.setAll("user", Map.of("10003", user3), Duration.ofMinutes(5));
+Map<String, SysUser> hits = cache.getAll(
+        "user", List.of("10001", "10002"), SysUser.class);
+cache.removeAll("user", List.of("10001", "10002"));
+```
+
+批量操作当前复用逐条 API，不新增线程或队列，不保证原子性；中途失败可能已有部分生效。`getAll` 只返回命中的条目。Redis 原有异步写入模式继续有效，批量方法返回不等于所有 Redis 写入均已完成。
+
+业务缓存不接受空 namespace、空 key 或 `set(..., null)`。不传 TTL 或传 null 使用配置默认 TTL。不引入任何缓存实现时，ORM 正常启动并直接访问数据库；`getCache()` 返回空缓存，`available()` 为 false，读取未命中，写入/清理无操作，`getOrLoad` 正常执行加载函数。此时 `defaultName()` 返回 null，`names()` / `caches()` 为空；显式 `getCache("redis")` 仍报错。
+
+`CacheClient` 不提供按表、实体或全部 ORM 缓存的手动清理入口，也不解析数据源和实体注解。ORM 写入后的失效由 `clear-on-write` / `clearCache(true)` 控制；需要刷新某条查询时使用 `.cache(CacheMode.REFRESH)`。绕过框架直接修改数据库不会自动触发 ORM 缓存失效，需要等待 TTL 或针对受影响查询刷新。业务缓存的 `Cache.clear(...)` 不能用于清理 ORM 查询缓存。
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-cache-invalidation"></a>
+<!-- source: doc/cache/invalidation.md -->
+<a id="ai-cache-invalidation-缓存-key失效与一致性"></a>
+## 缓存 Key、失效与一致性
+
+[文档首页](README.md) / [缓存](cache/README.md)
+
+条件分区失效、表命名空间、多数据源隔离及并发边界。
+
+<a id="ai-cache-invalidation-本页导航"></a>
+### 本页导航
+
+- [Key 规则](#ai-cache-invalidation-key-规则)
+- [失效和一致性](#ai-cache-invalidation-失效和一致性)
+- [单条件自动分区](#ai-cache-invalidation-单条件自动分区)
+- [并发与对象边界](#ai-cache-invalidation-并发与对象边界)
+
+<a id="ai-cache-invalidation-key-规则"></a>
+### Key 规则
+
+Key 在 `core` 中统一生成，不依赖某一种数据库最终 SQL：
+
+```text
+MurmurHash3-x64-128(
+    版本
+  + 路由后的 group/cluster
+  + Session 类型
+  + entityClass/fromClass
+  + 查询类型
+  + 完整 INode 元数据
+  + 实际 TTL
+  + 全局版本与依赖表版本
+)
+```
+
+元数据直接流入128位哈希器，不构建完整中间字符串。`CacheKey` 在内存中只保存两个 `long`；Caffeine 直接使用该对象作为 Key，Ehcache/Redis 持久化或日志输出时才按需生成 `v2:` 开头的32位十六进制文本。实体反射字段通过 `ClassValue` 缓存，不会在每次查询时重新扫描、排序。
+
+`CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
+
+缓存命中时不会访问数据源，因此数据库模块的 `log=true` 不会打印 SQL。排障时可将 `com.yulinlin.data.cache.QueryCache` 调整为 DEBUG，查看 `HIT`、`MISS`、`REFRESH`、等待后命中以及事务/行锁绕过等事件；日志只记录哈希 Key，不记录缓存值。需要确认物理 SQL 时使用 `CacheMode.REFRESH` 或暂时关闭该次查询缓存。
+
+分页内部的 `count` 使用独立的逻辑 Key：普通查询只保留 `from/join + where`，因此不同页码、页大小、排序、返回字段、高亮和行锁会复用同一个总数；聚合查询还会保留 `aggregations + metrics + having`，避免不同分组统计误命中。普通列表 Key 仍然包含分页和排序。未知的第三方 Wrapper 不做字段裁剪，继续使用完整节点生成 Key，以正确性优先。
+
+数据源 group 必须进入 Key。同一个实体和条件在 `mysql`、`pgsql` 或其他 group 中不会串缓存；同一个逻辑 group 下的负载均衡节点可以共享逻辑 Key。
+
+<a id="ai-cache-invalidation-失效和一致性"></a>
+### 失效和一致性
+
+缓存始终受 TTL 约束。引入缓存 Provider 后，标准 `insert/update/delete` 未指定策略时继承 `yulinlin.cache.clear-on-write`，默认在提交成功后清理相关查询缓存：
+
+```java
+int affected = ModelUpdateWrapper
+        .newInstance("mysql", patch)
+        .execute();
+
+int deleted = ModelDeleteWrapper
+        .newInstance("mysql", SysUser.class)
+        .eq("status", 0)
+        .clearCache(false) // 明确接受 TTL 窗口内的旧结果时，关闭本次清理
+        .execute();
+```
+
+写操作只提供一个请求级 API：
+
+| API | 行为 |
+| --- | --- |
+| 不调用 `clearCache(...)` | 继承 Provider 配置 `yulinlin.cache.clear-on-write` |
+| `clearCache(true)` | 本次写入提交成功后清理相关查询缓存，覆盖全局 `false` |
+| `clearCache(false)` | 本次写入不清理查询缓存，覆盖全局 `true` |
+
+<a id="ai-cache-invalidation-单条件自动分区"></a>
+#### 单条件自动分区
+
+分区失效是缓存 Provider 的内置能力，始终自动开启，不需要配置，也没有额外 API。只有已经调用 `cache(...)` 或使用 `@JoinCache` 的查询才会进入缓存；它不会让普通查询自动启用缓存。
+
+当同一数据源、同一物理表的缓存查询始终使用同一个单字段等值条件时，框架会按条件值划分缓存：
+
+```java
+List<SysUser> alice = ModelSelectWrapper.newInstance("mysql", SysUser.class)
+        .eq("username", "Alice")
+        .cache()
+        .selectList();
+```
+
+例如当前结构是 `username = ?`，更新或删除条件同样为 `username = 'Alice'` 时，提交后只让 `Alice` 分区失效，`Bob` 分区仍可命中。普通列表、分页、Count、聚合等缓存仍按表失效，不会因为分区优化而保留旧结果。
+
+最小识别规则如下：
+
+- 查询必须是单表、非行锁，并且有效条件只有一个 `Eq`；框架工厂产生的空 `And/Or` 包装会被忽略。
+- 条件字段只识别普通列名或当前表已验证的别名前缀；JSON 路径、函数、引号字段和未知前缀直接按整表处理。
+- 字段名先走实体的 `JoinField`/驼峰映射，条件值先走当前 Session 的 Coder；映射或编码结果无法安全识别时同样按整表处理。
+- 更新、删除使用相同字段的单个 `Eq` 时精准失效对应值。
+- 更新同时修改该条件字段、插入、自定义 SQL、多条件或无法解析的写入，会让该表当前全部分区失效。
+- 如果缓存查询又使用第二个等值字段，例如先有 `username = ?`、后来又有 `id = ?`，该物理表自动升级为普通整表失效模式。
+- 状态按 `Session 类型 + group + 物理表` 隔离；同表对应多个实体类时共享同一判断。
+
+分区 Key 仍保留完整查询信息，因此不同分页、排序、投影和 TTL 不会错误命中；分区版本只负责让同一个条件值下的这些条目一起失效。没有引入缓存模块，或第三方 Provider 未实现分区能力时，会安全回退为现有整表失效。
+
+实体查询和写入优先从过滤器增强后的 `INode`、From/Join/Store 提取实际表名，节点无法识别表时才回退到 `@JoinTable`、`@JoinTableList`。动态分表不会同时混入注解中的原始逻辑表，Key、表级 TTL 和失效范围使用最终物理表；显式 `cacheNamespaces(...)` 始终追加。原始 SQL 不做表名猜测，有动态表或隐藏依赖时须显式声明实际命名空间。自定义 SQL 没有实体或节点表信息时，启用清理会退化为清理全部 ORM 查询缓存并输出警告：
+
+```java
+ExecuteRequest<Object> write = ExecuteRequest.newInstance(
+        "update sys_user set status=#{status} where id=#{id}",
+        Map.of("status", 1, "id", 7)
+);
+write.setSession("mysql");
+int affected = write.clearCache(true).execute();
+```
+
+自定义查询若没有带 `@JoinTable` 的 `fromClass`，可用 `cacheNamespaces("sys_user", "sys_role")` 声明依赖表。这样任一表失效时，该复杂 SQL、JOIN 或聚合结果都会同时失效。
+
+延迟写队列在真正写入成功后才清理，不在入队时清理。相同 `Session + 操作类型 + fromClass` 的请求合并时使用三态规则：任一请求显式 `true`，合并组就是 `true`；全部显式 `false`，合并组才是 `false`；包含未指定且没有 `true` 时保持未指定，执行时继承全局配置。
+
+失效采用“命名空间版本号”，不会遍历百万级 Key：普通查询 Key 携带 `Session 类型 + group + 表名` 的版本快照；单条件分区查询携带表策略版本和对应条件值版本。写入成功后只递增相关版本，旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 的普通 namespace 版本会持久化；分区条目在进程重启后使用新的运行期版本，不会重新命中重启前的旧分区结果。Redis 会把普通版本和分区版本都保存在共享 Redis 元数据中；关闭 L1 时，各节点每次都读取共享版本。
+
+事务规则：
+
+- 普通单次写入在底层 Session 提交成功后按 `clearCache` 策略清理。
+- `RouteSession` 多数据源事务会合并重复表名，只在最外层提交成功后统一清理。
+- 多数据源提交中途失败、结果无法确定时会保守清理待处理缓存；最多多一次回源，不保留可能已提交数据的旧缓存。
+- Spring 事务在 `afterCommit` 阶段清理；回滚或提交失败不清理。
+- 活动事务内的查询直接访问数据源，不读取也不写入全局查询缓存，防止未提交结果在回滚后残留；事务内使用 `CACHE_ONLY` 会直接报告缓存不可用。
+- `lock()` 行锁查询始终访问数据库，不会因为 `cache()` 命中而跳过加锁。
+- 查询回源期间若并发发生更新，旧查询只能写入旧版本 Key，不能重新污染新版本缓存。
+
+即使有主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。事务外要求绝对强一致的查询使用 `CacheMode.NONE`。
+
+<a id="ai-cache-invalidation-并发与对象边界"></a>
+### 并发与对象边界
+
+同一个 Key 回源时使用分段锁和二次检查，降低缓存到期瞬间的重复查询。缓存保存查询增强前的数据；返回给业务前会复制模型并创建当前调用需要的统一实体代理，旧事务代理不会被保存复用。
+
+Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节保存结果；选择 JSON/Smile 时实体应符合 Jackson 的反序列化要求。连接、流、Statement、ResultSet 等资源对象不能作为缓存查询结果。
+
+---
+
+下一步：返回[缓存主题目录](cache/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-modules"></a>
+<!-- source: doc/security/modules.md -->
+<a id="ai-security-modules-安全模块选型"></a>
+## 安全模块选型
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+仅需加密限流用 security；登录选择 JWT 或 Sa-Token。
+
+<a id="ai-security-modules-本页导航"></a>
+### 本页导航
+
+- [引入模块](#ai-security-modules-引入模块)
+- [JWT 与 Sa-Token 如何选择](#ai-security-modules-jwt-与-sa-token-如何选择)
+
+<a id="ai-security-modules-引入模块"></a>
 ### 引入模块
 
 一个项目只选一种登录实现，不同时引入 `security-jwt` 和 `security-sa-token`。它们均依赖公共 `security`，无需重复声明公共模块：
@@ -3055,6 +3851,56 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 
 鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
 
+<a id="ai-security-modules-jwt-与-sa-token-如何选择"></a>
+#### JWT 与 Sa-Token 如何选择
+
+下面比较的是本仓库两种适配器的当前行为，而不是 Sa-Token 的全部可选模式。一个项目只选一个登录模块。
+
+| 能力 | security-jwt | security-sa-token |
+| --- | --- | --- |
+| 登录状态 | 纯无状态，不保存 Token 记录 | 有状态，依赖 Sa-Token 登录记录 |
+| 请求认证 | 验签、时间检查，再按 userId 加载用户 | 检查 Sa-Token 登录及有效期状态，再加载用户 |
+| 默认存储 | 无登录存储 | Sa-Token 默认内存；可用其原生共享存储扩展 |
+| 注销 | 只清理线程，客户端删除 Token；不能使旧 JWT 失效 | 服务端注销当前 Token，并清理线程 |
+| 踢人、在线会话管理 | 不提供 | 使用底层 StpLogic 原生能力；不是公共 ISecurityManager 的方法 |
+| 应用重启 | 密钥、issuer 等校验配置不变且用户仍有效时，未过期 JWT 可继续使用 | 内存记录丢失则需重登；共享持久化存储需保证记录仍在且未过期 |
+| 修改密码 | 默认不撤销旧 JWT | 仅修改密码也不会自动踢人；业务需在提交后调用原生注销/踢人能力 |
+| 停用/删除账号 | UserStore 拒绝加载，阻止后续访问；不等于永久撤销 JWT | UserStore 拒绝加载；适配器处理不存在/不允许登录的用户 |
+| 自动续期 | 不提供，refresh 只刷新用户资料 | 活跃超时/续期规则取决于原生 Sa-Token 配置 |
+| 业务登录调用 | login(userId, deviceType) | 同左 |
+
+简单无状态认证选 JWT；需要服务端强制失效、设备会话管理选 Sa-Token。JWT 的服务端 logout 不足以防止已经泄漏的 Token 再次使用；重新启用账号后，其仍未过期的旧 JWT 可能再次被接受。删除账号后不要复用旧 userId，否则该身份的旧 JWT 在有效期内也可能被新账号接受。高要求业务应使用有状态方案或自定义凭证版本等校验。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-crypto"></a>
+<!-- source: doc/security/crypto.md -->
+<a id="ai-security-crypto-接口加密与前端对接"></a>
+## 接口加密与前端对接
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+完整配置、多设备、CBC/GCM、明密文兼容和安全边界。
+
+<a id="ai-security-crypto-本页导航"></a>
+### 本页导航
+
+- [完整主配置](#ai-security-crypto-完整主配置)
+- [配置项与默认值](#ai-security-crypto-配置项与默认值)
+- [接口注解](#ai-security-crypto-接口注解)
+- [响应加密规则](#ai-security-crypto-响应加密规则)
+- [默认 CBC 前端对接](#ai-security-crypto-默认-cbc-前端对接)
+- [多设备选择](#ai-security-crypto-多设备选择)
+- [明文排除路径](#ai-security-crypto-明文排除路径)
+- [可选 AES-GCM](#ai-security-crypto-可选-aes-gcm)
+- [手动使用](#ai-security-crypto-手动使用)
+- [安全边界与限制](#ai-security-crypto-安全边界与限制)
+
+<a id="ai-security-crypto-完整主配置"></a>
 ### 完整主配置
 
 正式项目推荐使用多设备配置。下面完整展示设备请求头、未知设备兜底、明文路径、请求大小以及 Web、Android、iOS 独立密钥：
@@ -3133,601 +3979,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 
 示例值仅用于说明长度。生产密钥必须由环境变量或密钥管理系统提供，不能提交到仓库。
 
-### 接口限流
-
-`@ApiLimit` 可以放在 Controller 类或方法上，方法配置覆盖类配置。默认同一客户端对同一接口每分钟最多调用 60 次，并按 IP 隔离：
-
-```java
-import com.yulinlin.security.annotation.ApiLimit;
-import com.yulinlin.security.limit.LimitBy;
-
-@RestController
-public class VideoController {
-
-    // 等价于 count=60、interval="1m"、by=LimitBy.IP
-    @ApiLimit
-    @PostMapping("/video/list")
-    public R<?> list(@RequestBody VideoListPo request) {
-        return R.ok(videoService.list(request));
-    }
-
-    // 设备 ID 缺失或非法时自动回退到真实 IP
-    @ApiLimit(count = 20, interval = "10s", by = LimitBy.DEVICE)
-    @PostMapping("/video/like")
-    public R<?> like(@RequestBody VideoLikePo request) {
-        return R.ok(videoService.like(request));
-    }
-}
-```
-
-支持 `500ms`、`10s`、`1m`、`1h` 等 Spring Duration 写法。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。超出限制时返回 HTTP `429`、`Retry-After` 响应头和未加密的统一 JSON：
-
-```json
-{
-  "data": null,
-  "code": 429,
-  "crypt": false,
-  "ok": false,
-  "msg": "请求过于频繁，请稍后再试",
-  "timestamp": 1792070400000
-}
-```
-
-每条计数记录的 Key 是 `Controller 方法 + 限流维度 + IP/设备 ID`。Caffeine 根据该接口的 `interval` 淘汰不活跃记录，并用 `maximum-size` 防止大量随机 IP 或设备 ID 持续占用内存；未开启统计功能。达到容量上限而被提前淘汰的客户端再次访问时会重新计数。
-
-#### IP 黑名单
-
-IP 黑名单由业务实现 `IpBlacklist` 接口，框架不规定数据来自内存、Caffeine、Redis 还是数据库。接口只接收已经完成可信代理检查并规范化的真实客户端 IP：
-
-```java
-import com.yulinlin.security.limit.IpBlacklist;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-@Configuration
-public class SecurityConfiguration {
-
-    @Bean
-    public IpBlacklist ipBlacklist(IpBlacklistService service) {
-        return service::isBlocked;
-    }
-}
-```
-
-一个简单的本地实现：
-
-```java
-import org.springframework.stereotype.Service;
-
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Service
-public class IpBlacklistService {
-    private final Set<String> blockedIps = ConcurrentHashMap.newKeySet();
-
-    public boolean isBlocked(String ip) {
-        return blockedIps.contains(ip);
-    }
-
-    public void block(String ip) {
-        blockedIps.add(ip);
-    }
-
-    public void unblock(String ip) {
-        blockedIps.remove(ip);
-    }
-}
-```
-
-没有业务 Bean 时，框架注册默认空实现并放行所有 IP。命中黑名单时不进入 Controller，直接返回 HTTP `403` 和未加密的统一 JSON，`msg` 为 `当前 IP 已被禁止访问`。黑名单检查对所有 Controller 生效，不要求存在 `@ApiLimit`。
-
-`isBlocked` 会在每次业务请求进入 Controller 前执行，不要在里面直接进行慢 SQL 查询。推荐使用内存集合、Caffeine、Redis Set，或者把数据库数据加载到本地后定时刷新。拉黑、解除、过期时间、CIDR 规则和管理接口都属于业务实现；框架只负责可靠传入真实 IP。实现抛出的异常不会被静默当作放行，避免安全检查在故障时无声失效。
-
-#### Nginx 真实 IP
-
-后端由本机 Nginx 代理时推荐：
-
-```nginx
-location /api/ {
-    if ($request_method = OPTIONS) {
-        return 204;
-    }
-
-    rewrite ^/api/(.*)$ /$1 break;
-    proxy_pass http://127.0.0.1:9091;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-框架先检查 Java 服务看到的 TCP 来源地址。只有来源匹配 `trusted-proxies` 时才读取 `X-Real-IP`；否则忽略所有转发 IP，使用连接来源地址。缺失、非法或包含多个值的 `X-Real-IP` 也会回退连接地址，避免客户端伪造。`trusted-proxies` 支持单个 IPv4、IPv6 和 CIDR，例如容器网络可以明确增加 `172.16.0.0/12`，不要无条件信任所有地址。Java 服务端口也应只允许可信 Nginx 访问。
-
-如果 Nginx 前面还有 CDN 或负载均衡，必须先正确配置 Nginx `real_ip` 模块，使 `$remote_addr` 恢复为真实客户端 IP，再转发给 Java。框架不会取 `X-Forwarded-For` 的第一个值。
-
-`LimitBy.DEVICE` 读取 `Device-Id`，接受最长 128 个字符的字母、数字、点、下划线、冒号和短横线。设备 ID 由客户端提供，能够被修改或轮换，因此视频列表、详情和防采集接口应优先按 IP；设备维度适合点赞、收藏等正常设备行为的额度隔离，不能替代登录鉴权。
-
-限流配置默认值：
-
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `enabled` | `true` | 是否处理 `@ApiLimit` |
-| `maximum-size` | `50000` | 本机同时保留的计数器上限，不是单接口请求次数 |
-| `ip-header` | `X-Real-IP` | 仅从可信代理连接读取的客户端 IP 请求头 |
-| `device-id-header` | `Device-Id` | `LimitBy.DEVICE` 使用的请求头 |
-| `trusted-proxies` | `127.0.0.1`、`::1` | 可以提供真实 IP 请求头的代理地址或 CIDR |
-
-### 登录用户模型
-
-完整业务接入参考第九专题的 [Admin 两表 RBAC 与无状态 JWT 登录案例](09-项目开发最佳实践.md#admin-两表-rbac-与登录案例)：业务认证后用 userId 登录，`AdminUserStore` 加载最新用户与权限。admin 只引入 security-jwt，不保存登录记录，不实现安全管理器或撤销逻辑；本轮源码迁移未编译、未执行测试。
-
-登录用户模型只约束最小身份、角色和权限协议，不规定用户表、登录流程、密码校验、Token，以及权限数据如何存储、加载。业务用户模型按需实现 `IUserDetails`：
-
-```java
-import com.yulinlin.security.auth.IUserDetails;
-
-import java.util.Set;
-
-public class LoginUser implements IUserDetails {
-    private String userId;
-    private String username;
-    private Set<String> roles;
-    private Set<String> permissions;
-    private String tenantId;
-
-    @Override
-    public String getUserId() {
-        return userId;
-    }
-
-    @Override
-    public String getUsername() {
-        return username;
-    }
-
-    @Override
-    public Set<String> getRoles() {
-        return roles;
-    }
-
-    @Override
-    public Set<String> getPermissions() {
-        return permissions;
-    }
-
-    @Override
-    public Object getAttribute(String name) {
-        return switch (name) {
-            case "tenantId" -> tenantId;
-            default -> null;
-        };
-    }
-}
-```
-
-`roles` 和 `permissions` 使用 `Set` 表达唯一集合。接口自带 `hasRole(role)` 和 `hasPermission(permission)`，执行精确且区分大小写的集合判断；参数、角色集合或权限集合为 `null` 时返回 `false`。框架不自动增加 `ROLE_` 前缀，也不解释通配符。
-
-```java
-if (loginUser.hasRole("admin")) {
-    // 当前用户具有 admin 角色
-}
-
-if (loginUser.hasPermission("video:update")) {
-    // 当前用户可以修改视频
-}
-```
-
-`getAttribute(name)` 只提供按名称读取，不暴露可修改的元数据 Map，也不强制业务使用 Map 存储。未知属性返回 `null`。
-
-该模型不应包含密码、密码哈希、AES 密钥、Token、签发时间、过期时间、IP 或设备 ID。密码和 Token 属于认证凭证，IP 和设备属于单次登录或请求上下文，不属于用户本身。
-
-#### 安全管理器
-
-业务先校验账号、密码、验证码和状态，再用可信 `userId` 登录。框架不处理账号密码，也不查询指定用户表。使用 JWT 或 Sa-Token 实现时，不需要自己实现整个 `ISecurityManager`。
-
-```java
-import com.yulinlin.security.auth.LoginResult;
-import com.yulinlin.security.auth.SecurityUtil;
-
-// 业务代码：校验密码、验证码、状态，返回真实用户 ID。
-String userId = accountService.authenticate(username, password, code);
-LoginResult result = SecurityUtil.login(userId, "web");
-// Controller 将 result 包装成项目的 R<LoginResult> 返回。
-```
-
-上面的 `accountService` 是业务服务，不是框架组件。不能把前端传入的 userId 直接交给 login，否则会绕过身份认证。失败时业务可抛出 `LoginException`，账号不存在和密码错误应使用相同对外提示；基础设施错误不要伪装成登录成功。
-
-```java
-SecurityUtil.login(userId);        // deviceType 默认 "default"
-SecurityUtil.login(userId, "web"); // 设备类型由本次登录明确传入
-SecurityUtil.getUserDetails();    // 当前用户，未登录为 null
-SecurityUtil.requireUser();       // 当前用户，未登录抛 LoginException
-SecurityUtil.getUserDetails(userId); // 读取指定用户，不切换当前身份
-SecurityUtil.getToken();
-SecurityUtil.hasRole("admin");
-SecurityUtil.hasPermission("video:update");
-SecurityUtil.refresh();           // 重新加载当前用户
-SecurityUtil.refresh(userId);     // 指定用户；不是当前用户时仅加载并返回
-SecurityUtil.logout();            // JWT：清理线程；Sa-Token：注销当前会话并清理线程
-SecurityUtil.manager();           // 获取底层 ISecurityManager，也可以直接注入它
-```
-
-`login(String, String)` 现在表示 **userId + deviceType**，不再表示用户名和密码；旧三参数登录也已移除。登录成功返回 `LoginResult(token, expiresAt, user)`。`user` 为不含密码的 `IUserDetails`，不要返回含凭证的 ORM 用户实体。登录设备与加密用的 `Device-Type` 请求头不是自动绑定关系。
-
-`SecurityUtil` 只是静态委托入口，应用单例初始化完成后可用；不要在 Bean 构造器等过早阶段调用。普通业务也可以直接注入唯一的 `ISecurityManager`。不需要设计多管理器选择或运行时切换。
-
-#### 常用组件扩展入口
-
-只替换需要定制的组件，其他继续使用当前登录实现的默认行为。各扩展点只注册一个业务 Bean，不需要额外配置“实现类名称”。
-
-| 需要定制的能力 | 扩展点及包 | 怎么接入 |
-| --- | --- | --- |
-| 安全用户模型 | `auth.IUserDetails` | 业务安全 DTO 实现接口，排除密码等敏感字段 |
-| 加载用户、角色、权限 | `auth.UserStore` | 提供 Bean，实现 `load(userId)`；JWT、Sa-Token 都使用它 |
-| JWT 生成及验签解析 | `jwt.JwtTokenCodec` | 提供 Bean，同时实现 `generate`、`parse`，默认 Codec 自动退出 |
-| 有状态登录、撤销、在线会话 | `auth.ISecurityManager` 或 Sa-Token 原生扩展 | 使用 security-sa-token，或提供自己的管理器；JWT 模块无存储接口 |
-| Token 从哪里读取、怎样恢复身份 | `web.LoginInterceptor` | 提供该类型 Bean；框架自动注册，不用再写 MVC 注册器 |
-| 整体接入其他安全框架 | `auth.ISecurityManager` + `web.LoginInterceptor` | 管理器委托登录/注销/用户能力；自定义拦截器接入外部身份生命周期，框架自动注册 |
-| Sa-Token 原生能力 | `satoken.SaTokenSecurityManager` | 使用 `stpLogic()`；存储和策略沿用 Sa-Token 自身扩展 |
-| IP 黑名单 | `limit.IpBlacklist` | 实现并注册 Bean，见 [IP 黑名单](#ip-黑名单) |
-
-表中包名前缀均为 `com.yulinlin.security`。加密设备密钥、限流参数优先使用本专题配置和注解，不必为普通配置需求替换整个安全管理器。
-
-#### 加载用户信息
-
-```java
-import com.yulinlin.security.auth.UserStore;
-import org.springframework.context.annotation.Bean;
-
-@Bean
-public UserStore userStore(AccountService accounts) {
-    return userId -> accounts.loadSecurityUser(userId);
-}
-```
-
-`AccountService.loadSecurityUser` 为业务自定义方法，返回实现 `IUserDetails` 的安全 DTO。只按 userId 加载，不在这里再次验证密码或验证码。用户不存在、已停用或不允许登录时返回 `null` 或抛 `LoginException`；数据库等故障直接抛出，不能返回一个默认用户。返回对象的 userId 必须与查询 ID 一致。
-
-JWT 中不保存完整用户资料。每次正常请求恢复身份时，验签并检查有效期后重新调用 `UserStore`，不查询登录记录；同一请求后续读取线程快照，不重复加载。业务可在 `UserStore` 内加缓存，但必须自行处理角色、状态变更的失效，`refresh()` 不会替你清理业务缓存。“无状态”指不保存 Token 登录状态，不表示完全不查用户数据库。
-
-#### JWT 与 Sa-Token 如何选择
-
-下面比较的是本仓库两种适配器的当前行为，而不是 Sa-Token 的全部可选模式。一个项目只选一个登录模块。
-
-| 能力 | security-jwt | security-sa-token |
-| --- | --- | --- |
-| 登录状态 | 纯无状态，不保存 Token 记录 | 有状态，依赖 Sa-Token 登录记录 |
-| 请求认证 | 验签、时间检查，再按 userId 加载用户 | 检查 Sa-Token 登录及有效期状态，再加载用户 |
-| 默认存储 | 无登录存储 | Sa-Token 默认内存；可用其原生共享存储扩展 |
-| 注销 | 只清理线程，客户端删除 Token；不能使旧 JWT 失效 | 服务端注销当前 Token，并清理线程 |
-| 踢人、在线会话管理 | 不提供 | 使用底层 StpLogic 原生能力；不是公共 ISecurityManager 的方法 |
-| 应用重启 | 密钥、issuer 等校验配置不变且用户仍有效时，未过期 JWT 可继续使用 | 内存记录丢失则需重登；共享持久化存储需保证记录仍在且未过期 |
-| 修改密码 | 默认不撤销旧 JWT | 仅修改密码也不会自动踢人；业务需在提交后调用原生注销/踢人能力 |
-| 停用/删除账号 | UserStore 拒绝加载，阻止后续访问；不等于永久撤销 JWT | UserStore 拒绝加载；适配器处理不存在/不允许登录的用户 |
-| 自动续期 | 不提供，refresh 只刷新用户资料 | 活跃超时/续期规则取决于原生 Sa-Token 配置 |
-| 业务登录调用 | login(userId, deviceType) | 同左 |
-
-简单无状态认证选 JWT；需要服务端强制失效、设备会话管理选 Sa-Token。JWT 的服务端 logout 不足以防止已经泄漏的 Token 再次使用；重新启用账号后，其仍未过期的旧 JWT 可能再次被接受。删除账号后不要复用旧 userId，否则该身份的旧 JWT 在有效期内也可能被新账号接受。高要求业务应使用有状态方案或自定义凭证版本等校验。
-
-#### JWT 最小接入
-
-引入 `com.yulinlin:security-jwt:3.0`，注册上述 `UserStore`，再配置：
-
-```yaml
-yulinlin:
-  security:
-    jwt:
-      secret: ${YULINLIN_JWT_SECRET} # 至少 32 字节随机密钥的 Base64，不是 AES 设备密钥
-      issuer: yulinlin
-      ttl: 2h
-```
-
-默认 `DefaultJwtTokenCodec` 使用 HS256，签发 `sub=userId`、唯一 `jti`、`deviceType`、`iat`、`exp`、`iss`；验签时检查算法、签名和签发者，管理器还检查时间与服务端记录。`ttl` 默认 2h，允许 1s～365d。JWT 是签名而非加密，不要加入密码等秘密资料。
-
-本实现是**纯无状态 JWT**，没有登录记录、Token 黑名单、按用户撤销或存储容量配置。`LoginSession` 只是当前请求的线程快照，不是持久化会话。保持签名密钥和校验配置稳定即可在应用重启后验证未过期 JWT，前提是 `UserStore` 仍允许该用户访问。
-
-从旧有状态版本迁移时，之前因删除记录而失效、但尚未过期且验签有效的 JWT 可能重新被接受。如果迁移要求所有用户重新登录，需由部署方明确轮换签名密钥或调整验证策略，不能继续依赖已移除的撤销记录。
-
-#### 自定义 Token 生成与解析
-
-```java
-package com.example.security;
-
-import com.yulinlin.security.auth.IUserDetails;
-import com.yulinlin.security.jwt.JwtTokenCodec;
-import com.yulinlin.security.jwt.TokenInfo;
-
-// 在业务配置中将此实现注册成唯一 JwtTokenCodec Bean。
-public class BusinessTokenCodec implements JwtTokenCodec {
-    private final BusinessTokenService tokens;
-
-    public BusinessTokenCodec(BusinessTokenService tokens) {
-        this.tokens = tokens;
-    }
-
-    @Override
-    public String generate(IUserDetails user, String deviceType) {
-        return tokens.issue(user.getUserId(), deviceType);
-    }
-
-    @Override
-    public TokenInfo parse(String token) {
-        return tokens.verifyAndParse(token);
-    }
-}
-```
-
-`BusinessTokenService` 是示意的业务实现，不是框架类；请委托成熟 JWT 库做签发和验签，不要只 Base64 解码。注册方式：`@Bean JwtTokenCodec jwtTokenCodec(BusinessTokenService tokens) { return new BusinessTokenCodec(tokens); }`。
-
-解析结果定义为：
-
-```java
-public record TokenInfo(
-    String userId,
-    String deviceType,
-    String tokenId,
-    Instant issuedAt,
-    Instant expiresAt
-) {}
-```
-
-- 每次新登录生成唯一 tokenId；保留传入的 userId 和 deviceType，不能更换身份。管理器会回读解析结果核对并设置线程快照，不保存记录，也不查重 tokenId。
-- parse 必须完成验签等真实性校验；无效 Token 返回 null 或抛 `LoginException`。外部依赖故障应正常抛出，不能绕过验证。
-- 签发时间不能在未来，过期时间必须晚于签发时间且未过期。自定义 Codec 以返回的 expiresAt 决定会话到期，不自动再套一层配置 ttl。
-- 兼容旧 Token 未携带 deviceType：解析结果可为 null，不从服务端记录补齐；其他签名、用户、tokenId、有效期校验不放宽。新登录生成的 Token 仍需携带匹配的 deviceType。
-- 提供自定义 Codec 后，无需默认 Codec 的 secret/issuer；签名策略由自定义实现负责。它不负责存储、注销、加载用户或设置线程上下文。
-
-如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码。正常登录调用 `SecurityUtil.login`，由管理器加载用户、核对生成结果并建立当前线程身份。手动签发的 JWT 满足相同验签、时间和用户检查时也可被接受，不需要服务端登记。
-
-#### 自定义有状态登录
-
-`security-jwt` 不再提供登录存储或撤销 SPI。旧的 `JwtSessionStore`、`JwtSession`、`CaffeineJwtSessionStore`、`getByUserId/removeByUserId` 及 `jwt.maximum-size` 已移除，不能继续复制旧 Redis Store 示例。
-
-需要在线会话、注销后立即失效、踢人或多设备管理时，优先选择 `security-sa-token`；需要自己的规则时，提供唯一的 `ISecurityManager` Bean（见[自定义与外部框架接入](#接入外部安全框架)），不要给无状态 JWT 默认链路偷偷增加存储。
-
-业务自定义有状态实现至少负责：
-
-- 登录成功前可靠写入服务端记录；明确是一条 Token 对应一个登录，还是按设备复用。
-- 请求时验证凭证及记录有效性，再加载允许登录的用户；存储故障不能当作验证成功。
-- 注销时同步撤销记录；按用户撤销、重置密码失效等由业务定义，不属于公共接口的默认能力。
-- 多实例使用共享存储；若用 Redis，需考虑 TTL、持久化、故障及副本读一致性。登录记录丢失应拒绝登录，不能自动退回纯 JWT 放行。
-- 明确请求上下文的恢复与清理归属，不让旧线程身份泄漏到下一请求。
-
-如果自定义逻辑只是签名算法、密钥来源或 Token 格式，仍使用 `JwtTokenCodec`，无需实现整套管理器。若引入了撤销表或登录存储，就已经是有状态方案，文档和调用方都应明确这一点。
-
-#### 自定义登录拦截器
-
-仅需改变 Token 请求头时，继承默认实现，保留它的验证与上下文处理：
-
-```java
-import com.yulinlin.security.auth.ISecurityManager;
-import com.yulinlin.security.web.LoginContextInterceptor;
-import com.yulinlin.security.web.LoginInterceptor;
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.context.annotation.Bean;
-
-@Bean
-public LoginInterceptor loginInterceptor(ISecurityManager manager) {
-    return new LoginContextInterceptor(() -> manager) {
-        @Override
-        protected String resolveToken(HttpServletRequest request) {
-            return request.getHeader("X-Token"); // 示例：直接携带 Token，不带 Bearer 前缀
-        }
-    };
-}
-```
-
-框架发现业务 `LoginInterceptor` Bean 后使用它，否则使用默认实现；框架负责 MVC 注册和清理包装，无需手动 `addInterceptors`，避免重复执行。Bean 返回类型应声明为 `LoginInterceptor` 或具体实现，不要只暴露为普通 `HandlerInterceptor`。通常只提供一个；若确需多个 Bean，必须用 `@Primary` 明确选择。
-
-旧的 `yulinlin.security.auth.enabled` 已移除，配置为 false 也不会阻止自动注册，请删除该配置。以前通过它接入外部框架的项目，应改为提供自定义 `LoginInterceptor` Bean。
-
-完全定制时也可直接实现 `LoginInterceptor`，必须自己完成可信身份恢复：使用框架上下文时设置 `SecurityContext`；使用外部上下文时配合自定义 `ISecurityManager` 读取身份。不能只从请求里读出 userId 就认为已登录。框架包装器负责请求开始、拒绝请求、异常、完成及异步切换时清理 **SecurityContext**，不替自定义实现补做验签或清理外部框架的上下文。Token 算法变化优先替换 `JwtTokenCodec`，不必改拦截器。
-
-#### Sa-Token 接入
-
-选择 `com.yulinlin:security-sa-token:3.0`，不引入 `security-jwt`；仍提供相同的 `UserStore`。业务继续调用 `SecurityUtil.login(userId, deviceType)`、`logout()` 和 `getUserDetails()`，权限注解不用改。
-
-Token 生命周期、设备策略、会话存储由 Sa-Token 负责，配置沿用 `sa-token.*`。默认内存存储不能保证重启保留登录；多实例和重启恢复需要按所用 Sa-Token 版本接入其 Redis 等共享存储，并保证记录仍在、未过期。不通过 JWT 配置增加存储，也不实现 JwtTokenCodec。
-
-需要踢人、在线会话管理等能力时注入 `SaTokenSecurityManager`，调用 `stpLogic()` 获取底层对象。业务重置密码后若要求强制重新登录，应在事务提交后调用对应原生能力；本适配器不会监听账号表变化自动踢人。单独引入项目中的 ORM cache-redis 模块，不会自动替换 Sa-Token 会话存储。
-
-统一 HTTP 入口仍默认读取 `Authorization: Bearer <token>`；适配器本身不读写 Cookie。若业务另外使用原生 `StpUtil` 的 HTTP 入口，需自行对齐其 Token 读取配置，不能假设两套请求头规则自动相同。接口详情以所用版本的 [Sa-Token 登录文档](https://sa-token.com/use/login-auth.html) 为准。
-
-#### 登录上下文与请求生命周期
-
-```java
-LoginResult result = SecurityUtil.login(userId, "web"); // 前提：业务已验证身份
-// HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user。
-IUserDetails user = SecurityContext.requireUser();
-String userId = SecurityContext.getUserId();
-String token = SecurityContext.getToken();
-boolean loggedIn = SecurityContext.isLogin();
-```
-
-前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。一个正常请求只解析一次 Token，Controller、Service 和权限 AOP 读取同一用户快照。JWT 和 Sa-Token 实现已提供 resolveSession；自己实现管理器且使用此拦截器时也必须提供该能力。
-
-没有 Authorization 时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
-
-正常完成、异常完成时通过 afterCompletion 调用 ThreadLocal.remove()；preHandle 自身失败也立即清理。异步 MVC 的 afterConcurrentHandlingStarted 清理原请求线程，后续 MVC redispatch 会重新解析 Token，但 Callable、DeferredResult 或线程池的业务线程不会自动继承身份。不要使用 InheritableThreadLocal。后台任务需要的用户 ID 显式作为参数传递；不能把客户端声明的 userId 直接变成可信身份。
-
-请求结束只清理线程。JWT logout 也只清理当前线程，客户端必须自行删除 Token；随后再次携带该 JWT 仍可通过校验直到过期或用户不允许访问。Sa-Token logout 则注销服务端会话并清理线程。refresh 当前用户时重新验证凭证并加载最新用户，更新当前线程快照，不改变 JWT 的签发时间和有效期；Sa-Token 的活跃超时策略按其自身配置执行。其他请求已加载的快照不会被跨线程强制替换，长请求必要时应主动复核。
-
-非 HTTP 使用后必须显式清理：
-
-```java
-try {
-    SecurityUtil.login(userId, "job"); // 仅限服务端已验证身份的场景
-    // 当前线程业务
-} finally {
-    SecurityContext.clear(); // 清理当前线程，不改变凭证本身或外部会话状态
-}
-```
-
-SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理使用的入口。LoginSession/LoginResult 的 toString 不打印 Token 和用户资料；仍不得把完整登录响应、请求头或密码写入日志。
-
-#### 接入外部安全框架
-
-自定义实现不必同时引入两个登录模块，也不必改公共权限 AOP。分三种情况：
-
-| 定制范围 | 实现/配置 | 请求身份由谁维护 |
-| --- | --- | --- |
-| 只改变 JWT 算法、密钥、声明格式 | security-jwt + 一个 JwtTokenCodec Bean | 框架默认拦截器和管理器 |
-| 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean | 你的 resolveSession 校验凭证，默认拦截器设置/清理 SecurityContext |
-| 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean + 一个 LoginInterceptor Bean | 自定义拦截器接入外部身份生命周期，管理器读取其当前用户 |
-
-框架不要求自定义实现一定使用 UserStore；这是两种内置登录实现的用户加载扩展。如果自定义管理器使用它，可继承 `AbstractUserSecurityManager` 复用按 ID 加载和刷新，自己实现 login、logout、resolveSession；它不会替你实现任何存储、签名或撤销规则。
-
-继续使用框架上下文时，各方法的要求是：
-
-| 方法 | 实现要求 |
-| --- | --- |
-| login(userId, deviceType) | 业务已经验证凭证；加载安全用户、生成凭证，成功设置 SecurityContext 并返回 LoginResult；失败不保留旧身份 |
-| resolveSession(token) | 不依赖当前线程身份，从可信凭证恢复 LoginSession；检查签名/会话、有效期和用户状态，不能只解码或信任客户端 userId |
-| logout() | 无状态仅清理上下文；有状态先执行自己的撤销，finally 清理上下文；不要声称 JWT 清理等于撤销 |
-| getUserDetails(userId) | 读取指定用户，不切换当前身份 |
-| refresh(userId) | 重载用户；为当前用户时重新校验凭证并更新快照，不把其他用户切换成当前用户，不隐式续期 |
-
-resolveSession 校验失败返回 null 或抛 LoginException；login 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#自定义有状态登录)。
-
-如果选择已提供的 Sa-Token 适配，使用上一节即可，不必自己再写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean，委托该框架按 userId 登录、注销、查询用户和刷新；再提供一个 `LoginInterceptor` Bean，负责接入该框架的请求身份恢复与清理，自动替换默认实现。
-
-不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 login(userId, deviceType)、logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；不要把原来的账号密码验证塞回协议参数。
-
-下面是注册形式，放在业务 `@Configuration` 中。`ExternalAuth` 代表**业务自己封装的外部框架服务，不是本项目提供的类**；其中方法需按上表的安全和生命周期约定实现：
-
-```java
-import com.yulinlin.security.auth.ISecurityManager;
-import com.yulinlin.security.auth.IUserDetails;
-import com.yulinlin.security.auth.LoginResult;
-import org.springframework.context.annotation.Bean;
-
-@Bean
-public ISecurityManager securityManager(ExternalAuth auth) {
-    return new ISecurityManager() {
-        @Override public LoginResult login(String userId, String deviceType) {
-            return auth.loginByUserId(userId, deviceType);
-        }
-        @Override public void logout() { auth.logout(); }
-        @Override public IUserDetails getUserDetails() { return auth.currentUser(); }
-        @Override public String getToken() { return auth.currentToken(); }
-        @Override public IUserDetails getUserDetails(String userId) {
-            return auth.loadUser(userId);
-        }
-        @Override public IUserDetails refresh(String userId) {
-            return auth.refreshUser(userId); // 当前用户时更新外部框架快照，不切换身份
-        }
-    };
-}
-```
-
-配套的拦截器示例（同样放在业务配置类中；`restoreRequest`、`clearRequest` 是业务封装的方法）：
-
-```java
-import com.yulinlin.security.web.LoginInterceptor;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-
-@Bean
-public LoginInterceptor externalLoginInterceptor(ExternalAuth auth) {
-    return new LoginInterceptor() {
-        @Override
-        public boolean preHandle(HttpServletRequest request,
-                                 HttpServletResponse response, Object handler) throws Exception {
-            boolean accepted = false;
-            try {
-                // 校验凭证并恢复外部框架身份；拒绝时写入响应并返回 false。
-                accepted = auth.restoreRequest(request, response);
-                return accepted;
-            } finally {
-                // preHandle 返回 false 或抛异常时，不会收到自己的 afterCompletion。
-                if (!accepted) auth.clearRequest();
-            }
-        }
-
-        @Override
-        public void afterCompletion(HttpServletRequest request,
-                                    HttpServletResponse response, Object handler, Exception ex) {
-            auth.clearRequest();
-        }
-
-        @Override
-        public void afterConcurrentHandlingStarted(HttpServletRequest request,
-                                                  HttpServletResponse response, Object handler) {
-            auth.clearRequest();
-        }
-    };
-}
-```
-
-外部身份恢复必须验证真实凭证，不得信任客户端直接传入的用户 ID。若外部框架已有 Filter 完整管理请求身份，Filter 应先于 MVC 执行并在 finally 清理；自定义 LoginInterceptor 对接其已验证上下文即可，不要重复解析或重复注册同一拦截器。异步业务线程的身份传递需遵循外部框架自己的规则。
-
-ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限流不受影响。框架包装器只兜底清理 SecurityContext，外部上下文仍由上述适配或外部 Filter 负责。若不提供自定义 LoginInterceptor，则启用默认实现，此时管理器必须实现 resolveSession，不能沿用上面省略该方法的示例。
-
-### 鉴权声明注解
-
-`com.yulinlin.security.annotation` 提供以下四个公共注解，与 ApiCrypto、ApiLimit 命名统一。由自动注册的 ApiAuthAspect 统一执行，直接调用业务 ISecurityManager.getUserDetails() 获取当前用户，使用 IUserDetails.hasRole/hasPermission 校验；不自行解析 Token、查询账号表或刷新登录会话。
-
-| 注解 | 声明含义 | 参数 |
-| --- | --- | --- |
-| `@ApiLogin` | 调用方必须登录 | 无 |
-| `@ApiRole("admin")` | 调用方必须登录并拥有指定角色 | 必填 `String[] value`；`any` 默认 false |
-| `@ApiPerm("user:query")` | 调用方必须登录并拥有指定权限 | 必填 `String[] value`；`any` 默认 false |
-| `@ApiPublic` | 允许匿名访问 | 无 |
-
-四个注解均可放在 Controller 或 Service 的类、接口和公共方法上。解析支持接口声明、实现类、父类、重写方法、泛型桥接和继承的 default 方法。角色和权限默认按大小写精确匹配，不解释通配符或 SpEL，也没有 admin 自动越权；`any=false` 表示全部满足，`any=true` 表示满足任意一个。
-
-通过 Spring Bean 代理调用时生效，例如：
-
-```java
-import com.yulinlin.security.annotation.ApiLogin;
-import com.yulinlin.security.annotation.ApiPerm;
-import com.yulinlin.security.annotation.ApiPublic;
-import com.yulinlin.security.annotation.ApiRole;
-
-@ApiLogin
-public class UserApi {
-    @ApiPublic
-    public void login() { }
-
-    @ApiPerm("user:query")
-    public void page() { }
-
-    @ApiRole(value = {"admin", "operator"}, any = true)
-    @ApiPerm({"user:query", "user:export"})
-    public void export() { }
-}
-```
-
-鉴权规则：
-
-- ApiRole、ApiPerm 本身要求登录，不需要重复添加 ApiLogin。
-- 类、父类、接口和方法上的要求叠加，都必须满足；方法上的同类注解不会覆盖类级要求。
-- 方法 ApiPublic 可豁免类级 ApiLogin；不能绕过类级角色、权限要求，也不能与方法自身的鉴权要求共存。类上的 ApiPublic 不能与类级鉴权要求共存；但公开类中的方法可用 ApiLogin/ApiRole/ApiPerm 单独收紧访问。
-- 空数组、空白编码、编码首尾空白或冲突声明会抛出明确的配置异常，不静默放行。
-- 未登录抛出 HTTP 401；登录后缺少角色或权限抛出 HTTP 403。实现使用 ResponseStatusException；搭配 starter 时由现有异常处理器包装为 R，security 不依赖 starter。
-- 获取当前用户时发生的数据库、Redis 或业务异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
-- ApiPublic 只影响鉴权，不关闭 ApiCrypto、ApiLimit 或 IP 黑名单。
-
-#### 默认匿名安全管理器
-
-| 场景或方法 | 默认行为 |
-| --- | --- |
-| 无业务 ISecurityManager Bean | 自动提供 AnonymousSecurityManager，正常启动 |
-| `getUserDetails()`、`getUserDetails(userId)`、`refresh(userId)` | 返回 null，不查库、不生成身份 |
-| `logout()` | 清理本模块当前线程上下文，不操作外部登录会话 |
-| `login(...)` 两个重载 | 抛出 IllegalStateException，提示未配置业务安全管理器 |
-| 无鉴权注解或允许匿名的方法 | 不读取管理器，不影响加密和限流 |
-| 默认匿名实现访问受保护方法 | 401，不会因为没有业务实现而放行 |
-| 自定义 ISecurityManager Bean | 自动替换默认实现；项目只保留一个安全管理器 |
-
-业务实现只需注册为普通 Bean，不需要额外的启用注解或配置。切面只在受保护的调用中解析管理器，每次调用只获取一次当前用户；注解策略按目标类和方法缓存，不缓存用户与校验结果。通过 ClassValue 保存解析结果，避免使用长期全局 Class/Method Map。
-
-ApiAuthAspect 使用 Spring 原生 Advisor/MethodInterceptor 做方法匹配，而不是叠加多个重复执行的切面；order 为 9990，早于框架同步代理的 9998 和事务的 9999。没有鉴权声明的 Bean 不为此创建代理。当前只支持经 Spring 代理调用的 public、非 final 方法；受保护的 final 类或 final 方法明确拒绝配置。Object 基础方法不作为业务鉴权入口。private/static 方法、手动 new 对象和同类 this 调用不受 AOP 保护，不能将这些调用当成安全边界；异步线程也不会自动继承当前请求身份。Spring Boot 默认启用 AOP，不要设置 spring.aop.auto=false；非 Boot 容器需自行配置 AOP 基础设施。
-
-Admin RBAC 案例已改为公共 ApiLogin、ApiPerm、ApiPublic，移除了本地 RequirePermission、Anonymous 和 RbacInterceptor，避免同一入口再执行两套权限检查。回归用例统一放在 admin/src/test/java；本轮未执行编译、测试或打包。
-
+<a id="ai-security-crypto-配置项与默认值"></a>
 ### 配置项与默认值
 
 | 配置 | 默认值 | 说明 |
@@ -3757,6 +4009,7 @@ padding   = PKCS5/PKCS7
 
 建议 key 和 IV 使用 ASCII 字符，避免中文 UTF-8 字符占多个字节。Java 的 `PKCS5Padding` 与常见 JavaScript AES 实现的 `Pkcs7` 在 AES 分组下兼容。
 
+<a id="ai-security-crypto-接口注解"></a>
 ### 接口注解
 
 需要加密的业务接口使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。全局 `enabled` 控制严格加密模式，但不会删除请求解密能力：
@@ -3801,6 +4054,7 @@ public class UserController {
 
 `@ApiCrypto(false)` 是兼容模式，不是完全关闭请求处理。框架把 body 转成 UTF-8 字符串：忽略首尾空白判断后，以 `{` 或 `[` 开头时直接交给 Jackson；其他内容按当前设备的 Base64 密文解密。它不会为了判断明文而预解析 JSON，因此明文请求只反序列化一次。错误 Base64 或解密失败返回 400，不会再次降级为明文。
 
+<a id="ai-security-crypto-响应加密规则"></a>
 #### 响应加密规则
 
 - 普通 Java 对象：整个对象序列化后加密，响应 JSON 是一个 Base64 字符串。
@@ -3824,6 +4078,7 @@ public class UserController {
 }
 ```
 
+<a id="ai-security-crypto-默认-cbc-前端对接"></a>
 ### 默认 CBC 前端对接
 
 请求仍使用 `Content-Type: application/json`。推荐 body 直接发送未经 JSON 双引号包裹的标准 Base64 密文；为兼容浏览器请求链路，服务端也接受 Axios 添加一层 JSON 双引号、`+` 被表单处理转换为空格，以及密文中混入回车、换行或制表符的情况：
@@ -3932,6 +4187,7 @@ const result = responseBody?.crypt === true
 
 跨域调用时，业务 CORS 配置必须允许请求头 `Device-Type`，并暴露响应头 `Device-Type` 和 `X-Yulinlin-Crypto`。密钥不得直接硬编码在公开源码中；上述浏览器代码只用于说明协议对接。
 
+<a id="ai-security-crypto-多设备选择"></a>
 ### 多设备选择
 
 请求头决定当前使用哪组设备密钥：
@@ -3951,6 +4207,7 @@ Device-Type: ios
 
 设备名匹配不区分大小写并忽略首尾空白。响应回写实际解析后的设备类型，客户端应优先读取响应 `Device-Type`，再选择对应密钥解密。设备请求头只负责选密钥，不是身份认证信息，不能仅凭该值判断调用方可信。
 
+<a id="ai-security-crypto-明文排除路径"></a>
 ### 明文排除路径
 
 `exclude-paths` 是服务端控制的完整排除列表，支持 Spring 路径模式。命中后，即使接口存在 `@ApiCrypto(true)`，请求体也不解密，响应体也不加密：
@@ -3969,6 +4226,7 @@ yulinlin:
 
 文件上传、文件下载、视频流、SSE、WebSocket、静态资源和健康检查不适合 JSON 加密 Advice，应保持无 `@ApiCrypto`，必要时加入排除路径。
 
+<a id="ai-security-crypto-可选-aes-gcm"></a>
 ### 可选 AES-GCM
 
 支付、订单等需要密文完整性校验的设备可以显式切换到 GCM：
@@ -4004,6 +4262,7 @@ GCM 使用以下 UTF-8 内容作为 AAD，客户端必须完全一致：
 
 例如 web 设备的 AAD 是 `1\nweb\nA256GCM`。密文、设备名、IV、认证标签或密钥不匹配都会导致解密失败；这是 GCM 相比默认固定 IV CBC 的主要安全优势。
 
+<a id="ai-security-crypto-手动使用"></a>
 ### 手动使用
 
 需要显式选择设备时，注入线程安全的 `DeviceCryptoManager`：
@@ -4037,6 +4296,7 @@ AesCrypto gcm = new AesGcmCrypto(keyBytes, "web");
 
 实现每次操作创建独立 `Cipher`，可以被多个请求线程共享。
 
+<a id="ai-security-crypto-安全边界与限制"></a>
 ### 安全边界与限制
 
 - 当前只支持 Spring MVC，不支持 WebFlux。
@@ -4054,558 +4314,1611 @@ AesCrypto gcm = new AesGcmCrypto(keyBytes, "web");
 
 ---
 
-<!-- source: doc/08-查询缓存.md -->
-## 查询缓存
-
-查询缓存是可选能力。`cache-core` 提供缓存 SPI、`CacheClient`、Key/TTL/namespace 等公共协议和无缓存兜底；ORM `core` 只负责从 INode、Wrapper 和实体元数据构造查询 Key、判断失效范围。不引入具体缓存 Provider 时，应用照常启动，标记为缓存的查询会直接访问数据源。
-
-### 公共配置
-
-```yaml
-yulinlin:
-  cache:
-    ttl: 10m
-    table-ttl:
-      sys_user: 30m
-      video: 5m
-      "mysql.sys_config": 1h
-    ttl-in-key: false
-    clear-on-write: true
-```
-
-| 配置 | 默认值 | 作用 |
-| --- | --- | --- |
-| `default` | 不指定 | 单实现自动选中；多个实现共存时必须指定 `caffeine`、`ehcache` 或 `redis` |
-| `ttl` | `10m` | 查询缓存默认有效期 |
-| `table-ttl` | `{}` | 按物理表名覆盖 ORM 查询 TTL；也可写 `group.table` 精确区分数据源，所有值必须大于 `0` |
-| `ttl-in-key` | `false` | TTL 是否参与 ORM 查询缓存 Key；不影响 `CacheClient` 业务缓存 |
-| `clear-on-write` | `true` | 成功写入后是否默认清理相关 ORM 查询缓存 |
-
-`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理默认缓存中的相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存或广播到其他缓存实现。`QueryCacheProperties` 由 cache-core 自动配置注册；未引入 Provider 且未显式指定 default 时使用空缓存，写路径不执行 namespace 解析和失效处理。
-
-ORM 查询 TTL 的优先级为：请求 `.cache(Duration)` 或 Repository 方法 `@JoinCache(ttl=...)`、`group.table`、普通表名、全局 `ttl`。JOIN、`JoinTableList` 或显式声明多个缓存 namespace 时，每张表先按该顺序得到 TTL，最终使用最短值；未配置的表以全局 TTL 参与比较。自定义 SQL 无法识别资源时使用全局 TTL，调用 `cacheNamespaces("table_name")` 后可以参与表级规则。
-
-`table-ttl` 只调整已经显式启用的 ORM 查询缓存时间，不控制是否缓存。业务不需要缓存时不调用 `.cache()`，或者使用 `.cache(false)` / `CacheMode.NONE`；表级 TTL 和全局 TTL 都必须大于 `0`。这套规则不影响 `CacheClient` 业务缓存，也不改变写入后的 namespace 失效逻辑。表名按框架解析后的物理资源名匹配，不写实体类名。
-
-普通 `sys_user` 规则对所有数据源组中的同名表生效；`mysql.sys_user` 表示“group 为 mysql、物理表为 sys_user”的精确规则，不会修改 SQL 表名。两者同时存在时，mysql 组使用精确规则，其他组继续使用普通表规则。一般项目只写物理表名，确实存在跨数据源同名表且 TTL 不同时再加 group。
-
-默认关闭时，只要查询条件、数据源和 namespace 版本相同，不同 TTL 的查询就会复用同一个缓存条目。已有条目被命中时不会修改其过期时间；`REFRESH`或未命中重新写入时，才使用本次请求的 TTL。这样可以减少重复数据并提高缓存复用率。
-
-需要让不同 TTL 的相同查询完全隔离时开启：
-
-```yaml
-yulinlin:
-  cache:
-    ttl-in-key: true
-```
-
-开启后，解析出的全局、表级或请求级 TTL 会参与物理 Key，同一查询使用不同 TTL 时会保存为不同条目。namespace 名称和版本始终参与 Key，不受此开关影响。
-
-### 选择实现
-
-三个实现可以同时引入，固定名称为 `caffeine`、`ehcache`、`redis`，不用再配置各模块的 group。它们都会传递引入 `cache-core`，业务不需要重复声明。示例（需引入对应模块，并按 Redis 专题配置连接）：
-
-```yaml
-yulinlin:
-  cache:
-    default: redis
-    ttl: 10m
-    caffeine:
-      maximum-size: 10000
-    ehcache:
-      directory: data/cache
-    redis:
-      key-prefix: dev
-```
-
-- 没有实现且省略 default：照常启动，ORM 无缓存，客户端未命中。
-- 只有一个已注册实现：无需配置 default，兼容原有用法。
-- 多个实现：必须明确指定 default，禁止按 Bean 顺序随机挑选。
-- 显式 default 或客户端指定的缓存名称不存在：明确报错，不回退。缓存名称重复也报错。判断依据是实际注册的 Provider，不是只看 YAML 配置块；例如没有 RedisConnectionFactory 时不会注册 Redis Provider。
-- ORM 的 `.cache()`、CacheMode、TTL、`@JoinCache` 用法不变，只使用默认实现，不增加缓存名参数；配置默认缓存并不会自动让所有查询启用缓存。
-- 客户端可指定其他实现，缓存内容各自独立，不自动复制，不按多个 Provider 依次查找，也不广播清理。
-
-公共 ttl 等配置由这些实现复用；每个实现的容量、持久化、序列化等配置继续独立。选择在启动时固定，修改默认值需要重启。`table-ttl` 中的 `group.table` 仍指**数据源 group**，不是缓存名称。
-
-`cache-redis` 自带的 Caffeine L1 属于 `redis`，不依赖、不注册 `cache-caffeine` Provider。只引入 Redis 模块仍然算一个缓存实现；同时引入 cache-caffeine 后，独立的 caffeine 与 redis 内部 L1 也不会共享数据。
-
-#### Caffeine 内存缓存
-
-```xml
-<dependency>
-    <groupId>com.yulinlin</groupId>
-    <artifactId>cache-caffeine</artifactId>
-    <version>3.0</version>
-</dependency>
-```
-
-调用链为 `Caffeine → 数据源`。它适合追求最低本地延迟、允许应用重启后缓存消失的服务。
-
-```yaml
-yulinlin:
-  cache:
-    ttl: 10m
-    ttl-in-key: false
-    caffeine:
-      initial-capacity: 128
-      maximum-size: 10000
-      expiration-policy: after-write
-      use-system-scheduler: false
-      executor: common-pool
-      record-stats: false
-```
-
-| 配置 | 默认值 | 作用 |
-| --- | --- | --- |
-| `initial-capacity` | `16` | Caffeine 内部表的初始容量；只影响扩容次数，不会一次性创建全部缓存对象 |
-| `maximum-size` | `10000` | 最大条目数；ORM 查询缓存与 `CacheClient` 业务缓存共用该容量 |
-| `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
-| `use-system-scheduler` | `false` | 使用 JDK 系统调度器更及时地触发过期维护；关闭时由正常读写维护，过期项仍不会被命中 |
-| `executor` | `common-pool` | `common-pool` 异步执行维护任务；`direct` 在调用线程执行，少一次调度但可能增加请求延迟 |
-| `record-stats` | `false` | 是否记录命中率、淘汰数和加载统计；需要观测时显式开启，默认关闭以减少热点路径计数开销 |
-
-`expiration-policy`同时作用于 ORM 查询缓存和业务缓存。请求级 `cache(Duration)` 或 `Cache.set(..., Duration)` 仍决定各条目的 TTL，策略只决定读取命中后是否重新开始计时。大多数接口服务建议保留 `after-write + common-pool`；会话类热点数据才考虑 `after-access`。
-
-需要监控时先配置 `record-stats: true`，再直接注入具体实现：
-
-```java
-@Resource
-private CaffeineQueryCache caffeineQueryCache;
-
-long entries = caffeineQueryCache.estimatedSize();
-CacheStats stats = caffeineQueryCache.stats();
-caffeineQueryCache.cleanUp(); // 主动执行待处理的过期和容量淘汰维护
-```
-
-#### Ehcache 持久化缓存
-
-```xml
-<dependency>
-    <groupId>com.yulinlin</groupId>
-    <artifactId>cache-ehcache</artifactId>
-    <version>3.0</version>
-</dependency>
-```
-
-调用链为 `Ehcache Heap → Ehcache Disk → 数据源`。Ehcache 自己管理内存热点层和磁盘层，不需要再引入 Caffeine。
-
-```yaml
-yulinlin:
-  cache:
-    ttl: 10m
-    ttl-in-key: false
-    ehcache:
-      directory: ./data/cache
-      heap-entries: 10000
-      offheap-size-mb: 0
-      disk-size-mb: 1024
-      persistent: true
-      expiration-policy: after-write
-      disk-threads: 2
-      serializer: json
-      maximum-entry-size-mb: 16
-      record-statistics: false
-```
-
-| 配置 | 默认值 | 作用 |
-| --- | --- | --- |
-| `directory` | `data/cache` | 磁盘缓存目录，同一时间只能由一个 CacheManager 占用 |
-| `heap-entries` | `10000` | JVM 堆内热点条目数，ORM 查询与 `CacheClient` 共用 |
-| `offheap-size-mb` | `0` | JVM 直接内存中的可选中间层；`0` 表示关闭。可降低大缓存对 GC 的影响，速度通常快于磁盘，但会增加序列化、内存复制和进程总内存占用 |
-| `disk-size-mb` | `1024` | 整个 Ehcache 磁盘层的容量上限，不是单条缓存上限；空间满后淘汰旧条目。Ehcache 磁盘资源池要求设置有限容量，不提供无限增长模式 |
-| `persistent` | `true` | 是否在正常关闭并重启后保留磁盘缓存 |
-| `expiration-policy` | `after-write` | `after-write` 写入后固定 TTL；`after-access` 每次命中后按该条目的 TTL 续期 |
-| `disk-threads` | `2` | Ehcache 磁盘层固定工作线程数；本地 SSD 通常使用 `2` 到 `4` |
-| `serializer` | `json` | Value 格式：`json`、`smile` 或 `kryo` |
-| `maximum-entry-size-mb` | `16` | 单条序列化结果上限，超出后记录并跳过，防止一个大列表挤占缓存 |
-| `record-statistics` | `false` | 是否记录框架层命中、未命中、写入、超大条目和序列化失败计数；需要观测时显式开启 |
-
-正常关闭时框架调用 `close()`。即使 `persistent: true`，缓存仍应被视为可丢失数据；缓存损坏或反序列化失败会删除对应项并回源查询。缓存量不大时保持 `offheap-size-mb: 0` 即可；只有缓存较大或 GC 压力明显时才建议从 `256` 或 `512` MB 开始启用。容器内存预算必须同时包含 Heap、Off-Heap、线程栈和 JVM 自身开销。
-
-Ehcache 的业务 Value 统一保存为带序列化格式和 TTL 的原始 `byte[]`，Heap、Off-Heap、Disk 不再额外保存一个 Java 包装对象。格式信息随条目保存，因此切换 `json`、`smile` 或 `kryo` 后仍可读取尚未过期的其他格式条目。
-
-需要监控时先配置 `record-statistics: true`，再直接注入具体实现读取和重置统计：
-
-```java
-@Resource
-private EhcacheQueryCache ehcacheQueryCache;
-
-EhcacheQueryCache.Stats stats = ehcacheQueryCache.stats();
-ehcacheQueryCache.resetStatistics();
-```
-
-#### Redis 共享缓存与可选 Caffeine L1
-
-```xml
-<dependency>
-    <groupId>com.yulinlin</groupId>
-    <artifactId>cache-redis</artifactId>
-    <version>3.0</version>
-</dependency>
-```
-
-模块使用 Spring Boot 默认的 Lettuce 和 `RedisConnectionFactory`，不需要业务代码创建 `RedisClient`。默认调用链为 `Caffeine L1 → Redis L2 → 数据源`；关闭 L1 后为 `Redis → 数据源`。
-
-```yaml
-spring:
-  data:
-    redis:
-      host: 127.0.0.1
-      port: 6379
-
-yulinlin:
-  cache:
-    ttl: 10m
-    ttl-in-key: false
-    clear-on-write: true
-    redis:
-      key-prefix: video:prod
-      write-mode: async
-      batch-size: 128
-      serializer: smile
-      maximum-entry-size-mb: 16
-      record-statistics: false
-      caffeine:
-        enabled: true
-        maximum-size: 10000
-```
-
-| 配置 | 默认值 | 作用 |
-| --- | --- | --- |
-| `key-prefix` | `dev` | 隔离不同系统、环境和版本的 Redis Key；默认用于本地开发，生产环境建议显式设置为“项目名:环境” |
-| `write-mode` | `async` | `async` 先写 L1，再由虚拟线程写 Redis；`sync` 在当前线程完成 Redis 写入 |
-| `batch-size` | `128` | 一次 Redis Pipeline 最多提交多少条；收到第一条任务就立即提交当前已有任务，不会等队列凑满 128 条 |
-| `serializer` | `smile` | Redis Value 格式：`smile`、`json` 或 `kryo`；JSON 系列使用 Jackson Blackbird |
-| `maximum-entry-size-mb` | `16` | 单条序列化结果上限；超出后跳过缓存，避免大列表占满 Redis 和异步队列 |
-| `record-statistics` | `false` | 是否记录 L1/Redis 命中、未命中、写入失败和异步丢弃统计；默认关闭热点计数 |
-| `caffeine.enabled` | `true` | 是否启用进程内 L1；关闭后每次缓存读取和版本判断都访问 Redis |
-| `caffeine.maximum-size` | `10000` | L1 最大条目数，ORM 查询与 `CacheClient` 共用 |
-
-`async`只用于写入普通缓存值。删除、namespace 失效、单条件分区失效和清空操作始终同步写 Redis，避免旧缓存继续可达。后台线程取到第一条任务后立即 `drainTo` 当时已经存在的任务，并使用 Pipeline 批量发送；`batch-size`是单批上限，不是等待阈值。异步队列满时仅跳过该条 Redis L2 写入，查询仍可回源，不做重试。
-
-`caffeine.enabled=true` 适合单实例或允许一个 L1 TTL 内短暂不一致的业务。每个节点的 L1 和本地版本快照互不广播，其他节点更新数据后，本节点可能继续命中旧 L1，直到条目过期。需要多个实例都立即依据 Redis 版本读取时设置为 `false`；本模块不引入 Pub/Sub、分布式锁或强一致协议。
-
-L1 与 Redis 使用同一个解析后的 TTL，但 Redis 命中后重新放入 L1 会从当前时间重新计算该 TTL，因此 L1 最晚可能比 Redis 条目多存活一个 TTL。单机加速场景可以接受；需要严格以 Redis 过期时间为准时关闭 L1。
-
-Redis 中保存的是 Smile/JSON/Kryo 原始字节，不做 Base64。缓存值带有版本、序列化格式和 TTL 信封，因此修改 `serializer` 后仍能读取未过期的旧格式条目。使用 `smile` 或 `json` 时，实体和业务缓存对象必须符合 Jackson 反序列化要求。
-
-#### 序列化格式选择
-
-| 格式 | 适合场景 | 特点 |
-| --- | --- | --- |
-| `json` | 兼容性、可排障性优先 | 默认用于 Ehcache；文本可读，类升级和跨版本排障最直观 |
-| `smile` | 性能、体积与兼容性的平衡 | Redis 默认；二进制 JSON，仍复用项目 Jackson 配置 |
-| `kryo` | 复杂对象、循环引用、希望使用成熟二进制格式 | Kryo 5 二进制对象图；无需预注册业务类，实例通过线程安全对象池复用，适配虚拟线程 |
-
-Kryo 本身不是线程安全的，框架使用线程安全对象池复用实例，不会在每个虚拟线程中创建一份 `ThreadLocal`。Kryo 会在缓存字节中携带 Java 类型信息，框架无法预先注册全部业务实体，因此只应用于可信缓存存储；不要让用户提交的任意字节直接进入 Redis 或 Ehcache 磁盘目录。读取失败时，框架会删除损坏条目并回源数据源。
-
-`kryo` 更适合可丢弃、短生命周期缓存，不应把缓存字节当作长期持久化协议。实体字段结构或 Kryo 版本发生较大变化时，旧条目可能无法读取，但框架会删除该条目并重新查询数据源。它不经过 Jackson，因此 Jackson 自定义序列化器不会作用于 Kryo 格式。
-
-Kryo 不需要额外 JVM 参数，启用方式如下：
-
-```yaml
-yulinlin:
-  cache:
-    ehcache:
-      serializer: kryo
-    # 使用 cache-redis 时改为：
-    # redis:
-    #   serializer: kryo
-```
-
-需要观测时开启统计并注入具体实现：
-
-```java
-@Resource
-private RedisQueryCache redisQueryCache;
-
-RedisQueryCache.Stats stats = redisQueryCache.stats();
-long localEntries = redisQueryCache.estimatedLocalSize();
-redisQueryCache.resetStatistics();
-```
-
-### 启用查询缓存
-
-`cache()` 不传参数时使用系统默认值 `yulinlin.cache.ttl`，默认 10 分钟；`cache(Duration)` 只覆盖当前查询：
-
-```java
-List<SysUser> users = ModelSelectWrapper
-        .newInstance("mysql", SysUser.class)
-        .cache() // 使用 yulinlin.cache.ttl
-        .where(where -> where.eq("status", 1))
-        .selectList();
-
-List<SysUser> shortLived = ModelSelectWrapper
-        .newInstance("mysql", SysUser.class)
-        .cache(Duration.ofSeconds(30))
-        .where(where -> where.eq("status", 1))
-        .selectList();
-```
-
-自定义 SQL 同样支持缓存：
-
-```java
-QueryRequest<SysUser> request = QueryRequest.newInstance(
-        "select * from sys_user where status = #{status}",
-        Map.of("status", 1),
-        SysUser.class
-);
-request.setSession("mysql");
-request.cache(); // 默认 TTL；也可 cache(Duration.ofSeconds(30))
-List<SysUser> users = request.selectList();
-```
-
-列表、分页内部的 count、group、统计结果和空列表都可以进入缓存。查询异常不会缓存。级联查询、批量预加载和懒加载会继承入口查询的缓存模式与请求级 TTL。
-
-同一条查询使用不同 TTL 时会生成不同物理 Key，互不覆盖。默认 `after-write` 下读取不会续期；Provider 配置为 `after-access` 时，命中会按该条目的 TTL 重新计时。
-
-### CacheMode
-
-`CacheMode`明确控制一次查询是否读缓存、访问数据源和写缓存：
-
-| 模式 | 读缓存 | 未命中访问数据源 | 写缓存 |
-| --- | --- | --- | --- |
-| `NONE` | 否 | 是 | 否 |
-| `CACHE_ONLY` | 是 | 否 | 否 |
-| `READ_THROUGH` | 是 | 是 | 是 |
-| `REFRESH` | 否 | 是 | 是 |
-
-```java
-// cache() 等价于 READ_THROUGH
-List<SysUser> cached = ModelSelectWrapper.newInstance("mysql", SysUser.class)
-        .cache(CacheMode.READ_THROUGH)
-        .selectList();
-
-// 只允许读取已有缓存；未命中抛出 CacheMissException，绝不查询数据库
-List<SysUser> offline = ModelSelectWrapper.newInstance("mysql", SysUser.class)
-        .cache(CacheMode.CACHE_ONLY)
-        .selectList();
-
-// 强制查询数据库并覆盖缓存
-List<SysUser> refreshed = ModelSelectWrapper.newInstance("mysql", SysUser.class)
-        .cache(CacheMode.REFRESH, Duration.ofMinutes(5))
-        .selectList();
-```
-
-未调用 `cache(...)` 时为 `NONE`。没有引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`仍能查询数据源，但不会保存结果；`CACHE_ONLY`一定抛出 `CacheMissException`。
-
-### 业务缓存：CacheClient 管理，Cache 操作
-
-框架始终暴露一个可注入的 `CacheClient` Bean，仅负责选择、查看缓存。通过它获取 `Cache` 对象后进行业务数据读写。两个接口位于 `com.yulinlin.data.core.cache`，不要与 Spring 的同名 Cache 接口混用。业务缓存与 ORM 使用独立的 Key 和版本域，数据库写操作不会误删验证码、接口结果等业务缓存。
-
-```java
-@Resource
-private CacheClient cacheClient;
-
-Cache cache = cacheClient.getCache();
-cache.set("user", "10001", user); // 使用系统默认 TTL
-cache.set("user", "10002", user, Duration.ofMinutes(30));
-
-SysUser cachedUser = cache.get("user", "10001", SysUser.class);
-boolean exists = cache.exists("user", "10001");
-cache.remove("user", "10001");
-cache.clear("user"); // 整个业务命名空间立即失效
-cache.clear();       // 只清理当前实现的业务缓存，不清理 ORM 查询缓存
-```
-
-选择指定实现，不改变全局默认缓存：
-
-```java
-Cache local = cacheClient.getCache("caffeine");
-Cache redis = cacheClient.getCache("redis");
-local.set("user", "10001", user);
-redis.set("user", "10001", user, Duration.ofMinutes(5));
-
-SysUser loaded = redis.getOrLoad(
-        "user", "10003", SysUser.class, Duration.ofMinutes(5),
-        () -> loadUser("10003")); // loadUser 是业务自行提供的方法
-
-String defaultName = cacheClient.defaultName();
-boolean hasRedis = cacheClient.contains("redis");
-Set<String> names = cacheClient.names();
-Map<String, Cache> caches = cacheClient.caches(); // 只读视图
-```
-
-单实现不必配置默认值；多实现必须配置 `yulinlin.cache.default`。每个实现复用一个 `Cache` 对象及其加载锁，默认选择与显式选择同一实现得到同一个对象。名称不存在直接报错；`contains` 对不存在、null 或空白名称返回 false。不提供运行时注册、删除或切换默认值。
-
-`Cache.name()` / `available()` 描述当前缓存；`clear(namespace)` 仅清当前实现的对应业务命名空间，`clear()` 仅清当前实现的全部业务缓存。都不会广播到其他实现，不执行 Redis FLUSHDB，也不清 ORM 缓存。
-
-API 迁移：旧 `cacheClient.get/set/...` 改成 `cacheClient.getCache().get/set/...`；旧 `named(name)` 改成 `getCache(name)`；旧命名空间 `invalidate(namespace)` 改成缓存对象上的 `clear(namespace)`。不再保留管理对象上的数据操作方法，避免职责混淆。
-
-集合等泛型数据使用 Jackson `TypeReference`：
-
-```java
-List<SysUser> users = cache.get(
-        "user-list", "enabled",
-        new TypeReference<List<SysUser>>() {}
-);
-```
-
-`getOrLoad`支持 Class 和 TypeReference，均有默认 TTL 和指定 TTL 两种重载。单进程同一缓存对象内使用分段锁和二次检查，不保证跨进程只回源一次；加载结果为 null 时不写入缓存，加载异常向调用方传递：
-
-```java
-SysUser loadedUser = cache.getOrLoad(
-        "user", userId, SysUser.class, Duration.ofMinutes(10),
-        () -> userService.findById(userId)
-);
-
-List<SysUser> users = cache.getOrLoad(
-        "user-list", "enabled", new TypeReference<List<SysUser>>() {},
-        () -> loadEnabledUsers());
-
-cache.setAll("user", Map.of("10001", user1, "10002", user2));
-cache.setAll("user", Map.of("10003", user3), Duration.ofMinutes(5));
-Map<String, SysUser> hits = cache.getAll(
-        "user", List.of("10001", "10002"), SysUser.class);
-cache.removeAll("user", List.of("10001", "10002"));
-```
-
-批量操作当前复用逐条 API，不新增线程或队列，不保证原子性；中途失败可能已有部分生效。`getAll` 只返回命中的条目。Redis 原有异步写入模式继续有效，批量方法返回不等于所有 Redis 写入均已完成。
-
-业务缓存不接受空 namespace、空 key 或 `set(..., null)`。不传 TTL 或传 null 使用配置默认 TTL。不引入任何缓存实现时，ORM 正常启动并直接访问数据库；`getCache()` 返回空缓存，`available()` 为 false，读取未命中，写入/清理无操作，`getOrLoad` 正常执行加载函数。此时 `defaultName()` 返回 null，`names()` / `caches()` 为空；显式 `getCache("redis")` 仍报错。
-
-`CacheClient` 不提供按表、实体或全部 ORM 缓存的手动清理入口，也不解析数据源和实体注解。ORM 写入后的失效由 `clear-on-write` / `clearCache(true)` 控制；需要刷新某条查询时使用 `.cache(CacheMode.REFRESH)`。绕过框架直接修改数据库不会自动触发 ORM 缓存失效，需要等待 TTL 或针对受影响查询刷新。业务缓存的 `Cache.clear(...)` 不能用于清理 ORM 查询缓存。
-
-### Key 规则
-
-Key 在 `core` 中统一生成，不依赖某一种数据库最终 SQL：
-
-```text
-MurmurHash3-x64-128(
-    版本
-  + 路由后的 group/cluster
-  + Session 类型
-  + entityClass/fromClass
-  + 查询类型
-  + 完整 INode 元数据
-  + 实际 TTL
-  + 全局版本与依赖表版本
-)
-```
-
-元数据直接流入128位哈希器，不构建完整中间字符串。`CacheKey` 在内存中只保存两个 `long`；Caffeine 直接使用该对象作为 Key，Ehcache/Redis 持久化或日志输出时才按需生成 `v2:` 开头的32位十六进制文本。实体反射字段通过 `ClassValue` 缓存，不会在每次查询时重新扫描、排序。
-
-`CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
-
-缓存命中时不会访问数据源，因此数据库模块的 `log=true` 不会打印 SQL。排障时可将 `com.yulinlin.data.cache.QueryCache` 调整为 DEBUG，查看 `HIT`、`MISS`、`REFRESH`、等待后命中以及事务/行锁绕过等事件；日志只记录哈希 Key，不记录缓存值。需要确认物理 SQL 时使用 `CacheMode.REFRESH` 或暂时关闭该次查询缓存。
-
-分页内部的 `count` 使用独立的逻辑 Key：普通查询只保留 `from/join + where`，因此不同页码、页大小、排序、返回字段、高亮和行锁会复用同一个总数；聚合查询还会保留 `aggregations + metrics + having`，避免不同分组统计误命中。普通列表 Key 仍然包含分页和排序。未知的第三方 Wrapper 不做字段裁剪，继续使用完整节点生成 Key，以正确性优先。
-
-数据源 group 必须进入 Key。同一个实体和条件在 `mysql`、`pgsql` 或其他 group 中不会串缓存；同一个逻辑 group 下的负载均衡节点可以共享逻辑 Key。
-
-### 失效和一致性
-
-缓存始终受 TTL 约束。引入缓存 Provider 后，标准 `insert/update/delete` 未指定策略时继承 `yulinlin.cache.clear-on-write`，默认在提交成功后清理相关查询缓存：
-
-```java
-int affected = ModelUpdateWrapper
-        .newInstance("mysql", patch)
-        .execute();
-
-int deleted = ModelDeleteWrapper
-        .newInstance("mysql", SysUser.class)
-        .eq("status", 0)
-        .clearCache(false) // 明确接受 TTL 窗口内的旧结果时，关闭本次清理
-        .execute();
-```
-
-写操作只提供一个请求级 API：
-
-| API | 行为 |
-| --- | --- |
-| 不调用 `clearCache(...)` | 继承 Provider 配置 `yulinlin.cache.clear-on-write` |
-| `clearCache(true)` | 本次写入提交成功后清理相关查询缓存，覆盖全局 `false` |
-| `clearCache(false)` | 本次写入不清理查询缓存，覆盖全局 `true` |
-
-#### 单条件自动分区
-
-分区失效是缓存 Provider 的内置能力，始终自动开启，不需要配置，也没有额外 API。只有已经调用 `cache(...)` 或使用 `@JoinCache` 的查询才会进入缓存；它不会让普通查询自动启用缓存。
-
-当同一数据源、同一物理表的缓存查询始终使用同一个单字段等值条件时，框架会按条件值划分缓存：
-
-```java
-List<SysUser> alice = ModelSelectWrapper.newInstance("mysql", SysUser.class)
-        .eq("username", "Alice")
-        .cache()
-        .selectList();
-```
-
-例如当前结构是 `username = ?`，更新或删除条件同样为 `username = 'Alice'` 时，提交后只让 `Alice` 分区失效，`Bob` 分区仍可命中。普通列表、分页、Count、聚合等缓存仍按表失效，不会因为分区优化而保留旧结果。
-
-最小识别规则如下：
-
-- 查询必须是单表、非行锁，并且有效条件只有一个 `Eq`；框架工厂产生的空 `And/Or` 包装会被忽略。
-- 条件字段只识别普通列名或当前表已验证的别名前缀；JSON 路径、函数、引号字段和未知前缀直接按整表处理。
-- 字段名先走实体的 `JoinField`/驼峰映射，条件值先走当前 Session 的 Coder；映射或编码结果无法安全识别时同样按整表处理。
-- 更新、删除使用相同字段的单个 `Eq` 时精准失效对应值。
-- 更新同时修改该条件字段、插入、自定义 SQL、多条件或无法解析的写入，会让该表当前全部分区失效。
-- 如果缓存查询又使用第二个等值字段，例如先有 `username = ?`、后来又有 `id = ?`，该物理表自动升级为普通整表失效模式。
-- 状态按 `Session 类型 + group + 物理表` 隔离；同表对应多个实体类时共享同一判断。
-
-分区 Key 仍保留完整查询信息，因此不同分页、排序、投影和 TTL 不会错误命中；分区版本只负责让同一个条件值下的这些条目一起失效。没有引入缓存模块，或第三方 Provider 未实现分区能力时，会安全回退为现有整表失效。
-
-实体查询和写入优先从过滤器增强后的 `INode`、From/Join/Store 提取实际表名，节点无法识别表时才回退到 `@JoinTable`、`@JoinTableList`。动态分表不会同时混入注解中的原始逻辑表，Key、表级 TTL 和失效范围使用最终物理表；显式 `cacheNamespaces(...)` 始终追加。原始 SQL 不做表名猜测，有动态表或隐藏依赖时须显式声明实际命名空间。自定义 SQL 没有实体或节点表信息时，启用清理会退化为清理全部 ORM 查询缓存并输出警告：
-
-```java
-ExecuteRequest<Object> write = ExecuteRequest.newInstance(
-        "update sys_user set status=#{status} where id=#{id}",
-        Map.of("status", 1, "id", 7)
-);
-write.setSession("mysql");
-int affected = write.clearCache(true).execute();
-```
-
-自定义查询若没有带 `@JoinTable` 的 `fromClass`，可用 `cacheNamespaces("sys_user", "sys_role")` 声明依赖表。这样任一表失效时，该复杂 SQL、JOIN 或聚合结果都会同时失效。
-
-延迟写队列在真正写入成功后才清理，不在入队时清理。相同 `Session + 操作类型 + fromClass` 的请求合并时使用三态规则：任一请求显式 `true`，合并组就是 `true`；全部显式 `false`，合并组才是 `false`；包含未指定且没有 `true` 时保持未指定，执行时继承全局配置。
-
-失效采用“命名空间版本号”，不会遍历百万级 Key：普通查询 Key 携带 `Session 类型 + group + 表名` 的版本快照；单条件分区查询携带表策略版本和对应条件值版本。写入成功后只递增相关版本，旧 Key 立即不可达，随后按自身 TTL 自然回收。Ehcache 的普通 namespace 版本会持久化；分区条目在进程重启后使用新的运行期版本，不会重新命中重启前的旧分区结果。Redis 会把普通版本和分区版本都保存在共享 Redis 元数据中；关闭 L1 时，各节点每次都读取共享版本。
-
-事务规则：
-
-- 普通单次写入在底层 Session 提交成功后按 `clearCache` 策略清理。
-- `RouteSession` 多数据源事务会合并重复表名，只在最外层提交成功后统一清理。
-- 多数据源提交中途失败、结果无法确定时会保守清理待处理缓存；最多多一次回源，不保留可能已提交数据的旧缓存。
-- Spring 事务在 `afterCommit` 阶段清理；回滚或提交失败不清理。
-- 活动事务内的查询直接访问数据源，不读取也不写入全局查询缓存，防止未提交结果在回滚后残留；事务内使用 `CACHE_ONLY` 会直接报告缓存不可用。
-- `lock()` 行锁查询始终访问数据库，不会因为 `cache()` 命中而跳过加锁。
-- 查询回源期间若并发发生更新，旧查询只能写入旧版本 Key，不能重新污染新版本缓存。
-
-即使有主动失效，也应把 TTL 设置为业务可接受的最大兜底陈旧时间。事务外要求绝对强一致的查询使用 `CacheMode.NONE`。
-
-### 并发与对象边界
-
-同一个 Key 回源时使用分段锁和二次检查，降低缓存到期瞬间的重复查询。缓存保存查询增强前的数据；返回给业务前会复制模型并创建当前调用需要的统一实体代理，旧事务代理不会被保存复用。
-
-Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节保存结果；选择 JSON/Smile 时实体应符合 Jackson 的反序列化要求。连接、流、Statement、ResultSet 等资源对象不能作为缓存查询结果。
-
-### 启动规则
-
-| 项目依赖 | 启动结果 |
-| --- | --- |
-| 不引入缓存模块 | 正常启动；`cacheClient.getCache().available()`为 false，缓存优先查询直接访问数据源 |
-| 只引入 `cache-caffeine` | 启用内存缓存 |
-| 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
-| 只引入 `cache-redis` | 启用 Redis L2；默认同时启用模块内置 Caffeine L1 |
-| 多个实现且已配置 `yulinlin.cache.default` | 正常启动；ORM 仅使用默认实现，客户端可显式选择 |
-| 多个实现但未配置 default | 启动报错，要求指定默认缓存 |
-| 显式指定未注册名称 / 名称重复 | 报错，不静默回退 |
-
-第一种情况下不会创建 `QueryCacheProperties`，也不会因 `clearCache(true)` 解析表 namespace。这不是“空缓存执行一遍失效”，而是写路径直接跳过整套缓存失效逻辑。
-
-Session 的缓存由对应工厂在 `create(...)` 内初始化，`RouteSession.registerSession` 只登记已配置完成的节点，不再注入或覆盖缓存。JDBC、Elasticsearch、MongoDB 工厂与 RouteSession 使用容器中的同一个 QueryCache：Session 负责查询缓存，路由负责协调写后失效；没有 Provider 时统一使用 NoOpQueryCache。
-
-第三方数据源继承 `AbstractSession` 时，由工厂调用其 `setQueryCache`；该初始化方法不属于 `EntitySession` 执行接口。直接实现 `EntitySession` 时，由自有工厂完成缓存集成，不要求额外实现缓存 setter。工厂和路由必须复用同一个缓存 Bean，不要各自创建 Provider，否则查询与失效可能操作不同的缓存。
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
 
 ---
 
-<!-- source: doc/09-项目开发最佳实践.md -->
-## Common 业务开发与项目最佳实践
+<a id="ai-security-rate-limit"></a>
+<!-- source: doc/security/rate-limit.md -->
+<a id="ai-security-rate-limit-限流与-ip-黑名单"></a>
+## 限流与 IP 黑名单
 
-本文先说明 `common` 提供给业务代码直接复用的实体、分页查询模型和 Service 接口，再给出推荐的 Spring Boot 项目结构与完整业务案例。它负责回答“已有公共能力怎么用、业务代码应该放在哪里”；SQL 条件的完整解析规则仍以[CRUD 与统计](02-CRUD与统计分析.md)、[关联查询与代理](03-关联查询与代理.md)和[查询缓存](08-查询缓存.md)为准。
+[文档首页](README.md) / [接口安全](security/README.md)
 
-阅读导航：[核心规则](#核心规则) · [目录结构](#推荐目录结构) · [公共业务模型](#公共业务模型) · [基础实体](#基础实体选择) · [通用 Service](#通用-service-接口) · [完整案例](#完整业务案例) · [Admin 两表 RBAC 与登录](#admin-两表-rbac-与登录案例) · [事务与代理](#事务与自动更新) · [缓存](#缓存规范) · [日志](#日志规范) · [多数据源](#多数据源规范) · [批量写入](#批量写入规范) · [反例](#常见反例) · [评审清单](#上线前评审清单)
+注解限流、业务黑名单和 Nginx 可信真实 IP。
 
+<a id="ai-security-rate-limit-本页导航"></a>
+### 本页导航
+
+- [接口限流](#ai-security-rate-limit-接口限流)
+- [IP 黑名单](#ai-security-rate-limit-ip-黑名单)
+- [Nginx 真实 IP](#ai-security-rate-limit-nginx-真实-ip)
+
+<a id="ai-security-rate-limit-接口限流"></a>
+### 接口限流
+
+`@ApiLimit` 可以放在 Controller 类或方法上，方法配置覆盖类配置。默认同一客户端对同一接口每分钟最多调用 60 次，并按 IP 隔离：
+
+```java
+import com.yulinlin.security.annotation.ApiLimit;
+import com.yulinlin.security.limit.LimitBy;
+
+@RestController
+public class VideoController {
+
+    // 等价于 count=60、interval="1m"、by=LimitBy.IP
+    @ApiLimit
+    @PostMapping("/video/list")
+    public R<?> list(@RequestBody VideoListPo request) {
+        return R.ok(videoService.list(request));
+    }
+
+    // 设备 ID 缺失或非法时自动回退到真实 IP
+    @ApiLimit(count = 20, interval = "10s", by = LimitBy.DEVICE)
+    @PostMapping("/video/like")
+    public R<?> like(@RequestBody VideoLikePo request) {
+        return R.ok(videoService.like(request));
+    }
+}
+```
+
+支持 `500ms`、`10s`、`1m`、`1h` 等 Spring Duration 写法。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。超出限制时返回 HTTP `429`、`Retry-After` 响应头和未加密的统一 JSON：
+
+```json
+{
+  "data": null,
+  "code": 429,
+  "crypt": false,
+  "ok": false,
+  "msg": "请求过于频繁，请稍后再试",
+  "timestamp": 1792070400000
+}
+```
+
+每条计数记录的 Key 是 `Controller 方法 + 限流维度 + IP/设备 ID`。Caffeine 根据该接口的 `interval` 淘汰不活跃记录，并用 `maximum-size` 防止大量随机 IP 或设备 ID 持续占用内存；未开启统计功能。达到容量上限而被提前淘汰的客户端再次访问时会重新计数。
+
+<a id="ai-security-rate-limit-ip-黑名单"></a>
+#### IP 黑名单
+
+IP 黑名单由业务实现 `IpBlacklist` 接口，框架不规定数据来自内存、Caffeine、Redis 还是数据库。接口只接收已经完成可信代理检查并规范化的真实客户端 IP：
+
+```java
+import com.yulinlin.security.limit.IpBlacklist;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class SecurityConfiguration {
+
+    @Bean
+    public IpBlacklist ipBlacklist(IpBlacklistService service) {
+        return service::isBlocked;
+    }
+}
+```
+
+一个简单的本地实现：
+
+```java
+import org.springframework.stereotype.Service;
+
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Service
+public class IpBlacklistService {
+    private final Set<String> blockedIps = ConcurrentHashMap.newKeySet();
+
+    public boolean isBlocked(String ip) {
+        return blockedIps.contains(ip);
+    }
+
+    public void block(String ip) {
+        blockedIps.add(ip);
+    }
+
+    public void unblock(String ip) {
+        blockedIps.remove(ip);
+    }
+}
+```
+
+没有业务 Bean 时，框架注册默认空实现并放行所有 IP。命中黑名单时不进入 Controller，直接返回 HTTP `403` 和未加密的统一 JSON，`msg` 为 `当前 IP 已被禁止访问`。黑名单检查对所有 Controller 生效，不要求存在 `@ApiLimit`。
+
+`isBlocked` 会在每次业务请求进入 Controller 前执行，不要在里面直接进行慢 SQL 查询。推荐使用内存集合、Caffeine、Redis Set，或者把数据库数据加载到本地后定时刷新。拉黑、解除、过期时间、CIDR 规则和管理接口都属于业务实现；框架只负责可靠传入真实 IP。实现抛出的异常不会被静默当作放行，避免安全检查在故障时无声失效。
+
+<a id="ai-security-rate-limit-nginx-真实-ip"></a>
+#### Nginx 真实 IP
+
+后端由本机 Nginx 代理时推荐：
+
+```nginx
+location /api/ {
+    if ($request_method = OPTIONS) {
+        return 204;
+    }
+
+    rewrite ^/api/(.*)$ /$1 break;
+    proxy_pass http://127.0.0.1:9091;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+框架先检查 Java 服务看到的 TCP 来源地址。只有来源匹配 `trusted-proxies` 时才读取 `X-Real-IP`；否则忽略所有转发 IP，使用连接来源地址。缺失、非法或包含多个值的 `X-Real-IP` 也会回退连接地址，避免客户端伪造。`trusted-proxies` 支持单个 IPv4、IPv6 和 CIDR，例如容器网络可以明确增加 `172.16.0.0/12`，不要无条件信任所有地址。Java 服务端口也应只允许可信 Nginx 访问。
+
+如果 Nginx 前面还有 CDN 或负载均衡，必须先正确配置 Nginx `real_ip` 模块，使 `$remote_addr` 恢复为真实客户端 IP，再转发给 Java。框架不会取 `X-Forwarded-For` 的第一个值。
+
+`LimitBy.DEVICE` 读取 `Device-Id`，接受最长 128 个字符的字母、数字、点、下划线、冒号和短横线。设备 ID 由客户端提供，能够被修改或轮换，因此视频列表、详情和防采集接口应优先按 IP；设备维度适合点赞、收藏等正常设备行为的额度隔离，不能替代登录鉴权。
+
+限流配置默认值：
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否处理 `@ApiLimit` |
+| `maximum-size` | `50000` | 本机同时保留的计数器上限，不是单接口请求次数 |
+| `ip-header` | `X-Real-IP` | 仅从可信代理连接读取的客户端 IP 请求头 |
+| `device-id-header` | `Device-Id` | `LimitBy.DEVICE` 使用的请求头 |
+| `trusted-proxies` | `127.0.0.1`、`::1` | 可以提供真实 IP 请求头的代理地址或 CIDR |
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-user"></a>
+<!-- source: doc/security/user.md -->
+<a id="ai-security-user-用户模型与安全管理器"></a>
+## 用户模型与安全管理器
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+IUserDetails、UserStore、安全协议与扩展入口。
+
+<a id="ai-security-user-本页导航"></a>
+### 本页导航
+
+- [登录用户模型](#ai-security-user-登录用户模型)
+- [安全管理器](#ai-security-user-安全管理器)
+- [常用组件扩展入口](#ai-security-user-常用组件扩展入口)
+- [加载用户信息](#ai-security-user-加载用户信息)
+
+<a id="ai-security-user-登录用户模型"></a>
+### 登录用户模型
+
+完整业务接入参考 [Admin 两表 RBAC 与无状态 JWT 登录案例](#ai-practice-rbac-admin-两表-rbac-与登录案例)：业务认证后用 userId 登录，`AdminUserStore` 加载最新用户与权限。admin 只引入 security-jwt，不保存登录记录，不实现安全管理器或撤销逻辑；本轮源码迁移未编译、未执行测试。
+
+登录用户模型只约束最小身份、角色和权限协议，不规定用户表、登录流程、密码校验、Token，以及权限数据如何存储、加载。业务用户模型按需实现 `IUserDetails`：
+
+```java
+import com.yulinlin.security.auth.IUserDetails;
+
+import java.util.Set;
+
+public class LoginUser implements IUserDetails {
+    private String userId;
+    private String username;
+    private Set<String> roles;
+    private Set<String> permissions;
+    private String tenantId;
+
+    @Override
+    public String getUserId() {
+        return userId;
+    }
+
+    @Override
+    public String getUsername() {
+        return username;
+    }
+
+    @Override
+    public Set<String> getRoles() {
+        return roles;
+    }
+
+    @Override
+    public Set<String> getPermissions() {
+        return permissions;
+    }
+
+    @Override
+    public Object getAttribute(String name) {
+        return switch (name) {
+            case "tenantId" -> tenantId;
+            default -> null;
+        };
+    }
+}
+```
+
+`roles` 和 `permissions` 使用 `Set` 表达唯一集合。接口自带 `hasRole(role)` 和 `hasPermission(permission)`，执行精确且区分大小写的集合判断；参数、角色集合或权限集合为 `null` 时返回 `false`。框架不自动增加 `ROLE_` 前缀，也不解释通配符。
+
+```java
+if (loginUser.hasRole("admin")) {
+    // 当前用户具有 admin 角色
+}
+
+if (loginUser.hasPermission("video:update")) {
+    // 当前用户可以修改视频
+}
+```
+
+`getAttribute(name)` 只提供按名称读取，不暴露可修改的元数据 Map，也不强制业务使用 Map 存储。未知属性返回 `null`。
+
+该模型不应包含密码、密码哈希、AES 密钥、Token、签发时间、过期时间、IP 或设备 ID。密码和 Token 属于认证凭证，IP 和设备属于单次登录或请求上下文，不属于用户本身。
+
+<a id="ai-security-user-安全管理器"></a>
+#### 安全管理器
+
+业务先校验账号、密码、验证码和状态，再用可信 `userId` 登录。框架不处理账号密码，也不查询指定用户表。使用 JWT 或 Sa-Token 实现时，不需要自己实现整个 `ISecurityManager`。
+
+```java
+import com.yulinlin.security.auth.LoginResult;
+import com.yulinlin.security.auth.SecurityUtil;
+
+// 业务代码：校验密码、验证码、状态，返回真实用户 ID。
+String userId = accountService.authenticate(username, password, code);
+LoginResult result = SecurityUtil.login(userId, "web");
+// Controller 将 result 包装成项目的 R<LoginResult> 返回。
+```
+
+上面的 `accountService` 是业务服务，不是框架组件。不能把前端传入的 userId 直接交给 login，否则会绕过身份认证。失败时业务可抛出 `LoginException`，账号不存在和密码错误应使用相同对外提示；基础设施错误不要伪装成登录成功。
+
+```java
+SecurityUtil.login(userId);        // deviceType 默认 "default"
+SecurityUtil.login(userId, "web"); // 设备类型由本次登录明确传入
+SecurityUtil.getUserDetails();    // 当前用户，未登录为 null
+SecurityUtil.requireUser();       // 当前用户，未登录抛 LoginException
+SecurityUtil.getUserDetails(userId); // 读取指定用户，不切换当前身份
+SecurityUtil.getToken();
+SecurityUtil.hasRole("admin");
+SecurityUtil.hasPermission("video:update");
+SecurityUtil.refresh();           // 重新加载当前用户
+SecurityUtil.refresh(userId);     // 指定用户；不是当前用户时仅加载并返回
+SecurityUtil.logout();            // JWT：清理线程；Sa-Token：注销当前会话并清理线程
+SecurityUtil.manager();           // 获取底层 ISecurityManager，也可以直接注入它
+```
+
+`login(String, String)` 现在表示 **userId + deviceType**，不再表示用户名和密码；旧三参数登录也已移除。登录成功返回 `LoginResult(token, expiresAt, user)`。`user` 为不含密码的 `IUserDetails`，不要返回含凭证的 ORM 用户实体。登录设备与加密用的 `Device-Type` 请求头不是自动绑定关系。
+
+`SecurityUtil` 只是静态委托入口，应用单例初始化完成后可用；不要在 Bean 构造器等过早阶段调用。普通业务也可以直接注入唯一的 `ISecurityManager`。不需要设计多管理器选择或运行时切换。
+
+<a id="ai-security-user-常用组件扩展入口"></a>
+#### 常用组件扩展入口
+
+只替换需要定制的组件，其他继续使用当前登录实现的默认行为。各扩展点只注册一个业务 Bean，不需要额外配置“实现类名称”。
+
+| 需要定制的能力 | 扩展点及包 | 怎么接入 |
+| --- | --- | --- |
+| 安全用户模型 | `auth.IUserDetails` | 业务安全 DTO 实现接口，排除密码等敏感字段 |
+| 加载用户、角色、权限 | `auth.UserStore` | 提供 Bean，实现 `load(userId)`；JWT、Sa-Token 都使用它 |
+| JWT 生成及验签解析 | `jwt.JwtTokenCodec` | 提供 Bean，同时实现 `generate`、`parse`，默认 Codec 自动退出 |
+| 有状态登录、撤销、在线会话 | `auth.ISecurityManager` 或 Sa-Token 原生扩展 | 使用 security-sa-token，或提供自己的管理器；JWT 模块无存储接口 |
+| Token 从哪里读取、怎样恢复身份 | `web.LoginInterceptor` | 提供该类型 Bean；框架自动注册，不用再写 MVC 注册器 |
+| 整体接入其他安全框架 | `auth.ISecurityManager` + `web.LoginInterceptor` | 管理器委托登录/注销/用户能力；自定义拦截器接入外部身份生命周期，框架自动注册 |
+| Sa-Token 原生能力 | `satoken.SaTokenSecurityManager` | 使用 `stpLogic()`；存储和策略沿用 Sa-Token 自身扩展 |
+| IP 黑名单 | `limit.IpBlacklist` | 实现并注册 Bean，见 [IP 黑名单](#ai-security-rate-limit-ip-黑名单) |
+
+表中包名前缀均为 `com.yulinlin.security`。加密设备密钥、限流参数优先使用本专题配置和注解，不必为普通配置需求替换整个安全管理器。
+
+<a id="ai-security-user-加载用户信息"></a>
+#### 加载用户信息
+
+```java
+import com.yulinlin.security.auth.UserStore;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+public UserStore userStore(AccountService accounts) {
+    return userId -> accounts.loadSecurityUser(userId);
+}
+```
+
+`AccountService.loadSecurityUser` 为业务自定义方法，返回实现 `IUserDetails` 的安全 DTO。只按 userId 加载，不在这里再次验证密码或验证码。用户不存在、已停用或不允许登录时返回 `null` 或抛 `LoginException`；数据库等故障直接抛出，不能返回一个默认用户。返回对象的 userId 必须与查询 ID 一致。
+
+JWT 中不保存完整用户资料。每次正常请求恢复身份时，验签并检查有效期后重新调用 `UserStore`，不查询登录记录；同一请求后续读取线程快照，不重复加载。业务可在 `UserStore` 内加缓存，但必须自行处理角色、状态变更的失效，`refresh()` 不会替你清理业务缓存。“无状态”指不保存 Token 登录状态，不表示完全不查用户数据库。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-jwt"></a>
+<!-- source: doc/security/jwt.md -->
+<a id="ai-security-jwt-无状态-jwt-登录"></a>
+## 无状态 JWT 登录
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+最小接入和请求身份恢复；注销不会撤销已发出的 JWT。
+
+前置阅读：[安全模块选型](#ai-security-modules)、[用户模型与 UserStore](#ai-security-user)。请求恢复与清理见[登录上下文](#ai-security-context)，自定义接入见[扩展专题](#ai-security-extension)。
+
+<a id="ai-security-jwt-本页导航"></a>
+### 本页导航
+
+- [JWT 最小接入](#ai-security-jwt-jwt-最小接入)
+
+<a id="ai-security-jwt-jwt-最小接入"></a>
+### JWT 最小接入
+
+引入 `com.yulinlin:security-jwt:3.0`，注册上述 `UserStore`，再配置：
+
+```yaml
+yulinlin:
+  security:
+    jwt:
+      secret: ${YULINLIN_JWT_SECRET} # 至少 32 字节随机密钥的 Base64，不是 AES 设备密钥
+      issuer: yulinlin
+      ttl: 2h
+```
+
+默认 `DefaultJwtTokenCodec` 使用 HS256，签发 `sub=userId`、唯一 `jti`、`deviceType`、`iat`、`exp`、`iss`；验签时检查算法、签名和签发者，管理器还检查时间并通过 UserStore 加载允许访问的用户，不查询登录会话记录。`ttl` 默认 2h，允许 1s～365d。JWT 是签名而非加密，不要加入密码等秘密资料。
+
+本实现是**纯无状态 JWT**，没有登录记录、Token 黑名单、按用户撤销或存储容量配置。`LoginSession` 只是当前请求的线程快照，不是持久化会话。保持签名密钥和校验配置稳定即可在应用重启后验证未过期 JWT，前提是 `UserStore` 仍允许该用户访问。
+
+从旧有状态版本迁移时，之前因删除记录而失效、但尚未过期且验签有效的 JWT 可能重新被接受。如果迁移要求所有用户重新登录，需由部署方明确轮换签名密钥或调整验证策略，不能继续依赖已移除的撤销记录。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-token-codec"></a>
+<!-- source: doc/security/token-codec.md -->
+<a id="ai-security-token-codec-自定义-token-生成与解析"></a>
+## 自定义 Token 生成与解析
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+替换 JwtTokenCodec，统一生成与解析协议。
+
+前置阅读：[安全模块选型](#ai-security-modules)、[用户模型与 UserStore](#ai-security-user)。请求恢复与清理见[登录上下文](#ai-security-context)，自定义接入见[扩展专题](#ai-security-extension)。
+
+<a id="ai-security-token-codec-本页导航"></a>
+### 本页导航
+
+- [自定义 Token 生成与解析](#ai-security-token-codec-自定义-token-生成与解析-1)
+
+<a id="ai-security-token-codec-自定义-token-生成与解析-1"></a>
+### 自定义 Token 生成与解析
+
+```java
+package com.example.security;
+
+import com.yulinlin.security.auth.IUserDetails;
+import com.yulinlin.security.jwt.JwtTokenCodec;
+import com.yulinlin.security.jwt.TokenInfo;
+
+// 在业务配置中将此实现注册成唯一 JwtTokenCodec Bean。
+public class BusinessTokenCodec implements JwtTokenCodec {
+    private final BusinessTokenService tokens;
+
+    public BusinessTokenCodec(BusinessTokenService tokens) {
+        this.tokens = tokens;
+    }
+
+    @Override
+    public String generate(IUserDetails user, String deviceType) {
+        return tokens.issue(user.getUserId(), deviceType);
+    }
+
+    @Override
+    public TokenInfo parse(String token) {
+        return tokens.verifyAndParse(token);
+    }
+}
+```
+
+`BusinessTokenService` 是示意的业务实现，不是框架类；请委托成熟 JWT 库做签发和验签，不要只 Base64 解码。注册方式：`@Bean JwtTokenCodec jwtTokenCodec(BusinessTokenService tokens) { return new BusinessTokenCodec(tokens); }`。
+
+解析结果定义为：
+
+```java
+public record TokenInfo(
+    String userId,
+    String deviceType,
+    String tokenId,
+    Instant issuedAt,
+    Instant expiresAt
+) {}
+```
+
+- 每次新登录生成唯一 tokenId；保留传入的 userId 和 deviceType，不能更换身份。管理器会回读解析结果核对并设置线程快照，不保存记录，也不查重 tokenId。
+- parse 必须完成验签等真实性校验；无效 Token 返回 null 或抛 `LoginException`。外部依赖故障应正常抛出，不能绕过验证。
+- 签发时间不能在未来，过期时间必须晚于签发时间且未过期。自定义 Codec 以返回的 expiresAt 决定会话到期，不自动再套一层配置 ttl。
+- 兼容旧 Token 未携带 deviceType：解析结果可为 null，不从服务端记录补齐；其他签名、用户、tokenId、有效期校验不放宽。新登录生成的 Token 仍需携带匹配的 deviceType。
+- 提供自定义 Codec 后，无需默认 Codec 的 secret/issuer；签名策略由自定义实现负责。它不负责存储、注销、加载用户或设置线程上下文。
+
+如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码。正常登录调用 `SecurityUtil.login`，由管理器加载用户、核对生成结果并建立当前线程身份。手动签发的 JWT 满足相同验签、时间和用户检查时也可被接受，不需要服务端登记。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-extension"></a>
+<!-- source: doc/security/extension.md -->
+<a id="ai-security-extension-自定义安全实现与拦截器"></a>
+## 自定义安全实现与拦截器
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+有 LoginInterceptor Bean 就使用用户实现，否则自动提供默认实现。
+
+<a id="ai-security-extension-本页导航"></a>
+### 本页导航
+
+- [自定义有状态登录](#ai-security-extension-自定义有状态登录)
+- [自定义登录拦截器](#ai-security-extension-自定义登录拦截器)
+- [接入外部安全框架](#ai-security-extension-接入外部安全框架)
+
+<a id="ai-security-extension-自定义有状态登录"></a>
+### 自定义有状态登录
+
+`security-jwt` 不再提供登录存储或撤销 SPI。旧的 `JwtSessionStore`、`JwtSession`、`CaffeineJwtSessionStore`、`getByUserId/removeByUserId` 及 `jwt.maximum-size` 已移除，不能继续复制旧 Redis Store 示例。
+
+需要在线会话、注销后立即失效、踢人或多设备管理时，优先选择 `security-sa-token`；需要自己的规则时，提供唯一的 `ISecurityManager` Bean（见[自定义与外部框架接入](#ai-security-extension-接入外部安全框架)），不要给无状态 JWT 默认链路偷偷增加存储。
+
+业务自定义有状态实现至少负责：
+
+- 登录成功前可靠写入服务端记录；明确是一条 Token 对应一个登录，还是按设备复用。
+- 请求时验证凭证及记录有效性，再加载允许登录的用户；存储故障不能当作验证成功。
+- 注销时同步撤销记录；按用户撤销、重置密码失效等由业务定义，不属于公共接口的默认能力。
+- 多实例使用共享存储；若用 Redis，需考虑 TTL、持久化、故障及副本读一致性。登录记录丢失应拒绝登录，不能自动退回纯 JWT 放行。
+- 明确请求上下文的恢复与清理归属，不让旧线程身份泄漏到下一请求。
+
+如果自定义逻辑只是签名算法、密钥来源或 Token 格式，仍使用 `JwtTokenCodec`，无需实现整套管理器。若引入了撤销表或登录存储，就已经是有状态方案，文档和调用方都应明确这一点。
+
+<a id="ai-security-extension-自定义登录拦截器"></a>
+### 自定义登录拦截器
+
+仅需改变 Token 请求头时，继承默认实现，保留它的验证与上下文处理：
+
+```java
+import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.web.LoginContextInterceptor;
+import com.yulinlin.security.web.LoginInterceptor;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+public LoginInterceptor loginInterceptor(ISecurityManager manager) {
+    return new LoginContextInterceptor(() -> manager) {
+        @Override
+        protected String resolveToken(HttpServletRequest request) {
+            return request.getHeader("X-Token"); // 示例：直接携带 Token，不带 Bearer 前缀
+        }
+    };
+}
+```
+
+框架发现业务 `LoginInterceptor` Bean 后使用它，否则使用默认实现；框架负责 MVC 注册和清理包装，无需手动 `addInterceptors`，避免重复执行。Bean 返回类型应声明为 `LoginInterceptor` 或具体实现，不要只暴露为普通 `HandlerInterceptor`。通常只提供一个；若确需多个 Bean，必须用 `@Primary` 明确选择。
+
+旧的 `yulinlin.security.auth.enabled` 已移除，配置为 false 也不会阻止自动注册，请删除该配置。以前通过它接入外部框架的项目，应改为提供自定义 `LoginInterceptor` Bean。
+
+完全定制时也可直接实现 `LoginInterceptor`，必须自己完成可信身份恢复：使用框架上下文时设置 `SecurityContext`；使用外部上下文时配合自定义 `ISecurityManager` 读取身份。不能只从请求里读出 userId 就认为已登录。框架包装器负责请求开始、拒绝请求、异常、完成及异步切换时清理 **SecurityContext**，不替自定义实现补做验签或清理外部框架的上下文。Token 算法变化优先替换 `JwtTokenCodec`，不必改拦截器。
+
+<a id="ai-security-extension-接入外部安全框架"></a>
+### 接入外部安全框架
+
+自定义实现不必同时引入两个登录模块，也不必改公共权限 AOP。分三种情况：
+
+| 定制范围 | 实现/配置 | 请求身份由谁维护 |
+| --- | --- | --- |
+| 只改变 JWT 算法、密钥、声明格式 | security-jwt + 一个 JwtTokenCodec Bean | 框架默认拦截器和管理器 |
+| 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean | 你的 resolveSession 校验凭证，默认拦截器设置/清理 SecurityContext |
+| 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean + 一个 LoginInterceptor Bean | 自定义拦截器接入外部身份生命周期，管理器读取其当前用户 |
+
+框架不要求自定义实现一定使用 UserStore；这是两种内置登录实现的用户加载扩展。如果自定义管理器使用它，可继承 `AbstractUserSecurityManager` 复用按 ID 加载和刷新，自己实现 login、logout、resolveSession；它不会替你实现任何存储、签名或撤销规则。
+
+继续使用框架上下文时，各方法的要求是：
+
+| 方法 | 实现要求 |
+| --- | --- |
+| login(userId, deviceType) | 业务已经验证凭证；加载安全用户、生成凭证，成功设置 SecurityContext 并返回 LoginResult；失败不保留旧身份 |
+| resolveSession(token) | 不依赖当前线程身份，从可信凭证恢复 LoginSession；检查签名/会话、有效期和用户状态，不能只解码或信任客户端 userId |
+| logout() | 无状态仅清理上下文；有状态先执行自己的撤销，finally 清理上下文；不要声称 JWT 清理等于撤销 |
+| getUserDetails(userId) | 读取指定用户，不切换当前身份 |
+| refresh(userId) | 重载用户；为当前用户时重新校验凭证并更新快照，不把其他用户切换成当前用户，不隐式续期 |
+
+resolveSession 校验失败返回 null 或抛 LoginException；login 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#ai-security-extension-自定义有状态登录)。
+
+如果选择已提供的 Sa-Token 适配，按 [Sa-Token 专题](#ai-security-sa-token)接入即可，不必自己再写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean，委托该框架按 userId 登录、注销、查询用户和刷新；再提供一个 `LoginInterceptor` Bean，负责接入该框架的请求身份恢复与清理，自动替换默认实现。
+
+不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 login(userId, deviceType)、logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；不要把原来的账号密码验证塞回协议参数。
+
+下面是注册形式，放在业务 `@Configuration` 中。`ExternalAuth` 代表**业务自己封装的外部框架服务，不是本项目提供的类**；其中方法需按上表的安全和生命周期约定实现：
+
+```java
+import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.IUserDetails;
+import com.yulinlin.security.auth.LoginResult;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+public ISecurityManager securityManager(ExternalAuth auth) {
+    return new ISecurityManager() {
+        @Override public LoginResult login(String userId, String deviceType) {
+            return auth.loginByUserId(userId, deviceType);
+        }
+        @Override public void logout() { auth.logout(); }
+        @Override public IUserDetails getUserDetails() { return auth.currentUser(); }
+        @Override public String getToken() { return auth.currentToken(); }
+        @Override public IUserDetails getUserDetails(String userId) {
+            return auth.loadUser(userId);
+        }
+        @Override public IUserDetails refresh(String userId) {
+            return auth.refreshUser(userId); // 当前用户时更新外部框架快照，不切换身份
+        }
+    };
+}
+```
+
+配套的拦截器示例（同样放在业务配置类中；`restoreRequest`、`clearRequest` 是业务封装的方法）：
+
+```java
+import com.yulinlin.security.web.LoginInterceptor;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+@Bean
+public LoginInterceptor externalLoginInterceptor(ExternalAuth auth) {
+    return new LoginInterceptor() {
+        @Override
+        public boolean preHandle(HttpServletRequest request,
+                                 HttpServletResponse response, Object handler) throws Exception {
+            boolean accepted = false;
+            try {
+                // 校验凭证并恢复外部框架身份；拒绝时写入响应并返回 false。
+                accepted = auth.restoreRequest(request, response);
+                return accepted;
+            } finally {
+                // preHandle 返回 false 或抛异常时，不会收到自己的 afterCompletion。
+                if (!accepted) auth.clearRequest();
+            }
+        }
+
+        @Override
+        public void afterCompletion(HttpServletRequest request,
+                                    HttpServletResponse response, Object handler, Exception ex) {
+            auth.clearRequest();
+        }
+
+        @Override
+        public void afterConcurrentHandlingStarted(HttpServletRequest request,
+                                                  HttpServletResponse response, Object handler) {
+            auth.clearRequest();
+        }
+    };
+}
+```
+
+外部身份恢复必须验证真实凭证，不得信任客户端直接传入的用户 ID。若外部框架已有 Filter 完整管理请求身份，Filter 应先于 MVC 执行并在 finally 清理；自定义 LoginInterceptor 对接其已验证上下文即可，不要重复解析或重复注册同一拦截器。异步业务线程的身份传递需遵循外部框架自己的规则。
+
+ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限流不受影响。框架包装器只兜底清理 SecurityContext，外部上下文仍由上述适配或外部 Filter 负责。若不提供自定义 LoginInterceptor，则启用默认实现，此时管理器必须实现 resolveSession，不能沿用上面省略该方法的示例。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-sa-token"></a>
+<!-- source: doc/security/sa-token.md -->
+<a id="ai-security-sa-token-有状态-sa-token-登录"></a>
+## 有状态 Sa-Token 登录
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+使用原生会话能力；存储、注销与 JWT 的区别。
+
+前置阅读：[安全模块选型](#ai-security-modules)、[用户模型与 UserStore](#ai-security-user)。请求恢复与清理见[登录上下文](#ai-security-context)，自定义接入见[扩展专题](#ai-security-extension)。
+
+<a id="ai-security-sa-token-本页导航"></a>
+### 本页导航
+
+- [Sa-Token 接入](#ai-security-sa-token-sa-token-接入)
+
+<a id="ai-security-sa-token-sa-token-接入"></a>
+### Sa-Token 接入
+
+选择 `com.yulinlin:security-sa-token:3.0`，不引入 `security-jwt`；仍提供相同的 `UserStore`。业务继续调用 `SecurityUtil.login(userId, deviceType)`、`logout()` 和 `getUserDetails()`，权限注解不用改。
+
+Token 生命周期、设备策略、会话存储由 Sa-Token 负责，配置沿用 `sa-token.*`。默认内存存储不能保证重启保留登录；多实例和重启恢复需要按所用 Sa-Token 版本接入其 Redis 等共享存储，并保证记录仍在、未过期。不通过 JWT 配置增加存储，也不实现 JwtTokenCodec。
+
+需要踢人、在线会话管理等能力时注入 `SaTokenSecurityManager`，调用 `stpLogic()` 获取底层对象。业务重置密码后若要求强制重新登录，应在事务提交后调用对应原生能力；本适配器不会监听账号表变化自动踢人。单独引入项目中的 ORM cache-redis 模块，不会自动替换 Sa-Token 会话存储。
+
+统一 HTTP 入口仍默认读取 `Authorization: Bearer <token>`；适配器本身不读写 Cookie。若业务另外使用原生 `StpUtil` 的 HTTP 入口，需自行对齐其 Token 读取配置，不能假设两套请求头规则自动相同。接口详情以所用版本的 [Sa-Token 登录文档](https://sa-token.com/use/login-auth.html) 为准。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-context"></a>
+<!-- source: doc/security/context.md -->
+<a id="ai-security-context-登录上下文生命周期"></a>
+## 登录上下文生命周期
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+线程身份恢复、请求结束清理与异步边界。
+
+<a id="ai-security-context-本页导航"></a>
+### 本页导航
+
+- [登录上下文与请求生命周期](#ai-security-context-登录上下文与请求生命周期)
+
+<a id="ai-security-context-登录上下文与请求生命周期"></a>
+### 登录上下文与请求生命周期
+
+```java
+LoginResult result = SecurityUtil.login(userId, "web"); // 前提：业务已验证身份
+// HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user。
+IUserDetails user = SecurityContext.requireUser();
+String userId = SecurityContext.getUserId();
+String token = SecurityContext.getToken();
+boolean loggedIn = SecurityContext.isLogin();
+```
+
+前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。一个正常请求只解析一次 Token，Controller、Service 和权限 AOP 读取同一用户快照。JWT 和 Sa-Token 实现已提供 resolveSession；自己实现管理器且使用此拦截器时也必须提供该能力。
+
+没有 Authorization 时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
+
+正常完成、异常完成时通过 afterCompletion 调用 ThreadLocal.remove()；preHandle 自身失败也立即清理。异步 MVC 的 afterConcurrentHandlingStarted 清理原请求线程，后续 MVC redispatch 会重新解析 Token，但 Callable、DeferredResult 或线程池的业务线程不会自动继承身份。不要使用 InheritableThreadLocal。后台任务需要的用户 ID 显式作为参数传递；不能把客户端声明的 userId 直接变成可信身份。
+
+请求结束只清理线程。JWT logout 也只清理当前线程，客户端必须自行删除 Token；随后再次携带该 JWT 仍可通过校验直到过期或用户不允许访问。Sa-Token logout 则注销服务端会话并清理线程。refresh 当前用户时重新验证凭证并加载最新用户，更新当前线程快照，不改变 JWT 的签发时间和有效期；Sa-Token 的活跃超时策略按其自身配置执行。其他请求已加载的快照不会被跨线程强制替换，长请求必要时应主动复核。
+
+非 HTTP 使用后必须显式清理：
+
+```java
+try {
+    SecurityUtil.login(userId, "job"); // 仅限服务端已验证身份的场景
+    // 当前线程业务
+} finally {
+    SecurityContext.clear(); // 清理当前线程，不改变凭证本身或外部会话状态
+}
+```
+
+SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理使用的入口。LoginSession/LoginResult 的 toString 不打印 Token 和用户资料；仍不得把完整登录响应、请求头或密码写入日志。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-authorization"></a>
+<!-- source: doc/security/authorization.md -->
+<a id="ai-security-authorization-登录角色与权限注解"></a>
+## 登录、角色与权限注解
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+ApiLogin、ApiRole、ApiPerm、ApiPublic 和默认匿名行为。
+
+<a id="ai-security-authorization-本页导航"></a>
+### 本页导航
+
+- [鉴权声明注解](#ai-security-authorization-鉴权声明注解)
+- [默认匿名安全管理器](#ai-security-authorization-默认匿名安全管理器)
+
+<a id="ai-security-authorization-鉴权声明注解"></a>
+### 鉴权声明注解
+
+`com.yulinlin.security.annotation` 提供以下四个公共注解，与 ApiCrypto、ApiLimit 命名统一。由自动注册的 ApiAuthAspect 统一执行，直接调用业务 ISecurityManager.getUserDetails() 获取当前用户，使用 IUserDetails.hasRole/hasPermission 校验；不自行解析 Token、查询账号表或刷新登录会话。
+
+| 注解 | 声明含义 | 参数 |
+| --- | --- | --- |
+| `@ApiLogin` | 调用方必须登录 | 无 |
+| `@ApiRole("admin")` | 调用方必须登录并拥有指定角色 | 必填 `String[] value`；`any` 默认 false |
+| `@ApiPerm("user:query")` | 调用方必须登录并拥有指定权限 | 必填 `String[] value`；`any` 默认 false |
+| `@ApiPublic` | 允许匿名访问 | 无 |
+
+四个注解均可放在 Controller 或 Service 的类、接口和公共方法上。解析支持接口声明、实现类、父类、重写方法、泛型桥接和继承的 default 方法。角色和权限默认按大小写精确匹配，不解释通配符或 SpEL，也没有 admin 自动越权；`any=false` 表示全部满足，`any=true` 表示满足任意一个。
+
+通过 Spring Bean 代理调用时生效，例如：
+
+```java
+import com.yulinlin.security.annotation.ApiLogin;
+import com.yulinlin.security.annotation.ApiPerm;
+import com.yulinlin.security.annotation.ApiPublic;
+import com.yulinlin.security.annotation.ApiRole;
+
+@ApiLogin
+public class UserApi {
+    @ApiPublic
+    public void login() { }
+
+    @ApiPerm("user:query")
+    public void page() { }
+
+    @ApiRole(value = {"admin", "operator"}, any = true)
+    @ApiPerm({"user:query", "user:export"})
+    public void export() { }
+}
+```
+
+鉴权规则：
+
+- ApiRole、ApiPerm 本身要求登录，不需要重复添加 ApiLogin。
+- 类、父类、接口和方法上的要求叠加，都必须满足；方法上的同类注解不会覆盖类级要求。
+- 方法 ApiPublic 可豁免类级 ApiLogin；不能绕过类级角色、权限要求，也不能与方法自身的鉴权要求共存。类上的 ApiPublic 不能与类级鉴权要求共存；但公开类中的方法可用 ApiLogin/ApiRole/ApiPerm 单独收紧访问。
+- 空数组、空白编码、编码首尾空白或冲突声明会抛出明确的配置异常，不静默放行。
+- 未登录抛出 HTTP 401；登录后缺少角色或权限抛出 HTTP 403。实现使用 ResponseStatusException；搭配 starter 时由现有异常处理器包装为 R，security 不依赖 starter。
+- 获取当前用户时发生的数据库、Redis 或业务异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
+- ApiPublic 只影响鉴权，不关闭 ApiCrypto、ApiLimit 或 IP 黑名单。
+
+<a id="ai-security-authorization-默认匿名安全管理器"></a>
+#### 默认匿名安全管理器
+
+| 场景或方法 | 默认行为 |
+| --- | --- |
+| 无业务 ISecurityManager Bean | 自动提供 AnonymousSecurityManager，正常启动 |
+| `getUserDetails()`、`getUserDetails(userId)`、`refresh(userId)` | 返回 null，不查库、不生成身份 |
+| `logout()` | 清理本模块当前线程上下文，不操作外部登录会话 |
+| `login(...)` 两个重载 | 抛出 IllegalStateException，提示未配置业务安全管理器 |
+| 无鉴权注解或允许匿名的方法 | 不读取管理器，不影响加密和限流 |
+| 默认匿名实现访问受保护方法 | 401，不会因为没有业务实现而放行 |
+| 自定义 ISecurityManager Bean | 自动替换默认实现；项目只保留一个安全管理器 |
+
+业务实现只需注册为普通 Bean，不需要额外的启用注解或配置。切面只在受保护的调用中解析管理器，每次调用只获取一次当前用户；注解策略按目标类和方法缓存，不缓存用户与校验结果。通过 ClassValue 保存解析结果，避免使用长期全局 Class/Method Map。
+
+ApiAuthAspect 使用 Spring 原生 Advisor/MethodInterceptor 做方法匹配，而不是叠加多个重复执行的切面；order 为 9990，早于框架同步代理的 9998 和事务的 9999。没有鉴权声明的 Bean 不为此创建代理。当前只支持经 Spring 代理调用的 public、非 final 方法；受保护的 final 类或 final 方法明确拒绝配置。Object 基础方法不作为业务鉴权入口。private/static 方法、手动 new 对象和同类 this 调用不受 AOP 保护，不能将这些调用当成安全边界；异步线程也不会自动继承当前请求身份。Spring Boot 默认启用 AOP，不要设置 spring.aop.auto=false；非 Boot 容器需自行配置 AOP 基础设施。
+
+Admin RBAC 案例已改为公共 ApiLogin、ApiPerm、ApiPublic，移除了本地 RequirePermission、Anonymous 和 RbacInterceptor，避免同一入口再执行两套权限检查。回归用例统一放在 admin/src/test/java；本轮未执行编译、测试或打包。
+
+---
+
+下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-catalog"></a>
+<!-- source: doc/tools/catalog.md -->
+<a id="ai-tools-catalog-lang-定位与类型目录"></a>
+## lang 定位与类型目录
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+先查工具所在模块和公开类型，再阅读对应专题。
+
+<a id="ai-tools-catalog-本页导航"></a>
+### 本页导航
+
+- [lang 模块定位](#ai-tools-catalog-lang-模块定位)
+- [lang 公开类型目录](#ai-tools-catalog-lang-公开类型目录)
+- [常见问题](#ai-tools-catalog-常见问题)
+
+<a id="ai-tools-catalog-lang-模块定位"></a>
+### lang 模块定位
+
+只使用基础工具时可以直接引入：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>lang</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+`lang` 不是零依赖 JAR：JSON API 使用 Jackson，注解、泛型扫描与 AOP 扩展使用 Spring/AspectJ。若项目已经引入完整框架，无需重复声明。
+
+本页把 API 分为三类：
+
+- 业务工具：`JsonUtil`、`ReflectionUtil`、`DateTime`、`Page`、`StringUtil` 等，可直接调用。
+- 轻量基础设施：`ExpiryMap`、`SmartCache`、`ResourcePool`、事件和线程工具，调用方需要管理生命周期与并发边界。
+- 框架扩展 SPI：AOP、JSON 格式器、代理和安全响应接口，只有扩展框架时才实现或直接调用。
+
+<a id="ai-tools-catalog-lang-公开类型目录"></a>
+### lang 公开类型目录
+
+下面按包列出当前全部公开类型，便于外部 AI 判断准确入口。未列为首选的兼容类型也没有删除。
+
+| 包 | 公开类型 | 定位 |
+| --- | --- | --- |
+| `lang.aop` | BaseAnnotationBeanPostProcessor、AnnotationAdvisor | Spring AOP 扩展 SPI |
+| `lang.cache` | ExpiryMap、ResourcePool | JVM 轻量过期缓存、资源池 |
+| `lang.enums` | IEnum | 枚举 label/value 契约 |
+| `lang.event` | AbstractEventPublishManager、EventPublishManager、IEvent、IEventHandler | JVM 内同步/异步事件 |
+| `lang.json` | JsonUtil、YulinlinSimpModule、DateTimeJsonFormat、DateTimeStrJsonSerializer、MoneyJsonFormat、CoinJsonFormat、LongAdderJsonFormat、DoubleAdderJsonFormat、EnumFormat、EnumSerializer | Jackson 转换与扩展 |
+| `lang.lambda` | LambdaPropertyFunction、LambdaUtils | 可序列化属性方法引用解析 |
+| `lang.lazy` | SmartCache | 首次同步、过期异步刷新的单值缓存 |
+| `lang.reflection` | ReflectionUtil、GenericUtil、AnnotationUtil、SerializableUtil、MethodHandlesUtil、ProxyUtil、ReflectAsmUtil | 反射、泛型、注解、序列化和代理 |
+| `lang.security` | CryptoDataResponse | security 模块响应加密 SPI |
+| `lang.tuple` | Triple、MutablePair、MutableTriple | 轻量位置容器 |
+| `lang.util` | DateTime、Page、StringUtil、RandomUtil、Snowflake、WeightedSelector、SegmentLock、ThreadUtil、ListString、CodeObject、Currency、Money、Coin、ClassUtil、ScanUtils、BaseGeneric、GenericClass、GenericField、GenericMethod | 通用值、并发、扫描和兼容泛型工具 |
+
+`DeepCopies`、`ValueCopies`、`HandleAccess` 是包内实现，不是外部 API。
+
+<a id="ai-tools-catalog-常见问题"></a>
+### 常见问题
+
+| 问题 | 优先检查 |
+| --- | --- |
+| ReflectionUtil.property 的 NoSuchMethodError | 编译与运行时 lang/core 是否同一产物 |
+| DTO 复制字段缺失 | 名称、可写属性、null 跳过及嵌套类型是否相容 |
+| 克隆列表后共享引用不同 | 整体克隆还是每元素独立调用 |
+| SmartCache 过期仍拿到旧值 | 这是 stale-while-revalidate；首次加载才阻塞 |
+| ExpiryMap 实例不再使用 | 调用 shutdown 取消该实例清理任务 |
+| ResourcePool 后续 acquire 卡住 | 检查每次借出是否恰好 release 一次 |
+| Lambda 解析失败 | 参数是否为 LambdaPropertyFunction/其他可序列化 Lambda |
+| DateTime 时间戳偏移 | JVM 默认时区是否符合业务协议 |
+| Java 反序列化是否能处理请求数据 | 不要反序列化不可信输入 |
+| HTTP 超时配置没生效 | Spring 客户端、静态客户端、手动构造和单次覆盖分别核对 |
+| 下载成功但 body 为空 | downloadTo 内容在文件中 |
+| 404 检查返回 false | 不代表存在，需区分网络/状态异常 |
+
+本文按当前源码和 JDK 25 行为核对；HTTP 地址、文件路径及业务类型是示例，需要替换。工具类是进程内能力，不自动提供分布式一致性、持久化、重试或安全随机。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-http"></a>
+<!-- source: doc/tools/http.md -->
+<a id="ai-tools-http-http-请求上传与下载"></a>
+## HTTP 请求、上传与下载
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+JSON、表单、文件、超时设置和 404 检查。
+
+<a id="ai-tools-http-本页导航"></a>
+### 本页导航
+
+- [HTTP 请求](#ai-tools-http-http-请求)
+- [上传与下载](#ai-tools-http-上传与下载)
+- [超时与错误处理](#ai-tools-http-超时与错误处理)
+- [判断是否为 404](#ai-tools-http-判断是否为-404)
+
+<a id="ai-tools-http-http-请求"></a>
+### HTTP 请求
+
+公共类型在 `com.yulinlin.data.core.http`：HttpRequestClient、HttpRequest、HttpUtil、HttpResponse、HttpFile、HttpRequestException。底层基于 Spring RestClient，调用同步阻塞。
+
+下面是完整 Service。复用客户端，每次调用创建新的请求对象；地址是示例，需替换为自己的服务：
+
+```java
+package demo.service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.yulinlin.data.core.http.HttpRequestClient;
+import com.yulinlin.data.core.http.HttpResponse;
+import org.springframework.stereotype.Service;
+import java.time.Duration;
+import java.util.Map;
+
+@Service
+public class RemoteApiService {
+    private final HttpRequestClient client;
+
+    public RemoteApiService(HttpRequestClient client) { this.client = client; }
+
+    public Map<String, Object> createOrder(String token, String productId) {
+        HttpResponse response = client.post("https://api.example.com/orders")
+                .bearerToken(token)
+                .json(Map.of("productId", productId, "quantity", 1))
+                .timeout(Duration.ofSeconds(5))
+                .execute();
+        return response.bodyAs(new TypeReference<Map<String, Object>>() {});
+    }
+}
+```
+
+以下为业务方法体片段，采用静态入口：
+
+```java
+import com.yulinlin.data.core.http.HttpUtil;
+import com.yulinlin.data.core.http.HttpResponse;
+import java.util.Map;
+
+HttpResponse response = HttpUtil.get("https://api.example.com/users")
+        .query("page", 1).query("size", 20)
+        .header("X-Request-Id", "demo")
+        .execute();
+
+String text = response.getBodyAsString();
+int status = response.getStatus();
+
+HttpUtil.post("https://api.example.com/forms")
+        .form(Map.of("name", "alice", "enabled", true))
+        .execute();
+```
+
+| 能力 | 入口 |
+| --- | --- |
+| HTTP 方法 | get/post/put/patch/delete；其他方法 request(HttpMethod, url) |
+| 查询与头 | query(name, value)、header(name, value)、headers(HttpHeaders) |
+| 认证 | basicAuth(user, password)、bearerToken(token) |
+| JSON | json(Object) |
+| 普通表单 | form(name, value)、form(Map<String,Object>) |
+| 其他 body | body(Object, MediaType) |
+| 响应 | getStatus、getStatusCode、getHeaders、getBody、getBodyAsString、bodyAs |
+
+query 的 null 值会忽略。同一个请求只使用一种 body 类型，不能混合 json 与 form；请求构造器是可变对象，不跨线程共享。
+
+<a id="ai-tools-http-上传与下载"></a>
+### 上传与下载
+
+```java
+import com.yulinlin.data.core.http.HttpFile;
+import com.yulinlin.data.core.http.HttpUtil;
+import java.nio.file.Path;
+import java.time.Duration;
+
+// multipart 普通字段和文件一起上传，不使用 form() 混入。
+HttpUtil.post("https://api.example.com/files")
+        .multipart("category", "invoice")
+        .file("file", HttpFile.of(Path.of("upload/invoice.pdf")))
+        .execute();
+
+// 大文件流式落盘。
+HttpUtil.get("https://api.example.com/export")
+        .timeout(Duration.ofSeconds(60))
+        .downloadTo(Path.of("download/export.zip"));
+```
+
+HttpFile 支持 of(Path)、of(filename, byte[], MediaType)、of(filename, InputStream, MediaType)。输入流上传不保证可重放，不重复使用已消费的原流。
+
+execute 会把响应 body 放入内存，大文件优先 downloadTo。下载会创建父目录并覆盖同名文件，失败可能留下部分文件，不保证原子替换；返回响应 body 为空，内容已写磁盘。业务需校验目标路径，不能直接信任远端路径。
+
+<a id="ai-tools-http-超时与错误处理"></a>
+### 超时与错误处理
+
+Spring 注入客户端默认 10 秒，配置如下：
+
+```yaml
+yulinlin:
+  http:
+    timeout: 10s
+```
+
+单次 `timeout(Duration)` 覆盖默认值，必须为正数。同一 Duration 同时配置连接和响应读取超时，不提供独立链式 connectTimeout/readTimeout；不是覆盖网络、重定向、写盘等全部阶段的严格总截止时间。
+
+静态 HttpUtil 默认也为 10 秒，但不自动读取 Spring 配置。`HttpUtil.withTimeout(duration)` 返回新客户端；`HttpUtil.setClient(client)` 替换静态默认客户端，应在初始化阶段明确配置，不在请求处理中反复切换。
+
+`new HttpRequestClient(restClient, mapper)` 沿用给定客户端设置，不自动添加默认超时。单次 timeout 目前会新建底层客户端，大量相同超时请求优先复用预配置客户端。
+
+<a id="ai-tools-http-判断是否为-404"></a>
+#### 判断是否为 404
+
+```java
+boolean missing = HttpUtil.isNotFound("https://api.example.com/resource");
+```
+
+它执行 GET，不是 HEAD；只有明确 HTTP 404 返回 true。超时、网络错误和其他状态返回 false，所以 false 不证明存在或健康。成功响应按普通请求读入内存，不适合检查超大文件。
+
+带认证的检查或需要区分其他失败时，自己处理异常：
+
+```java
+import com.yulinlin.data.core.http.HttpRequestException;
+
+try {
+    HttpUtil.get("https://api.example.com/resource").bearerToken(token).execute();
+} catch (HttpRequestException error) {
+    Integer status = error.getStatusCode(); // 网络错误可能为 null。
+    if (!Integer.valueOf(404).equals(status)) throw error;
+    // 业务处理确实不存在。
+}
+```
+
+普通 4xx/5xx、网络调用与部分 JSON 解码失败包装为 HttpRequestException；参数校验和非法 URI 不保证都包装。204 空响应不当作 JSON 解析。不假定自动重试、自动跟随重定向或异步能力存在。
+
+用户提供 URL 时校验协议、目的地址与内网访问策略，防止 SSRF；不要无差别记录 token、cookie、密码及错误响应体。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-reflection"></a>
+<!-- source: doc/tools/reflection.md -->
+<a id="ai-tools-reflection-反射复制与深克隆"></a>
+## 反射复制与深克隆
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+属性复制、嵌套对象和深度克隆的行为边界。
+
+<a id="ai-tools-reflection-本页导航"></a>
+### 本页导航
+
+- [反射复制与深克隆](#ai-tools-reflection-反射复制与深克隆-1)
+
+<a id="ai-tools-reflection-反射复制与深克隆-1"></a>
+### 反射复制与深克隆
+
+以下完整普通 Bean 不依赖 ORM；作为本节和 JSON 示例模型：
+
+```java
+package demo.tools;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class ToolUser {
+    private String name;
+    private List<String> tags = new ArrayList<>();
+    public ToolUser() { }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public List<String> getTags() { return tags; }
+    public void setTags(List<String> tags) { this.tags = tags; }
+}
+```
+
+业务方法体片段：
+
+```java
+import com.yulinlin.data.lang.reflection.ReflectionUtil;
+import demo.tools.ToolUser;
+
+ToolUser user = ReflectionUtil.newInstance(ToolUser.class);
+ReflectionUtil.invokeSetter(user, "name", "alice");
+Object name = ReflectionUtil.invokeGetter(user, "name");
+
+ReflectionUtil.PropertyAccess access = ReflectionUtil.property(ToolUser.class, "name");
+access.set(user, "bob");
+Object value = access.get(user);
+
+ToolUser deep = ReflectionUtil.deepClone(user);
+ToolUser target = new ToolUser();
+ReflectionUtil.copyProperties(user, target);
+```
+
+| API | 语义 |
+| --- | --- |
+| newInstance(Class) | 可访问无参构造 |
+| invokeGetter/invokeSetter | 名称和嵌套路径；不推定中间对象自动创建 |
+| invokeMethod(bean, name, args...) | 根据名称和参数找方法；歧义报错，变长参数传声明数组 |
+| property(Class, name) | 单一属性访问器，可缓存；不是嵌套路径解析器 |
+| clone(value) | 浅复制 |
+| deepClone(value) / clone(value, true) | 对象图深复制，null 返回 null |
+| copyProperties(source, target) | 同名属性深复制到已有目标；跳过缺少属性及源 null |
+
+深克隆覆盖支持的 Bean、集合、Map 键值、数组和可变值，保留对象图的循环与共享引用。每次调用使用独立身份跟踪上下文，不把 DeepCopies 改成跨请求共享单例。
+
+整体 deepClone(list) 保留跨元素共享关系；逐条 deepClone 不保留跨调用共享关系。这两种方式不能仅凭速度互换。
+
+使用限制：
+
+- Bean 需要无参构造和可写属性；record、不可写 final 字段、线程/流/连接不作为通用复制目标。
+- 不自动把嵌套实体转换为另一种 DTO，也不自动转换集合泛型。
+- 不可变值可以复用；包装集合可能变成普通可变集合，不保证保留不可修改/同步包装语义。
+- copyProperties 失败可能已部分修改目标，没有回滚；null 跳过不等于 SQL NULL 更新。
+- 私有成员访问仍受 Java 模块 opens 限制，不绕过任意访问控制。
+- 当前基于 MethodHandle，ReflectAsmUtil 是弃用兼容入口；Kryo 不是 lang 的克隆后端。
+- 性能实测必须看相同模型、粒度和环境；历史 JMH 数据在 [内部维护](operations/clone-benchmark.md#历史克隆基准)，不作当前通用排名。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-json"></a>
+<!-- source: doc/tools/json.md -->
+<a id="ai-tools-json-json-转换"></a>
+## JSON 转换
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+常用 JSON 转换方式与泛型类型。
+
+<a id="ai-tools-json-本页导航"></a>
+### 本页导航
+
+- [JSON 转换](#ai-tools-json-json-转换-1)
+
+<a id="ai-tools-json-json-转换-1"></a>
+### JSON 转换
+
+```java
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.yulinlin.data.lang.json.JsonUtil;
+import demo.tools.ToolUser;
+import java.util.List;
+
+String json = JsonUtil.toJson(new ToolUser());
+ToolUser user = JsonUtil.parseJson(json, ToolUser.class);
+List<ToolUser> users = JsonUtil.parseJson("[]", new TypeReference<List<ToolUser>>() {});
+```
+
+JsonUtil.to(source, Target.class) 经 JSON 做类型转换，受 Jackson 注解/配置影响，不是对象图克隆，不保持任意循环与对象身份。
+
+`JsonUtil` 独立模式有自有 mapper；starter 会用 Spring `ObjectMapper` 替换它。`setMapper` 是进程级全局设置，应在启动阶段完成，不能在并发请求中来回切换。`HttpUtil` 静态客户端的 mapper 是另一套，不自动与 `JsonUtil` 同步。
+
+`YulinlinSimpModule` 自动支持以下值：
+
+| Java 类型 | JSON 形式 |
+| --- | --- |
+| DateTime | `yyyy-MM-dd HH:mm:ss` 字符串 |
+| Money、Coin | JSON 数字 |
+| LongAdder、DoubleAdder | 当前累计值 |
+
+手动创建 Jackson mapper 时这样注册：
+
+```java
+ObjectMapper mapper = new ObjectMapper();
+mapper.registerModule(new YulinlinSimpModule());
+JsonUtil.setMapper(mapper);
+```
+
+`DateTimeStrJsonSerializer` 输出“刚刚、N 分钟前”等相对文本；`EnumSerializer` 输出实现 `IEnum` 的 label。它们没有加入 `YulinlinSimpModule`，必须通过 Jackson 注解或模块显式注册。`EnumFormat` 也是扩展构件，不会自动接管全部枚举。
+
+`JsonUtil.clone` 是保留的 JSON 往返接口，只适合 Jackson 可序列化模型；异构集合、循环引用和对象身份不可靠。通用深克隆优先使用 `ReflectionUtil.deepClone`。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-value"></a>
+<!-- source: doc/tools/value.md -->
+<a id="ai-tools-value-日期数字与字符串工具"></a>
+## 日期、数字与字符串工具
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+日期、金额、分页、字符串、随机数和 ID。
+
+<a id="ai-tools-value-本页导航"></a>
+### 本页导航
+
+- [日期、金额与分页](#ai-tools-value-日期金额与分页)
+- [DateTime](#ai-tools-value-datetime)
+- [Money、Coin 与 CodeObject](#ai-tools-value-moneycoin-与-codeobject)
+- [Page](#ai-tools-value-page)
+- [ListString](#ai-tools-value-liststring)
+- [字符串、随机数与 ID](#ai-tools-value-字符串随机数与-id)
+- [WeightedSelector](#ai-tools-value-weightedselector)
+
+<a id="ai-tools-value-日期金额与分页"></a>
+### 日期、金额与分页
+
+<a id="ai-tools-value-datetime"></a>
+#### DateTime
+
+`DateTime` 是基于 `LocalDateTime` 的不可变包装：`plus*`、`with*`、`beginOf*`、`endOf*` 都返回新对象，不修改原值。
+
+```java
+DateTime now = DateTime.now();
+DateTime tomorrow = now.plusDays(1);
+DateTime dayStart = now.beginOfDay();
+DateTime dayEnd = now.endOfDay();
+
+DateTime a = DateTime.parse("2026-10-10 12:30:00");
+DateTime b = DateTime.parse("20261010123000");
+DateTime c = DateTime.parse("2026/10/10", "yyyy/MM/dd");
+long millis = a.getTime();
+Date legacy = a.toDate();
+```
+
+默认解析支持 `yyyy-MM-dd HH:mm:ss`、`yyyyMMddHHmmss`、日期/月/年简写，以及 10 位秒时间戳和 13 位毫秒时间戳。时间戳和 `Date` 转换使用 JVM 默认时区；跨时区协议优先直接使用 `Instant`、`OffsetDateTime`。`isDate` 只是快速形态判断，不是严格日期校验。
+
+<a id="ai-tools-value-moneycoin-与-codeobject"></a>
+#### Money、Coin 与 CodeObject
+
+```java
+Money price = Money.of(12.34);
+long stored = price.encode();       // 1234
+Money decoded = new Money();
+decoded.decode(stored);             // 12.34
+
+Coin coin = Coin.of(8.5);
+long coinStored = coin.encode();    // 85
+```
+
+`Money` 固定两位缩放，`Coin` 固定一位缩放；两者都继承 `Currency<Double>` 并实现 `CodeObject<Long>`。由于内部是 `Double`，不适合要求严格十进制精度、超大金额或复杂舍入的财务场景，这些场景使用 `BigDecimal`。
+
+`CodeObject<T>` 是数据库值编解码约定：`encode` 输出持久化值，`decode` 把持久化值写回当前对象。
+
+<a id="ai-tools-value-page"></a>
+#### Page
+
+```java
+Page<User> page = Page.of(users, total);
+Page<UserDto> dtoPage = page.map(this::toDto);
+Page<User> active = page.filter(User::isActive);
+List<User> second = Page.page(users, 2, 20);
+page.putValue("traceId", traceId);
+```
+
+`Page.page` 是从 1 开始的内存分页，不发 SQL，要求 `pageNumber >= 1`、`pageSize > 0`。`map` 遇到 null 会从返回 Page 的 total 中扣除；`filter` 保留原 total，适合“当前页后处理”，不表示重新统计数据库总数。`shuffle`、`random` 返回新 Page，不修改原 list；`randomOne` 不接受空列表。
+
+<a id="ai-tools-value-liststring"></a>
+#### ListString
+
+```java
+ListString<Long> ids = new ListString<>();
+ids.decode("10,20,30", Long.class);
+String value = ids.encode();
+
+ListString<String> tags = ListString.ofString("java,jdk25");
+```
+
+默认分隔符是进程级静态字段 `ListString.splitStr`。支持 String、Integer、Long、Double、Byte、Float；内容本身包含分隔符时不能无损往返，也不处理转义。业务优先保持默认逗号，避免运行期间修改全局分隔符。
+
+<a id="ai-tools-value-字符串随机数与-id"></a>
+### 字符串、随机数与 ID
+
+```java
+String field = StringUtil.columnToJava("user_name"); // userName
+String column = StringUtil.javaToColumn("userName"); // user_name
+String text = StringUtil.removeLine(" a\n b\t");     // ab
+String rendered = StringUtil.renderString("hi ${name}", Map.of("name", "Lin"));
+
+int value = RandomUtil.randomInt(10); // [0, 10)
+char tokenChar = RandomUtil.randomChar();
+
+Snowflake snowflake = new Snowflake(1, 2);
+long id = snowflake.nextId();
+```
+
+- `StringUtil.isNull` 只判断 null 或空串，不等价于 `isBlank`；`removeLine` 会移除 ASCII 空白。
+- `renderString` 是简单 `${key}` 替换，不是表达式引擎；值不能为 null。
+- `RandomUtil` 基于 `ThreadLocalRandom`，适合抽样和非安全随机，不能生成密码、token、IV 或密钥。
+- `Snowflake` 的 workerId 和 dataCenterId 均为 0～31；同一时间范围内的不同进程必须使用不同组合。`nextId` 是同步线程安全的，时钟大幅回拨会拒绝生成。
+
+<a id="ai-tools-value-weightedselector"></a>
+#### WeightedSelector
+
+```java
+WeightedSelector<String> selector = new WeightedSelector<>();
+selector.add("A", 1);
+selector.add("B", 3);
+String selected = selector.select();
+```
+
+权重小于等于 0 会忽略；没有正权重项时 `select` 抛异常。添加操作同步并发布到并发有序表，热点选择路径不使用共享 `Random`，支持并发读取；`list` 返回不可修改视图。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-local-cache"></a>
+<!-- source: doc/tools/local-cache.md -->
+<a id="ai-tools-local-cache-轻量缓存与资源池"></a>
+## 轻量缓存与资源池
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+ExpiryMap、SmartCache 与 ResourcePool，不等同于 ORM 缓存。
+
+<a id="ai-tools-local-cache-本页导航"></a>
+### 本页导航
+
+- [轻量缓存与资源池](#ai-tools-local-cache-轻量缓存与资源池-1)
+- [ExpiryMap](#ai-tools-local-cache-expirymap)
+- [SmartCache](#ai-tools-local-cache-smartcache)
+- [ResourcePool](#ai-tools-local-cache-resourcepool)
+
+<a id="ai-tools-local-cache-轻量缓存与资源池-1"></a>
+### 轻量缓存与资源池
+
+这些类不替代 [ORM 查询缓存](#ai-cache-query)。它们只管理当前 JVM 内的普通对象。
+
+<a id="ai-tools-local-cache-expirymap"></a>
+#### ExpiryMap
+
+```java
+try {
+    ExpiryMap<String, User> cache = new ExpiryMap<>(
+            30, TimeUnit.SECONDS, 20_000, 5,
+            expired -> expired.forEach(this::afterRemoval));
+
+    User user = cache.get("u:1", key -> loadUser(key));
+    cache.invalidate("u:1");
+    cache.shutdown();
+} catch (RuntimeException error) {
+    // loader 异常原样传播
+}
+```
+
+TTL 是写入后过期；`randomTtl` 单位为秒，会在基础 TTL 上随机增加 0～N 秒。`get(key, loader)` 对同一 key 使用 `ConcurrentHashMap.compute`，避免同一时刻重复加载。容量是轻量近似上限，不提供 Caffeine 的精确淘汰算法。清理任务使用全局守护调度器；每个实例使用完都调用 `shutdown`，移除回调在框架线程池异步执行。key、value、loader 返回值均不要使用 null。
+
+<a id="ai-tools-local-cache-smartcache"></a>
+#### SmartCache
+
+`SmartCache` 是轻量级 stale-while-revalidate 缓存。首次访问同步加载；TTL 内直接返回缓存；TTL 到期后的第一个请求只提交一次虚拟线程刷新，并立即返回旧值，其他并发请求不会重复刷新。
+
+```java
+try (SmartCache<List<User>> cache = SmartCache.of(this::loadUsers, 60)) {
+    List<User> users = cache.get();
+    cache.refresh();       // 强制同步刷新
+    cache.refreshAsync();  // 合并并发刷新请求
+}
+```
+
+默认 `autoRefresh=false`，没有访问就不会刷新，适合“缓存 60 秒，过期后的下一次访问刷新一次”的业务。需要即使无人访问也定时更新时，显式使用：
+
+```java
+SmartCache<List<User>> cache = SmartCache.of(this::loadUsers, 60, true);
+```
+
+`autoRefresh=true` 按 TTL 周期在虚拟线程刷新。实例不再使用时应调用 `close()`；关闭后的实例不能继续 `get/refresh`。刷新成功后重新计算完整 TTL；刷新失败会记录日志并保留旧值；supplier 返回 `null` 也不会覆盖旧值，两种情况都会在最多 5 秒后允许访问触发重试，避免连续请求形成刷新风暴。
+
+带 key 的工厂用于进程内共享：
+
+```java
+SmartCache<User> cache = SmartCache.of("user:" + userId, () -> loadUser(userId), 60);
+```
+
+`SmartCache.of(key, ...)` 会复用同一实例，同 key 第一次创建时的值类型、supplier、TTL 和 `autoRefresh` 配置生效，因此不要让不同业务或不同类型共用一个 key。带 key 实例调用 `close()` 后会从全局注册表移除，再次调用 `of(key, ...)` 会创建新实例；`clearAllCache()` 会原子移除并关闭当前全部带 key 实例。`clear()` 与后台刷新互斥，清空后下一次 `get()` 会同步加载。
+
+<a id="ai-tools-local-cache-resourcepool"></a>
+#### ResourcePool
+
+```java
+ResourcePool<Client> pool = new ResourcePool<>(8, Client::new);
+Client client = pool.acquire();
+try {
+    client.call();
+} finally {
+    pool.release(client); // 每次 acquire 必须且只能 release 一次
+}
+pool.close(); // 关闭当时空闲的资源
+```
+
+继承 `ResourcePool` 并覆盖 `protected close(T)` 可定义资源关闭动作。工厂异常不会泄漏许可证。该类不跟踪借出对象，重复 release 会破坏容量约束；`close` 也不会等待正在使用的对象，复杂连接池优先使用成熟池实现。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-concurrency"></a>
+<!-- source: doc/tools/concurrency.md -->
+<a id="ai-tools-concurrency-线程调度与事件"></a>
+## 线程、调度与事件
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+锁、虚拟线程、延迟调度和进程内事件。
+
+<a id="ai-tools-concurrency-本页导航"></a>
+### 本页导航
+
+- [并发与调度](#ai-tools-concurrency-并发与调度)
+- [SegmentLock](#ai-tools-concurrency-segmentlock)
+- [ThreadUtil](#ai-tools-concurrency-threadutil)
+- [进程内事件](#ai-tools-concurrency-进程内事件)
+
+<a id="ai-tools-concurrency-并发与调度"></a>
+### 并发与调度
+
+<a id="ai-tools-concurrency-segmentlock"></a>
+#### SegmentLock
+
+```java
+SegmentLock locks = new SegmentLock(64);
+locks.execute(userId, () -> updateUser(userId));
+Order order = locks.executeWithReturn(orderId, () -> loadOrder(orderId));
+```
+
+相同 key 一定进入同一段，不同 key 可能碰撞到同一锁。段数创建后固定；构造参数必须大于 0。它适合短临界区，不提供跨进程锁。
+
+<a id="ai-tools-concurrency-threadutil"></a>
+#### ThreadUtil
+
+```java
+Future<Result> ioFuture = ThreadUtil.submit(this::blockingHttpOrJdbcCall);
+Future<Result> explicitIo = ThreadUtil.submitVirtual(this::blockingHttpOrJdbcCall);
+Future<Result> cpuFuture = ThreadUtil.submitCpu(this::calculate);
+ThreadUtil.submit(this::refresh, 500);       // 延迟约 500 ms 执行一次
+ScheduledFuture<?> task = ThreadUtil.schedule(this::blockingPoll, 1_000);
+ScheduledFuture<?> cpuTask = ThreadUtil.scheduleCpu(this::calculate, 1_000);
+
+ThreadUtil.set("trace", traceId);
+try {
+    useTrace(ThreadUtil.get("trace"));
+} finally {
+    ThreadUtil.clear();
+}
+```
+
+`ThreadUtil.submit` 默认使用 JDK 25 一任务一虚拟线程；`submitVirtual` 是语义更明确的同义入口，适合 HTTP、文件、网络、等待锁等阻塞任务。CPU 密集计算或必须由线程池限制并发的任务使用 `submitCpu`，其平台线程数按可用处理器数量固定。虚拟线程不会让单次计算更快，也不会自动限制数据库连接或远端接口并发，因此 ORM 批量写入仍使用 Session 的连接并发配置。
+
+`schedule` 与 `scheduleVirtual` 都由轻量调度器触发、在虚拟线程执行，并在上一次尚未完成时跳过重叠执行；CPU 定时任务使用 `scheduleCpu`。`submitVirtual(task, delay)` 是一次性延迟虚拟任务。`startThread` 使用虚拟线程循环执行，回调返回 `false`、线程被中断时停止。ThreadLocal 数据必须在 finally 中 clear。Spring 应用有复杂隔离、监控或优雅停机要求时仍可注入自己的 `TaskExecutor`/`TaskScheduler`。
+
+<a id="ai-tools-concurrency-进程内事件"></a>
+### 进程内事件
+
+```java
+final class UserCreated { }
+
+final class UserCreatedHandler implements IEventHandler<UserCreated> {
+    public void handle(UserCreated event) { /* ... */ }
+}
+
+EventPublishManager.instance().register(new UserCreatedHandler());
+EventPublishManager.instance().publish(new UserCreated());
+EventPublishManager.instance().asyncPublish(new UserCreated());
+```
+
+`IEvent` 提供 `publish`/`asyncPublish` 默认方法。处理器按事件的精确运行时 Class 分组，不向父类或接口传播；重复 register 会重复执行。注册表支持并发读写，适合启动期间注册、运行期间高频发布。同步发布的异常直接中断后续处理器；异步发布通过 `ThreadUtil` 使用虚拟线程，不返回 Future，调用方无法等待，也不会自动汇总错误。需要可靠投递、持久化、重试或跨进程通信时使用消息队列。
+
+自定义隔离实例可以继承 `AbstractEventPublishManager<MyManager>`；全局默认实例是 `EventPublishManager.instance()`。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-types"></a>
+<!-- source: doc/tools/types.md -->
+<a id="ai-tools-types-lambda泛型与包扫描"></a>
+## Lambda、泛型与包扫描
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+方法引用、泛型解析、注解和包扫描。
+
+<a id="ai-tools-types-本页导航"></a>
+### 本页导航
+
+- [Lambda、泛型与包扫描](#ai-tools-types-lambda泛型与包扫描-1)
+- [LambdaUtils](#ai-tools-types-lambdautils)
+- [GenericUtil](#ai-tools-types-genericutil)
+- [AnnotationUtil 与 ScanUtils](#ai-tools-types-annotationutil-与-scanutils)
+
+<a id="ai-tools-types-lambda泛型与包扫描-1"></a>
+### Lambda、泛型与包扫描
+
+<a id="ai-tools-types-lambdautils"></a>
+#### LambdaUtils
+
+```java
+LambdaPropertyFunction<User> property = User::getUsername;
+String method = LambdaUtils.lambdaMethodName(property);          // getUsername
+Field field = LambdaUtils.lambdaMethodNameToField(property);     // username
+Class<User> owner = LambdaUtils.lambdaMethodNameToClassName(property);
+```
+
+参数必须是可序列化 Lambda，通常使用 `LambdaPropertyFunction<T>`。不要传普通 `Function`、匿名内部类或任意对象。实现只缓存 lambda class 的 `writeReplace` 访问器，不缓存捕获参数，因此不会把首个捕获对象长期保留。
+
+<a id="ai-tools-types-genericutil"></a>
+#### GenericUtil
+
+```java
+Class<?> entityType = GenericUtil.forClass(UserRepositoryImpl.class, BaseRepository.class, 0);
+Class<?> elementType = GenericUtil.forField(User.class.getDeclaredField("roles"), 0);
+Class<?> returnType = GenericUtil.forMethodReturnType(method, 0);
+Class<?> parameterType = GenericUtil.forMethodParameter(method, 0, 0);
+```
+
+解析不到具体类型时返回 null。`GenericUtil` 只在首次调用时进入 Spring `ResolvableType`，之后按源/声明类使用 `ClassValue` 缓存类、字段、方法参数和返回值的最终类型；解析失败的 null 也会缓存。类卸载时其缓存可一起回收，测试或动态类替换可调用 `clearCache(Class<?>)` 或 `clearCache()`。
+
+`BaseGeneric`、`GenericClass`、`GenericField`、`GenericMethod` 是旧的链式泛型模型，仍为兼容保留；新外部代码优先用 `GenericUtil`。`GenericClass.newInstance` 同样使用 `ClassValue` 缓存，不阻止类加载器卸载。
+
+<a id="ai-tools-types-annotationutil-与-scanutils"></a>
+#### AnnotationUtil 与 ScanUtils
+
+```java
+JoinTable table = AnnotationUtil.findAnnotation(User.class, JoinTable.class);
+Marker marker = AnnotationUtil.findAnnotation(method, Marker.class, 0); // 第 0 个参数上的注解
+
+Set<Class<?>> services = ScanUtils.scanSubclass(
+        "com.example.**.service", BaseService.class, true);
+```
+
+`AnnotationUtil` 使用 Spring 合成注解规则；AspectJ 重载用于切面内部。`ScanUtils.scanClass(path, false)` 返回具体类，传 true 返回接口或抽象类；扫描会读取 class 元数据并加载匹配 Class，但不会初始化静态代码。通配路径依赖 Spring resource pattern，库/应用边界上优先传明确根包，避免扫描整个 classpath。
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-serialization"></a>
+<!-- source: doc/tools/serialization.md -->
+<a id="ai-tools-serialization-序列化元组与扩展-spi"></a>
+## 序列化、元组与扩展 SPI
+
+[文档首页](README.md) / [常用工具](tools/README.md)
+
+lang 序列化和框架扩展工具；缓存序列化见缓存专题。
+
+<a id="ai-tools-serialization-本页导航"></a>
+### 本页导航
+
+- [序列化、元组与框架扩展](#ai-tools-serialization-序列化元组与框架扩展)
+- [Java 序列化](#ai-tools-serialization-java-序列化)
+- [元组](#ai-tools-serialization-元组)
+- [框架扩展 SPI](#ai-tools-serialization-框架扩展-spi)
+
+<a id="ai-tools-serialization-序列化元组与框架扩展"></a>
+### 序列化、元组与框架扩展
+
+<a id="ai-tools-serialization-java-序列化"></a>
+#### Java 序列化
+
+```java
+byte[] bytes = SerializableUtil.serialize(value);
+Object restored = SerializableUtil.unSerialize(bytes);
+SerializableType copy = SerializableUtil.clone(value);
+```
+
+整个对象图必须实现 `Serializable`。Java 原生序列化通常比专用编码慢、体积大，且反序列化不可信字节存在安全风险；只处理本进程生成且可信的数据，不作为 HTTP、消息队列或跨语言协议。普通克隆使用 `ReflectionUtil.deepClone`。
+
+<a id="ai-tools-serialization-元组"></a>
+#### 元组
+
+```java
+MutablePair<String, Integer> pair = MutablePair.of("count", 3);
+String left = pair.getLeft();
+
+MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, true);
+```
+
+这些类是轻量位置容器，没有值语义的 equals/hashCode，也没有公开修改器。跨层 API、缓存 key 或领域模型优先定义 record/明确 DTO。
+
+<a id="ai-tools-serialization-框架扩展-spi"></a>
+#### 框架扩展 SPI
+
+| 类型 | 用途 | 外部使用建议 |
+| --- | --- | --- |
+| BaseAnnotationBeanPostProcessor | 基于类/方法注解创建 Spring Advisor | 仅扩展框架 AOP；实现 getAnnotation 和 invoke |
+| MethodHandlesUtil | privateLookupIn 和父接口 default/special 方法句柄 | 代理框架内部使用；受 JPMS opens 限制 |
+| ProxyUtil | Spring CGLIB 子类代理 | JDK 25 优先接口/JDK Proxy；final 类和模块边界受限 |
+| ReflectAsmUtil | 旧反射入口 | 已弃用，转用 ReflectionUtil；clear 是兼容空操作 |
+| DateTimeJsonFormat、MoneyJsonFormat、CoinJsonFormat | Jackson serializer/deserializer 工厂 | 通常直接注册 YulinlinSimpModule |
+| LongAdderJsonFormat、DoubleAdderJsonFormat | Adder JSON 数值格式 | 通常直接注册 YulinlinSimpModule |
+| DateTimeStrJsonSerializer、EnumSerializer、EnumFormat | 可选展示/枚举格式 | 必须显式配置，不会由默认模块自动启用 |
+| IEnum | label/value 枚举约定 | ORM EnumCoder 会优先持久化 value |
+| CryptoDataResponse | 响应 data 可被安全模块替换的契约 | starter 的 R 已实现；普通项目按需实现 |
+
+---
+
+下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-practice-conventions"></a>
+<!-- source: doc/practice/conventions.md -->
+<a id="ai-practice-conventions-项目开发规范"></a>
+## 项目开发规范
+
+[文档首页](README.md) / [项目实践](practice/README.md)
+
+分层、事务、缓存、日志、批量和上线前检查。
+
+<a id="ai-practice-conventions-本页导航"></a>
+### 本页导航
+
+- [核心规则](#ai-practice-conventions-核心规则)
+- [推荐目录结构](#ai-practice-conventions-推荐目录结构)
+- [事务与自动更新](#ai-practice-conventions-事务与自动更新)
+- [推荐写法](#ai-practice-conventions-推荐写法)
+- [缓存规范](#ai-practice-conventions-缓存规范)
+- [日志规范](#ai-practice-conventions-日志规范)
+- [多数据源规范](#ai-practice-conventions-多数据源规范)
+- [批量写入规范](#ai-practice-conventions-批量写入规范)
+- [Schema 管理规范](#ai-practice-conventions-schema-管理规范)
+- [常见反例](#ai-practice-conventions-常见反例)
+- [上线前评审清单](#ai-practice-conventions-上线前评审清单)
+
+<a id="ai-practice-conventions-核心规则"></a>
 ### 核心规则
 
 | 层次 | 应该负责 | 不应负责 |
@@ -4637,6 +5950,7 @@ private long basePushes;
 
 `basePushes -> base_pushes`、`tenantId -> tenant_id`、`crtTime -> crt_time` 都属于标准映射。只有物理列名无法由属性名按该规则得到时，才显式填写 `name`，例如属性 `username` 对应历史列 `user_name`；如果关闭某个数据源的 `map-underscore-to-camel-case`，则以该数据源的实际映射规则为准。
 
+<a id="ai-practice-conventions-推荐目录结构"></a>
 ### 推荐目录结构
 
 按业务域组织代码，不要把整个项目的 Controller、Service、Entity 分成三个巨型目录：
@@ -4662,6 +5976,201 @@ com.example.app
 
 Repository 扫描和 Schema 扫描是两件事：`yulinlin.repository.scan-packages` 找接口，`yulinlin.<module>.schema-packages` 找显式 `autoSchema=true` 的完整实体。两者都可按业务包递归扫描。
 
+<a id="ai-practice-conventions-事务与自动更新"></a>
+### 事务与自动更新
+
+<a id="ai-practice-conventions-推荐写法"></a>
+#### 推荐写法
+
+```java
+@Transactional
+@JoinSync
+public void changeProfile(String id, String username) {
+    UserEntity user = repository.findByIdEq(id);
+    if (user == null) throw new IllegalArgumentException("user not found");
+    user.setUsername(username);
+}
+```
+
+- `@Transactional` 经默认的 `yulinlinTransactionManager` 委托 RouteSession；连接由框架独立提交，不复用 Spring JDBC 事务。`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
+- 默认只对 RuntimeException/Error 回滚，受检异常也需回滚时写 `@Transactional(rollbackFor = Exception.class)`。目前只支持 REQUIRED 及默认隔离/超时、非只读语义，完整边界见[事务注解兼容](#ai-relations-transactions-spring-事务注解兼容)。
+- 必须通过 Spring Bean 从外部调用 public 方法；`this.changeProfile(...)` 式自调用会绕过 Spring AOP。
+- 不要将代理 Entity 传给异步任务、虚拟线程或事务外的 Controller。它只能在创建它的原线程和原事务中 setter。
+- 业务失败让异常离开事务方法。如果必须捕获，应继续抛出或明确设置 rollback-only，不要吞掉后继提交。
+- 只读方法不加 `@JoinSync`。全局 `yulinlin.data.auto-update=true` 适合对边界非常一致的项目；一般项目优先显式方法注解。
+- Repository 方法可使用 `@JoinSync` 只增强特定查询，但仍需外层 Service 活动事务。推荐默认放在 Service，避免事务和更新意图分散。
+
+自动更新跳过 null，`setX(null)` 不表示把列清为 SQL NULL。如果业务必须清空列，使用参数化自定义 SQL；不要利用字符串拼接绕过参数绑定。
+
+<a id="ai-practice-conventions-缓存规范"></a>
+### 缓存规范
+
+```java
+@JoinCache
+UserEntity findByUsernameEq(String username);
+```
+
+- 只缓存价值明确、读多写少且可接受 TTL 窗口的查询。不是每个 Repository 方法都应该加缓存。
+- 引入缓存 Provider 后，`yulinlin.cache.clear-on-write`默认 `true`；标准 insert/update/delete 在事务提交成功后按表 namespace 清理缓存，回滚不清理。
+- 写 Wrapper 和 `ExecuteRequest` 只使用 `clearCache(boolean)` 覆盖单次行为。一般保持默认；只有明确接受 TTL 窗口内旧结果时才使用 `clearCache(false)`。
+- 自定义查询或跨表投影无法完整推导依赖时，通过 `@JoinCache.namespaces` 或查询请求的 `cacheNamespaces(...)` 补充表命名空间；自定义写 SQL 开启清理时会退化为清理全部 ORM 查询缓存。
+- 事务内必须读到最新数据的查询使用 `CacheMode.NONE`；强制回源并重写缓存使用 `CacheMode.REFRESH`。
+- 未引入缓存 Provider 时，普通查询安全回源数据库，`QueryCacheProperties` 不会启用，写路径也不解析 namespace 或执行失效。一个应用只选 Caffeine、Ehcache 或 Redis 之一；`cache-redis` 已自带可选 Caffeine L1，不要再重复引入 `cache-caffeine`。
+- 默认 TTL 放在 `yulinlin.cache.ttl`，默认不让 TTL 参与 Key。监控统计默认关闭，只在确实需要观测时开启。
+
+<a id="ai-practice-conventions-日志规范"></a>
+### 日志规范
+
+面向开发和运维人员的日志描述统一使用中文。SQL 执行日志的指标也使用中文，如 `数据源`、`节点`、`总耗时`、`平均每条耗时`、`参数`；类名、SQL、异常类型以及数据库标识值保持原样。业务日志和事务生命周期日志可保留既有结构化键，避免不必要的接口变化；日志采集规则需按实际格式配置。
+
+推荐写法：
+
+```java
+log.info("订单创建成功 orderId={} userId={}", orderId, userId);
+log.warn("缓存条目超过大小限制，已跳过 key={} sizeBytes={} limitBytes={}",
+        key, actualBytes, limitBytes);
+log.error("支付回调处理失败 orderId={} channel={}", orderId, channel, error);
+```
+
+统一规则：
+
+- 描述动作和结果，例如“SQL执行成功”“延迟写队列刷新完成”“控制器发生未处理异常”，不要只写“失败”或一串对象值。
+- 使用 `{}`占位符记录上下文，不使用字符串拼接；字段键保持稳定，便于日志平台查询。
+- 捕获异常时把 `Throwable`作为最后一个参数传入，保留完整堆栈；不要只打印 `error.getMessage()`。
+- `DEBUG`用于批次、缓存命中等高频诊断；`INFO`用于重要生命周期和明确成功事件；`WARN`用于可恢复、已降级或将重试的问题；`ERROR`用于本次操作失败、数据被丢弃或必须人工处理的问题。
+- 同一异常只在能够补充业务上下文或最终处理它的层记录一次，随后继续抛出的中间层不要重复打印相同堆栈。
+- 不记录密码、密钥、令牌、完整身份证号、银行卡号和未脱敏请求体。SQL参数日志也必须遵守长度限制与脱敏策略。
+- 日志文字修改不应改变监控数据结构。数据库监控使用独立记录对象，`elapsedMs`等字段含义保持稳定。
+
+SQL 日志在同一事件内分行展示，方便控制台阅读：
+
+```text
+SQL慢查询 事务ID=none 数据源=mysql 节点=master 操作=select 总耗时=800ms
+SQL="select ..."
+参数=[...]
+```
+
+参数行只在 log-params 开启时输出。批量成功时增加平均每条耗时（分组总耗时 ÷ 操作数量，三位小数），失败不展示平均值；参数标签统一为“参数”，批量只打印受限参数摘要。并行各组耗时不能相加当作请求耗时。不要依赖整段日志文本进行业务控制；程序判断应使用异常、返回值或监控接口。采集日志文本时配置多行合并，内置 monitor 不依赖日志文本格式。
+
+<a id="ai-practice-conventions-多数据源规范"></a>
+### 多数据源规范
+
+只有一个 group 时可省略指定；同时注册多个 group 时设定默认组：
+
+```yaml
+yulinlin:
+  datasource:
+    default-group: mysql
+```
+
+一个 Repository 始终属于同一数据源时，可在接口标记：
+
+```java
+@JoinRepository
+@JoinSession("postgresql")
+public interface SearchRepository extends BaseRepository<SearchEntity> {
+    // 默认使用 postgresql
+}
+```
+
+只有个别方法需要切换时使用方法级 `@JoinSession`。代码中显式 group 的 Request 优先级更高。不要在一条原始 SQL 中假设框架会自动翻译 MySQL、PostgreSQL、SQLite 和 H2 方言。
+
+跨多个 group 的业务可使用 Service 层 `@JoinTransaction` 或 `RouteSession.transaction(...)` 统一收集参与会话。这是多个本地事务的协调提交，不是 2PC/XA；对严格原子性业务使用消息、补偿、幂等或专用分布式事务方案。
+
+<a id="ai-practice-conventions-批量写入规范"></a>
+### 批量写入规范
+
+```java
+@Transactional
+public int importUsers(List<UserEntity> users) {
+    if (users == null || users.isEmpty()) return 0;
+    return ModelInsertWrapper.newInstance("mysql", users)
+            .batch()
+            .execute();
+}
+```
+
+- 普通集合写入先使用 JDBC batch；数据足够大、数据库与连接池有余量时，才启用 `.batch()` 多连接拆分。
+- `parallel-connections` 控制一个框架事务的最大物理连接数，`execute-batch-size` 控制一次 `executeBatch()` 的行数，都应结合连接池和数据库实测。
+- SQLite 单文件只有一个写者，Session 会拒绝多连接拆组；不要用增加写线程的方式解决 SQLite 锁竞争。
+- 业务上可以每批 128 个对象提交给上层，底层仍由 `execute-batch-size` 限制 JDBC 批大小。不为每 128 条数据创建一个新线程或新事务。
+- 大文本、JSON 和二进制内容应限制单条大小；不把不受控的 InputStream 或超大对象混入普通批次。
+
+允许一分钟左右最终一致的点赞、浏览统计等小批写入，可使用 `.queue().execute()` 交给全局 `yulinlin.data.queue` 合并；当前活动队列的 Node 总数达到 `flush-size`（默认 `1024`）会立即异步刷新，即使这些 Node 分布在多个不同分组中。它返回 `0` 只表示入队成功，不能放在事务内，也不适合依赖自增 ID、实际影响行数或严格操作顺序的业务。进程内队列没有硬容量上限；持续生产快于写入时会继续占用内存，应限流并监控积压。它也不是持久化消息系统，关键数据仍使用同步事务或可靠消息；大数据导入直接在业务异步任务中调用 `.batch()`，不通过延迟队列拆事务。
+
+<a id="ai-practice-conventions-schema-管理规范"></a>
+### Schema 管理规范
+
+- 生产项目默认使用版本化 DDL 迁移；框架 `CREATE` 模式更适合本地数据库、新项目和可控表。
+- 只有拥有全部持久化列的 Entity 设置 `autoSchema=true`。投影 DTO、Join 模型和统计模型保持 false。
+- 自动 Schema 可创建表、缺失普通列和声明索引，不会安全推断字段改名、类型变更、删列、外键或数据转换。
+- 先用 `EntitySession.createTableSql(Entity.class)` 审查 DDL，再在目标环境启用自动初始化。所有执行的 Schema SQL 都应在日志中可见。
+
+<a id="ai-practice-conventions-常见反例"></a>
+### 常见反例
+
+| 反例 | 问题 | 推荐替代 |
+| --- | --- | --- |
+| Controller 直接调 Wrapper | 协议层与数据层耦合，无法统一事务 | Controller 只调 Service |
+| 在 Repository 方法开事务，返回后再 setter | Repository 返回时事务可能已结束 | Service 上组合 `@Transactional + @JoinSync` |
+| 实现 `ISuperService` 后不声明事务 | 接口默认方法只封装 CRUD，不会自动开启事务 | 在具体 Service 业务入口上使用 `@Transactional` |
+| 把 `save()` 当成无竞态 UPSERT | 实际是先查后分组写入，并发请求可同时判断为不存在 | 已知操作类型时使用 `insert/update`，并依赖唯一索引保底 |
+| 将 `ITreeService.deleteById*` 当作普通单行删除 | 该默认实现会级联删除后代节点 | 事务内执行，接口命名和二次确认明确告知级联语义 |
+| 全局开启自动更新，却大量无事务查询 | 需要代理的查询会明确报“请开启事务” | 默认关闭，在写业务方法显式 `@JoinSync` |
+| 将 `@JoinCache` 加到写方法 | 缓存注解是查询策略，不是写入清理开关 | 保留全局 `clear-on-write`，或在写 Wrapper 上调用 `clearCache(boolean)` |
+| 在写 Wrapper 上调用旧 `cache/invalidate` API | 写入不缓存结果，旧命名容易混淆查询策略 | 统一使用 `clearCache(boolean)` |
+| 多 group 不配默认值，也不显式路由 | 框架无法判断业务数据库 | 配置 `default-group` 或使用 group/`@JoinSession` |
+| 在事务中启动 `CompletableFuture` 修改同一实体 | ThreadLocal、连接和代理不自动跨线程 | 同一事务同步完成；异步任务自建业务边界 |
+| 日志只写英文短语、拼接对象或只打印异常消息 | 难以直接阅读、无法稳定检索且丢失堆栈 | 中文描述 + 稳定字段键 + `{}`占位符，异常放最后一个参数 |
+| 用 null 期望清空数据库列 | 普通更新和自动更新都跳过 null | 参数化自定义 SQL |
+| 多个不完整模型共同拥有一张表的 Schema | 可创建残缺表或发生拥有者冲突 | 只让一个完整 Entity `autoSchema=true` |
+| 把跨库本地协调当作分布式原子事务 | 某库提交后另一库仍可失败 | 设计幂等、补偿或专用分布式方案 |
+
+<a id="ai-practice-conventions-上线前评审清单"></a>
+### 上线前评审清单
+
+- [ ] 所有写 Service 都有清晰的事务边界，通过 Spring Bean 外部调用。
+- [ ] 使用 `@JoinSync` 的查询、setter 和提交处在同一线程与事务。
+- [ ] 实体基类与物理表列一致；未重复声明继承的主键、审计时间或树字段。
+- [ ] 实体具有无参构造、完整主键映射和可预期的列名；非列字段明确 `exist=false`。
+- [ ] 更新和删除校验主键/条件及影响行数，已考虑 null 跳过语义。
+- [ ] 缓存仅用于查询，TTL、namespace、`clear-on-write` 默认值和单次覆盖策略已明确，应用未同时引入两个 Provider。
+- [ ] 多数据源项目设置了默认 group 或显式路由，原始 SQL 已按目标方言审查。
+- [ ] 业务日志使用中文描述和稳定字段键，异常保留完整堆栈，敏感信息已经脱敏。
+- [ ] 多连接批处理已在真实驱动、连接池和数据库上压测；SQLite 未强行并发写入。
+- [ ] 每张自动表只有一个 Schema 拥有者，生产字段改名和类型变更都有可回滚迁移脚本。
+- [ ] 测试至少覆盖成功提交、异常回滚、缓存未命中/失效、批量失败和多数据源路由。
+
+如果项目不使用 Repository，保留相同的分层和事务规则，在 Service 中使用 Model Wrapper 即可。Repository 是声明式入口，不是使用事务、缓存或自动更新的强制前提。
+
+---
+
+下一步：返回[项目实践主题目录](practice/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-practice-models"></a>
+<!-- source: doc/practice/models.md -->
+<a id="ai-practice-models-公共实体与页面参数"></a>
+## 公共实体与页面参数
+
+[文档首页](README.md) / [项目实践](practice/README.md)
+
+PagePo、JoinWhere、R、IdEntity、SuperEntity 和 TreeEntity。
+
+<a id="ai-practice-models-本页导航"></a>
+### 本页导航
+
+- [公共业务模型](#ai-practice-models-公共业务模型)
+- [页面查询对象：`PagePo + @JoinWhere`](#ai-practice-models-页面查询对象pagepo--joinwhere)
+- [统一 Controller 响应：`R<E>`](#ai-practice-models-统一-controller-响应r)
+- [基础实体选择](#ai-practice-models-基础实体选择)
+- [`IdEntity`](#ai-practice-models-identity)
+- [`SuperEntity`](#ai-practice-models-superentity)
+- [`TreeEntity`](#ai-practice-models-treeentity)
+- [自定义项目基类](#ai-practice-models-自定义项目基类)
+
+<a id="ai-practice-models-公共业务模型"></a>
 ### 公共业务模型
 
 框架把常见的页面查询、分页结果和 Web 响应模型集中提供给业务项目，避免每个模块重复声明 `pageNumber`、`pageSize`、排序、ID 和列表等字段。它们是对外公共 API，不是 ORM 内部临时对象。
@@ -4678,6 +6187,7 @@ Repository 扫描和 Schema 扫描是两件事：`yulinlin.repository.scan-packa
 
 这些类型按使用的门面模块引入。只使用 ORM 的项目可直接使用 `PagePo`和 `Page`，不必为了 `IdPo`或 `R`引入 Web Controller。它们也不要求实现 Java `Serializable`，HTTP JSON 仍由 Spring/Jackson 处理。
 
+<a id="ai-practice-models-页面查询对象pagepo--joinwhere"></a>
 #### 页面查询对象：`PagePo + @JoinWhere`
 
 页面列表查询推荐为每个业务页面定义一个很薄的 `XxxPo extends PagePo`。父类统一携带分页和排序，子类只声明本页面的业务条件：
@@ -4765,8 +6275,9 @@ Page<PayChannelEntity> result = ModelSelectWrapper
         .selectPage();
 ```
 
-`PayChannelEntity.class`决定表、返回字段和结果类型，`PayChannelPo`只描述 WHERE、分页和排序输入。查询 PO 不需要 `@JoinTable`，也不应开启自动 Schema。`@JoinWhere`支持的操作符、空值和 AND/OR 精确语义见[查询条件对象](02-CRUD与统计分析.md#查询条件对象)。
+`PayChannelEntity.class`决定表、返回字段和结果类型，`PayChannelPo`只描述 WHERE、分页和排序输入。查询 PO 不需要 `@JoinTable`，也不应开启自动 Schema。`@JoinWhere`支持的操作符、空值和 AND/OR 精确语义见[查询条件对象](#ai-orm-query-查询条件对象)。
 
+<a id="ai-practice-models-统一-controller-响应r"></a>
 #### 统一 Controller 响应：`R<E>`
 
 普通 JSON Controller 统一使用 `@PostMapping + @RequestBody`并显式返回 `R<E>`。查询、详情、创建、修改和删除都把参数放进一个 JSON 请求体，启用 `@ApiCrypto`后才能对整个 body 使用同一套明文判定和解密流程；框架不会通过全局 Advice 猜测并自动包装任意返回对象。
@@ -4798,10 +6309,11 @@ public R<Void> delete(@RequestBody IdPo po) {
 
 `starter`默认注册最低优先级的异常处理器：参数绑定或 JSON 格式错误返回 `400`；`ApiException`携带 `400–599`标准 HTTP 错误码时使用该状态，其他数值按 `400`处理；`ResponseStatusException`保留 HTTP 状态；未识别异常记录完整服务端日志并返回 `500 + 系统繁忙，请稍后重试`。错误 HTTP 状态和 `R.code`保持一致；业务项目可以提供更高优先级的 `@RestControllerAdvice`覆盖细分规则。不要把 SQL、文件路径、密钥或异常堆栈写进客户端 `msg`。
 
-启用 `@ApiCrypto`且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](06-接口安全.md)。
+启用 `@ApiCrypto`且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](security/README.md)。
 
 业务 JSON 接口不要用 `@GetMapping`、`@PutMapping`、`@PatchMapping`或 `@DeleteMapping`承载加密参数，也不要把敏感条件放在 query/path 中。监控页面、静态资源、健康检查、文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不受这条约束；流式响应不使用 `R`包装，也不进入面向 JSON 的 `@ApiCrypto`响应处理。
 
+<a id="ai-practice-models-基础实体选择"></a>
 ### 基础实体选择
 
 `common` 模块提供了几个可复用实体。它们不只是字段集合，还实现了 `AbstractModel` 的 CRUD 便捷入口和写入前生命周期，因此应按表结构选择，不要为了少写字段而继承。
@@ -4814,6 +6326,7 @@ public R<Void> delete(@RequestBody IdPo po) {
 | `TreeEntity<E>` | `id`、`crtTime`、`uptTime`、`parentId`、`parentPath` | 默认根节点 ID 为 `"0"`，`selectTree()` 可按 `ITreeNode` 组装 `children` | 菜单、部门和分类等树表 |
 | `EntityCounter` | 不持有表字段 | 按主键立即/聚合自增更新；或按非数字维度聚合数字字段后批量插入统计记录 | 播放量、点击量、热度和分渠道统计；它是写入门面，不作为实体父类 |
 
+<a id="ai-practice-models-identity"></a>
 #### `IdEntity`
 
 ```java
@@ -4831,10 +6344,11 @@ public class UserEntity extends IdEntity<UserEntity> {
 
 `nextIncrId()` 会用表中当前最大 ID 初始化进程内计数器，之后在本进程递增。它不是数据库自增 ID，也不保证多实例唯一；分布式业务保持默认 Snowflake 策略或接入统一 ID 服务。
 
-`IncrementEntity` 的动态表名/列名方式仅为旧代码保留，已经废弃。已有视频记录使用 `EntityCounter.update(VideoEntity.class, videoId).inc(VideoEntity::getViewCount).submit()`；统计明细使用 `EntityCounter.insert(stat).submit()`，非数字字段作为维度、数字字段分别累加，默认一分钟批量插入。不要提前填充统计实体的 ID/时间，以免它们意外成为不同维度。立即写入、类型范围、聚合规则、配置和数据丢失边界见[实体计数器](02-CRUD与统计分析.md#实体计数器)。
+`IncrementEntity` 的动态表名/列名方式仅为旧代码保留，已经废弃。已有视频记录使用 `EntityCounter.update(VideoEntity.class, videoId).inc(VideoEntity::getViewCount).submit()`；统计明细使用 `EntityCounter.insert(stat).submit()`，非数字字段作为维度、数字字段分别累加，默认一分钟批量插入。不要提前填充统计实体的 ID/时间，以免它们意外成为不同维度。立即写入、类型范围、聚合规则、配置和数据丢失边界见[实体计数器](#ai-write-sync-counter-实体计数器)。
 
-多字段增量也可以新建模型，仅设置主键和本次增量后调用 `EntityCounter.update("mysql", delta).submit()`，或 `EntityCounter.update(delta).execute()` 立即写入。数字正值增加、负值减少，非数字字段忽略，主键只作条件。不要传入查回的完整实体：它不是覆盖更新，已有的非零数字都会再次累加。模型更新不触发 `updateBefore`、自动更新时间或版本校验，完整用例见 [通过模型提交更新增量](02-CRUD与统计分析.md#通过模型提交更新增量)。
+多字段增量也可以新建模型，仅设置主键和本次增量后调用 `EntityCounter.update("mysql", delta).submit()`，或 `EntityCounter.update(delta).execute()` 立即写入。数字正值增加、负值减少，非数字字段忽略，主键只作条件。不要传入查回的完整实体：它不是覆盖更新，已有的非零数字都会再次累加。模型更新不触发 `updateBefore`、自动更新时间或版本校验，完整用例见 [通过模型提交更新增量](#ai-write-sync-counter-通过模型提交更新增量)。
 
+<a id="ai-practice-models-superentity"></a>
 #### `SuperEntity`
 
 ```java
@@ -4855,6 +6369,7 @@ public class CommentEntity extends SuperEntity<CommentEntity> {
 
 当前 `updateBefore()` 只在 `uptTime == null` 时填入当前时间。如果业务要求每次更新都刷新时间，应在写入前显式 `setUptTime(DateTime.now())`，或在项目自定义父类中重写 `updateBefore()`，不要把“非空时保留原值”误解为无条件自动刷新。
 
+<a id="ai-practice-models-treeentity"></a>
 #### `TreeEntity`
 
 ```java
@@ -4872,6 +6387,7 @@ public class MenuEntity extends TreeEntity<MenuEntity> {
 
 `ModelSelectWrapper.selectTree()` 会将查到的 `ITreeNode` 列表在内存中组装为树；普通 `selectList()` 仍返回扁平列表。`findChildren()` 和 `findParent()` 是使用默认 group 的便捷方法；在多数据源项目中，优先在 Service/Repository 明确路由后查询，避免树节点自身隐式选库。
 
+<a id="ai-practice-models-自定义项目基类"></a>
 #### 自定义项目基类
 
 只有多张表真正共享同一列语义时才增加项目基类，例如所有业务表都具有租户 ID：
@@ -4888,6 +6404,30 @@ public abstract class TenantEntity<E extends TenantEntity<E>> extends SuperEntit
 
 实体的泛型参数始终传具体类，例如 `UserEntity extends IdEntity<UserEntity>`。不要在子类重复声明 `id`、`crtTime`、`uptTime`、`parentId` 或 `parentPath`；重名字段会让反射映射、Schema 比对和更新条件变得不确定。与表无关的计算属性仍必须显式使用 `@JoinField(exist = false)`。
 
+---
+
+下一步：返回[项目实践主题目录](practice/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-practice-service"></a>
+<!-- source: doc/practice/service.md -->
+<a id="ai-practice-service-通用-service-与树服务"></a>
+## 通用 Service 与树服务
+
+[文档首页](README.md) / [项目实践](practice/README.md)
+
+复用 ISuperService/ITreeService，区分 Repository 职责。
+
+<a id="ai-practice-service-本页导航"></a>
+### 本页导航
+
+- [通用 Service 接口](#ai-practice-service-通用-service-接口)
+- [`ISuperService` 用法](#ai-practice-service-isuperservice-用法)
+- [`ITreeService` 用法](#ai-practice-service-itreeservice-用法)
+- [与 Repository 如何选择](#ai-practice-service-与-repository-如何选择)
+
+<a id="ai-practice-service-通用-service-接口"></a>
 ### 通用 Service 接口
 
 `common` 模块通过接口默认方法提供无状态 CRUD 和树服务能力。新项目直接 `implements ISuperService<E>` 或 `implements ITreeService<E>`，不再占用业务 Service 的类继承位。`impl.ServiceImpl/TreeImpl` 与 `impl2` 只作为已废弃兼容层。
@@ -4899,6 +6439,7 @@ public abstract class TenantEntity<E extends TenantEntity<E>> extends SuperEntit
 | `ITreeService<E>` | 树业务契约和默认实现 | 维护父路径、移动子树、删除后代、内存组树 |
 | `TreeImpl<E>` | 已废弃兼容类 | 保留旧 `extends TreeImpl` 写法 |
 
+<a id="ai-practice-service-isuperservice-用法"></a>
 #### `ISuperService` 用法
 
 ```java
@@ -4945,8 +6486,9 @@ Service 接口默认方法不会注册 Spring Bean，也不会自动开启事务
 
 `save()` 不是数据库原生 UPSERT：它会先查后写，有额外往返，且并发时仍要依赖唯一索引处理竞态。业务明确知道是新增还是更新时，直接调用 `insert*` 或 `update*` 性能更好，语义也更清楚。
 
-`page(PagePo)`会解析业务子类上的 `@JoinWhere`字段，再应用 `PagePo`自带的动态条件、分页和排序；完整页面写法见[公共业务模型](#页面查询对象pagepo--joinwhere)。不要把前端传入的排序字段名无限制透传；Controller/Service 应使用允许列表转换为可排序的实体属性。
+`page(PagePo)`会解析业务子类上的 `@JoinWhere`字段，再应用 `PagePo`自带的动态条件、分页和排序；完整页面写法见[公共业务模型](#ai-practice-models-页面查询对象pagepo--joinwhere)。不要把前端传入的排序字段名无限制透传；Controller/Service 应使用允许列表转换为可排序的实体属性。
 
+<a id="ai-practice-service-itreeservice-用法"></a>
 #### `ITreeService` 用法
 
 ```java
@@ -4988,6 +6530,7 @@ public class MenuService implements ITreeService<MenuEntity> {
 
 树移动和级联删除会修改多行，必须在事务中执行。接口会拒绝 `parentPath` 包含自身 ID 的移动，防止节点移入自己的后代形成环。大树的 `getTree()` 会一次性加载数据，后台菜单等小树可直接使用；数万节点的树应改用按层/按父 ID 分页查询。
 
+<a id="ai-practice-service-与-repository-如何选择"></a>
 #### 与 Repository 如何选择
 
 - 简单后台 CRUD、树维护，且始终使用默认数据源时，可实现 `ISuperService` 或 `ITreeService`。
@@ -4995,10 +6538,37 @@ public class MenuService implements ITreeService<MenuEntity> {
 - 一个业务域选择一个主入口。不要在同一个 Service 中既实现通用接口、又为同一批 CRUD 注入 Repository，造成两套规则和缓存策略。
 - 这两个接口默认方法创建的 Wrapper 没有显式 group，依赖全局默认数据源。多数据源业务优先使用可明确声明 group 的 Repository 或 Wrapper。
 
+---
+
+下一步：返回[项目实践主题目录](practice/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-practice-crud-example"></a>
+<!-- source: doc/practice/crud-example.md -->
+<a id="ai-practice-crud-example-完整-crud-分层案例"></a>
+## 完整 CRUD 分层案例
+
+[文档首页](README.md) / [项目实践](practice/README.md)
+
+实体、Repository、DTO、Service 和 Controller 配套使用。
+
+<a id="ai-practice-crud-example-本页导航"></a>
+### 本页导航
+
+- [完整业务案例](#ai-practice-crud-example-完整业务案例)
+- [1. 完整实体](#ai-practice-crud-example-1-完整实体)
+- [2. Repository](#ai-practice-crud-example-2-repository)
+- [3. 响应 DTO](#ai-practice-crud-example-3-响应-dto)
+- [4. Service](#ai-practice-crud-example-4-service)
+- [5. Controller](#ai-practice-crud-example-5-controller)
+
+<a id="ai-practice-crud-example-完整业务案例"></a>
 ### 完整业务案例
 
 下面用“用户查询、创建、改名和删除”展示推荐分层。案例假设已引入 starter、mysql 和 repository；查询缓存模块仍是可选的。
 
+<a id="ai-practice-crud-example-1-完整实体"></a>
 #### 1. 完整实体
 
 ```java
@@ -5047,6 +6617,7 @@ yulinlin:
 
 如果生产表由 Flyway、Liquibase 或发布脚本管理，保留 `autoSchema=false` 默认值，不配置 `CREATE` 扫描，并在迁移脚本中创建同等的唯一索引。
 
+<a id="ai-practice-crud-example-2-repository"></a>
 #### 2. Repository
 
 ```java
@@ -5067,6 +6638,7 @@ public interface UserRepository extends BaseRepository<UserEntity> {
 
 `BaseRepository` 已提供按 ID 查询、全量查询、新增、更新和删除。方法级 `@JoinCache` 让缓存意图可见；如果希望接口中全部查询默认缓存，也可标在接口上，但方法级更容易评审。不要在 insert/update/delete 方法上使用 `@JoinCache`。
 
+<a id="ai-practice-crud-example-3-响应-dto"></a>
 #### 3. 响应 DTO
 
 ```java
@@ -5083,6 +6655,7 @@ public record UserResponse(String id, String username, Integer status) {
 
 在 Service 内完成 Entity 到 DTO 的转换，可以避免 Controller 触发懒加载，也不会把事务绑定代理暴露给 JSON 序列化层。
 
+<a id="ai-practice-crud-example-4-service"></a>
 #### 4. Service
 
 ```java
@@ -5143,6 +6716,7 @@ public class UserService {
 
 创建和删除是显式写入，只需事务。`rename` 依赖 setter 跟踪，因此同时使用 `@Transactional` 和 `@JoinSync`。查询、setter 与提交全部在同一个 Service 调用内完成。
 
+<a id="ai-practice-crud-example-5-controller"></a>
 #### 5. Controller
 
 ```java
@@ -5199,170 +6773,39 @@ public class UserController {
 
 Controller 只处理 POST JSON 协议、校验和 DTO，不直接调用 Wrapper 或持有事务。查询和删除同样定义小型请求 DTO，不把参数拆到 URL。真实项目应将异常统一转换为约定的错误响应，不在每个 Controller 重复 try/catch。
 
-### 事务与自动更新
+---
 
-#### 推荐写法
+下一步：返回[项目实践主题目录](practice/README.md)按需选择相关专题。
 
-```java
-@Transactional
-@JoinSync
-public void changeProfile(String id, String username) {
-    UserEntity user = repository.findByIdEq(id);
-    if (user == null) throw new IllegalArgumentException("user not found");
-    user.setUsername(username);
-}
-```
+---
 
-- `@Transactional` 经默认的 `yulinlinTransactionManager` 委托 RouteSession；连接由框架独立提交，不复用 Spring JDBC 事务。`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
-- 默认只对 RuntimeException/Error 回滚，受检异常也需回滚时写 `@Transactional(rollbackFor = Exception.class)`。目前只支持 REQUIRED 及默认隔离/超时、非只读语义，完整边界见[事务注解兼容](02-CRUD与统计分析.md#spring-事务注解兼容)。
-- 必须通过 Spring Bean 从外部调用 public 方法；`this.changeProfile(...)` 式自调用会绕过 Spring AOP。
-- 不要将代理 Entity 传给异步任务、虚拟线程或事务外的 Controller。它只能在创建它的原线程和原事务中 setter。
-- 业务失败让异常离开事务方法。如果必须捕获，应继续抛出或明确设置 rollback-only，不要吞掉后继提交。
-- 只读方法不加 `@JoinSync`。全局 `yulinlin.data.auto-update=true` 适合对边界非常一致的项目；一般项目优先显式方法注解。
-- Repository 方法可使用 `@JoinSync` 只增强特定查询，但仍需外层 Service 活动事务。推荐默认放在 Service，避免事务和更新意图分散。
+<a id="ai-practice-rbac"></a>
+<!-- source: doc/practice/rbac.md -->
+<a id="ai-practice-rbac-admin-rbac-与-jwt-登录案例"></a>
+## Admin RBAC 与 JWT 登录案例
 
-自动更新跳过 null，`setX(null)` 不表示把列清为 SQL NULL。如果业务必须清空列，使用参数化自定义 SQL；不要利用字符串拼接绕过参数绑定。
+[文档首页](README.md) / [项目实践](practice/README.md)
 
-### 缓存规范
+两表角色权限模型、业务校验后 userId 登录和无状态语义。
 
-```java
-@JoinCache
-UserEntity findByUsernameEq(String username);
-```
+<a id="ai-practice-rbac-本页导航"></a>
+### 本页导航
 
-- 只缓存价值明确、读多写少且可接受 TTL 窗口的查询。不是每个 Repository 方法都应该加缓存。
-- 引入缓存 Provider 后，`yulinlin.cache.clear-on-write`默认 `true`；标准 insert/update/delete 在事务提交成功后按表 namespace 清理缓存，回滚不清理。
-- 写 Wrapper 和 `ExecuteRequest` 只使用 `clearCache(boolean)` 覆盖单次行为。一般保持默认；只有明确接受 TTL 窗口内旧结果时才使用 `clearCache(false)`。
-- 自定义查询或跨表投影无法完整推导依赖时，通过 `@JoinCache.namespaces` 或查询请求的 `cacheNamespaces(...)` 补充表命名空间；自定义写 SQL 开启清理时会退化为清理全部 ORM 查询缓存。
-- 事务内必须读到最新数据的查询使用 `CacheMode.NONE`；强制回源并重写缓存使用 `CacheMode.REFRESH`。
-- 未引入缓存 Provider 时，普通查询安全回源数据库，`QueryCacheProperties` 不会启用，写路径也不解析 namespace 或执行失效。一个应用只选 Caffeine、Ehcache 或 Redis 之一；`cache-redis` 已自带可选 Caffeine L1，不要再重复引入 `cache-caffeine`。
-- 默认 TTL 放在 `yulinlin.cache.ttl`，默认不让 TTL 参与 Key。监控统计默认关闭，只在确实需要观测时开启。
+- [Admin 两表 RBAC 与登录案例](#ai-practice-rbac-admin-两表-rbac-与登录案例)
+- [启动方式与完整配置](#ai-practice-rbac-启动方式与完整配置)
+- [两表模型与状态枚举](#ai-practice-rbac-两表模型与状态枚举)
+- [登录、权限和会话生命周期](#ai-practice-rbac-登录权限和会话生命周期)
+- [业务写法与 HTTP 调用](#ai-practice-rbac-业务写法与-http-调用)
+- [Service 完整 CRUD 与对外边界](#ai-practice-rbac-service-完整-crud-与对外边界)
 
-### 日志规范
-
-面向开发和运维人员的日志描述统一使用中文。SQL 执行日志的指标也使用中文，如 `数据源`、`节点`、`总耗时`、`平均每条耗时`、`参数`；类名、SQL、异常类型以及数据库标识值保持原样。业务日志和事务生命周期日志可保留既有结构化键，避免不必要的接口变化；日志采集规则需按实际格式配置。
-
-推荐写法：
-
-```java
-log.info("订单创建成功 orderId={} userId={}", orderId, userId);
-log.warn("缓存条目超过大小限制，已跳过 key={} sizeBytes={} limitBytes={}",
-        key, actualBytes, limitBytes);
-log.error("支付回调处理失败 orderId={} channel={}", orderId, channel, error);
-```
-
-统一规则：
-
-- 描述动作和结果，例如“SQL执行成功”“延迟写队列刷新完成”“控制器发生未处理异常”，不要只写“失败”或一串对象值。
-- 使用 `{}`占位符记录上下文，不使用字符串拼接；字段键保持稳定，便于日志平台查询。
-- 捕获异常时把 `Throwable`作为最后一个参数传入，保留完整堆栈；不要只打印 `error.getMessage()`。
-- `DEBUG`用于批次、缓存命中等高频诊断；`INFO`用于重要生命周期和明确成功事件；`WARN`用于可恢复、已降级或将重试的问题；`ERROR`用于本次操作失败、数据被丢弃或必须人工处理的问题。
-- 同一异常只在能够补充业务上下文或最终处理它的层记录一次，随后继续抛出的中间层不要重复打印相同堆栈。
-- 不记录密码、密钥、令牌、完整身份证号、银行卡号和未脱敏请求体。SQL参数日志也必须遵守长度限制与脱敏策略。
-- 日志文字修改不应改变监控数据结构。数据库监控使用独立记录对象，`elapsedMs`等字段含义保持稳定。
-
-SQL 日志在同一事件内分行展示，方便控制台阅读：
-
-```text
-SQL慢查询 事务ID=none 数据源=mysql 节点=master 操作=select 总耗时=800ms
-SQL="select ..."
-参数=[...]
-```
-
-参数行只在 log-params 开启时输出。批量成功时增加平均每条耗时（分组总耗时 ÷ 操作数量，三位小数），失败不展示平均值；参数标签统一为“参数”，批量只打印受限参数摘要。并行各组耗时不能相加当作请求耗时。不要依赖整段日志文本进行业务控制；程序判断应使用异常、返回值或监控接口。采集日志文本时配置多行合并，内置 monitor 不依赖日志文本格式。
-
-### 多数据源规范
-
-只有一个 group 时可省略指定；同时注册多个 group 时设定默认组：
-
-```yaml
-yulinlin:
-  datasource:
-    default-group: mysql
-```
-
-一个 Repository 始终属于同一数据源时，可在接口标记：
-
-```java
-@JoinRepository
-@JoinSession("postgresql")
-public interface SearchRepository extends BaseRepository<SearchEntity> {
-    // 默认使用 postgresql
-}
-```
-
-只有个别方法需要切换时使用方法级 `@JoinSession`。代码中显式 group 的 Request 优先级更高。不要在一条原始 SQL 中假设框架会自动翻译 MySQL、PostgreSQL、SQLite 和 H2 方言。
-
-跨多个 group 的业务可使用 Service 层 `@JoinTransaction` 或 `RouteSession.transaction(...)` 统一收集参与会话。这是多个本地事务的协调提交，不是 2PC/XA；对严格原子性业务使用消息、补偿、幂等或专用分布式事务方案。
-
-### 批量写入规范
-
-```java
-@Transactional
-public int importUsers(List<UserEntity> users) {
-    if (users == null || users.isEmpty()) return 0;
-    return ModelInsertWrapper.newInstance("mysql", users)
-            .batch()
-            .execute();
-}
-```
-
-- 普通集合写入先使用 JDBC batch；数据足够大、数据库与连接池有余量时，才启用 `.batch()` 多连接拆分。
-- `parallel-connections` 控制一个框架事务的最大物理连接数，`execute-batch-size` 控制一次 `executeBatch()` 的行数，都应结合连接池和数据库实测。
-- SQLite 单文件只有一个写者，Session 会拒绝多连接拆组；不要用增加写线程的方式解决 SQLite 锁竞争。
-- 业务上可以每批 128 个对象提交给上层，底层仍由 `execute-batch-size` 限制 JDBC 批大小。不为每 128 条数据创建一个新线程或新事务。
-- 大文本、JSON 和二进制内容应限制单条大小；不把不受控的 InputStream 或超大对象混入普通批次。
-
-允许一分钟左右最终一致的点赞、浏览统计等小批写入，可使用 `.queue().execute()` 交给全局 `yulinlin.data.queue` 合并；当前活动队列的 Node 总数达到 `flush-size`（默认 `1024`）会立即异步刷新，即使这些 Node 分布在多个不同分组中。它返回 `0` 只表示入队成功，不能放在事务内，也不适合依赖自增 ID、实际影响行数或严格操作顺序的业务。进程内队列没有硬容量上限；持续生产快于写入时会继续占用内存，应限流并监控积压。它也不是持久化消息系统，关键数据仍使用同步事务或可靠消息；大数据导入直接在业务异步任务中调用 `.batch()`，不通过延迟队列拆事务。
-
-### Schema 管理规范
-
-- 生产项目默认使用版本化 DDL 迁移；框架 `CREATE` 模式更适合本地数据库、新项目和可控表。
-- 只有拥有全部持久化列的 Entity 设置 `autoSchema=true`。投影 DTO、Join 模型和统计模型保持 false。
-- 自动 Schema 可创建表、缺失普通列和声明索引，不会安全推断字段改名、类型变更、删列、外键或数据转换。
-- 先用 `EntitySession.createTableSql(Entity.class)` 审查 DDL，再在目标环境启用自动初始化。所有执行的 Schema SQL 都应在日志中可见。
-
-### 常见反例
-
-| 反例 | 问题 | 推荐替代 |
-| --- | --- | --- |
-| Controller 直接调 Wrapper | 协议层与数据层耦合，无法统一事务 | Controller 只调 Service |
-| 在 Repository 方法开事务，返回后再 setter | Repository 返回时事务可能已结束 | Service 上组合 `@Transactional + @JoinSync` |
-| 实现 `ISuperService` 后不声明事务 | 接口默认方法只封装 CRUD，不会自动开启事务 | 在具体 Service 业务入口上使用 `@Transactional` |
-| 把 `save()` 当成无竞态 UPSERT | 实际是先查后分组写入，并发请求可同时判断为不存在 | 已知操作类型时使用 `insert/update`，并依赖唯一索引保底 |
-| 将 `ITreeService.deleteById*` 当作普通单行删除 | 该默认实现会级联删除后代节点 | 事务内执行，接口命名和二次确认明确告知级联语义 |
-| 全局开启自动更新，却大量无事务查询 | 需要代理的查询会明确报“请开启事务” | 默认关闭，在写业务方法显式 `@JoinSync` |
-| 将 `@JoinCache` 加到写方法 | 缓存注解是查询策略，不是写入清理开关 | 保留全局 `clear-on-write`，或在写 Wrapper 上调用 `clearCache(boolean)` |
-| 在写 Wrapper 上调用旧 `cache/invalidate` API | 写入不缓存结果，旧命名容易混淆查询策略 | 统一使用 `clearCache(boolean)` |
-| 多 group 不配默认值，也不显式路由 | 框架无法判断业务数据库 | 配置 `default-group` 或使用 group/`@JoinSession` |
-| 在事务中启动 `CompletableFuture` 修改同一实体 | ThreadLocal、连接和代理不自动跨线程 | 同一事务同步完成；异步任务自建业务边界 |
-| 日志只写英文短语、拼接对象或只打印异常消息 | 难以直接阅读、无法稳定检索且丢失堆栈 | 中文描述 + 稳定字段键 + `{}`占位符，异常放最后一个参数 |
-| 用 null 期望清空数据库列 | 普通更新和自动更新都跳过 null | 参数化自定义 SQL |
-| 多个不完整模型共同拥有一张表的 Schema | 可创建残缺表或发生拥有者冲突 | 只让一个完整 Entity `autoSchema=true` |
-| 把跨库本地协调当作分布式原子事务 | 某库提交后另一库仍可失败 | 设计幂等、补偿或专用分布式方案 |
-
-### 上线前评审清单
-
-- [ ] 所有写 Service 都有清晰的事务边界，通过 Spring Bean 外部调用。
-- [ ] 使用 `@JoinSync` 的查询、setter 和提交处在同一线程与事务。
-- [ ] 实体基类与物理表列一致；未重复声明继承的主键、审计时间或树字段。
-- [ ] 实体具有无参构造、完整主键映射和可预期的列名；非列字段明确 `exist=false`。
-- [ ] 更新和删除校验主键/条件及影响行数，已考虑 null 跳过语义。
-- [ ] 缓存仅用于查询，TTL、namespace、`clear-on-write` 默认值和单次覆盖策略已明确，应用未同时引入两个 Provider。
-- [ ] 多数据源项目设置了默认 group 或显式路由，原始 SQL 已按目标方言审查。
-- [ ] 业务日志使用中文描述和稳定字段键，异常保留完整堆栈，敏感信息已经脱敏。
-- [ ] 多连接批处理已在真实驱动、连接池和数据库上压测；SQLite 未强行并发写入。
-- [ ] 每张自动表只有一个 Schema 拥有者，生产字段改名和类型变更都有可回滚迁移脚本。
-- [ ] 测试至少覆盖成功提交、异常回滚、缓存未命中/失效、批量失败和多数据源路由。
-
-如果项目不使用 Repository，保留相同的分层和事务规则，在 Service 中使用 Model Wrapper 即可。Repository 是声明式入口，不是使用事务、缓存或自动更新的强制前提。
-
+<a id="ai-practice-rbac-admin-两表-rbac-与登录案例"></a>
 ### Admin 两表 RBAC 与登录案例
 
 源码位于 [admin/rbac](../admin/src/main/java/com/yulinlin/admin/rbac)，请求示例位于 [admin/rbac.http](../admin/rbac.http)。案例只有 `rbac_user`、`rbac_role` 两张业务表，使用 JDK 25、MySQL 和纯无状态 `security-jwt`，不保存登录记录，未引入 Spring Security，也不同时引入 Sa-Token。
 
 > 2026-10-20 已迁移到纯无状态 JWT：业务验证账号密码后用 userId 登录，移除会话存储、撤销及容量配置。注销和重置密码不使已签发 JWT 自动失效。源码和文档已调整，本轮未编译、未执行测试或数据库联调。
 
+<a id="ai-practice-rbac-启动方式与完整配置"></a>
 #### 启动方式与完整配置
 
 在 IDEA 中正常运行 `AdminApplication` 即可，RBAC 组件和 Repository 默认注册，不需要额外激活 `rbac` profile。案例设置已合并到 [application.yml](../admin/src/main/resources/application.yml)，数据库连接继续由自己的 `dev` 或 `prod` 环境配置提供。MySQL 数据库本身应提前创建，框架启动扫描负责创建两张表及索引；如果环境配置覆盖了 `schema-packages` 或 Repository 的 `scan-packages`，应确保其扫描范围包含 RBAC 对应包。
@@ -5416,12 +6859,13 @@ yulinlin:
         - "::1"
 ```
 
-RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按第一专题添加明确的 `@JoinSession` 路由和对应 Schema 扫描。
+RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](#ai-datasources-routing)和 [Schema](#ai-datasources-schema) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
-`security` 当前即使关闭加密，也需要 `unknown` 设备配置来兼容客户端密文。Admin 的基础配置使用运行时随机的 32 字符密钥，案例 Controller 标记 `@ApiCrypto(false)`，便于直接执行 JSON 请求。要与真实客户端联调加密，按第六专题配置双方一致的设备密钥、启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`；随机密钥不作为客户端协议使用。报文加密不替代 HTTPS。
+`security` 当前即使关闭加密，也需要 `unknown` 设备配置来兼容客户端密文。Admin 的基础配置使用运行时随机的 32 字符密钥，案例 Controller 标记 `@ApiCrypto(false)`，便于直接执行 JSON 请求。要与真实客户端联调加密，按[接口加密](#ai-security-crypto)配置双方一致的设备密钥、启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`；随机密钥不作为客户端协议使用。报文加密不替代 HTTPS。
 
 登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
 
+<a id="ai-practice-rbac-两表模型与状态枚举"></a>
 #### 两表模型与状态枚举
 
 | 实体 | 表 | 存储字段 |
@@ -5456,6 +6900,7 @@ private List<RoleEntity> roles;
 
 `UserRoleProjection` 是同一用户表的部分投影，仅选择主键、审计时间和角色集合，保持 `autoSchema=false`。删除普通角色时先按 JSON 文本 LIKE 缩小范围，再通过集合 `contains` 确认，使用 setter 移除对应编码，和删除角色在同一事务提交。这样不会因以后重新创建同名角色而自动恢复旧授权；JSON 集合查询没有关系表索引，这种模型适合角色数量较少的后台。
 
+<a id="ai-practice-rbac-登录权限和会话生命周期"></a>
 #### 登录、权限和会话生命周期
 
 职责划分如下；只定制业务必须处理的部分，不重复实现 JWT：
@@ -5488,7 +6933,7 @@ return R.ok(security.login(userId, deviceType), "登录成功");
 
 前端后续请求携带 `Authorization: Bearer <token>`。JWT 按 `yulinlin.security.jwt.ttl` 到期，查询/刷新资料不续期；同一用户可以持有多个 JWT。注销和请求结束都只清理当前线程，客户端应自行删除 Token；再次提交旧 JWT 仍可通过验证，直到过期或用户不允许访问。签名密钥、issuer 等校验配置不变时，重启无需恢复登录记录，未过期 Token 仍可用。后台线程不继承身份。
 
-admin 不声明 `ISecurityManager` Bean，框架自动提供唯一的 JWT 管理器；不再有登录 Store 或按用户撤销 API。需要注销后强制失效、踢人或在线会话管理时，改选 security-sa-token，或实现自己的 ISecurityManager；不能给纯 JWT 加一个 Redis 配置就自动获得有状态能力。选型与扩展见[JWT 与 Sa-Token 对比](06-接口安全.md#jwt-与-sa-token-如何选择)和[自定义实现](06-接口安全.md#接入外部安全框架)。
+admin 不声明 `ISecurityManager` Bean，框架自动提供唯一的 JWT 管理器；不再有登录 Store 或按用户撤销 API。需要注销后强制失效、踢人或在线会话管理时，改选 security-sa-token，或实现自己的 ISecurityManager；不能给纯 JWT 加一个 Redis 配置就自动获得有状态能力。选型与扩展见[JWT 与 Sa-Token 对比](#ai-security-modules-jwt-与-sa-token-如何选择)和[自定义实现](#ai-security-extension-接入外部安全框架)。
 
 密码使用 JDK `PBKDF2WithHmacSHA256`，每次生成独立 16 字节随机盐、600000 次迭代和 256 位校验值；通过 `MessageDigest.isEqual` 比较。参数参考 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)。数据库只保存版本、迭代数、盐和哈希组成的字符串，用户 VO、`IUserDetails` 以及日志不包含密码哈希。登录查库不加 `@JoinCache`，SQL 参数日志也默认关闭。
 
@@ -5496,7 +6941,7 @@ admin 不声明 `ISecurityManager` Bean，框架自动提供唯一的 JWT 管理
 
 案例复用 security 公共鉴权 AOP：三个 Controller 类使用 `@ApiLogin`，登录方法通过 `@ApiPublic` 放行，其他方法默认需要登录；管理方法使用 `@ApiPerm("user:update")` 等权限声明。不再实现 AdminSecurityManager，也不再自建随机 Token、用户权限快照缓存或登录拦截器。
 
-Permission 枚举仍是业务权限字典，角色集合和用户详情按原有规则加载；公共注解使用字符串编码，也可使用业务定义的 public static final String 常量，不能在注解参数中调用枚举 getCode()。权限精确匹配，无角色名自动越权或通配符解释。未登录/Token 失效为 HTTP 401，缺少权限为 HTTP 403；完整规则和 AOP 边界见[接口安全专题](06-接口安全.md#鉴权声明注解)。Service 仍负责业务事务、内置管理员保护和提交后刷新，不把登录检查加到 ISecurityManager 自己的身份加载路径上。
+Permission 枚举仍是业务权限字典，角色集合和用户详情按原有规则加载；公共注解使用字符串编码，也可使用业务定义的 public static final String 常量，不能在注解参数中调用枚举 getCode()。权限精确匹配，无角色名自动越权或通配符解释。未登录/Token 失效为 HTTP 401，缺少权限为 HTTP 403；完整规则和 AOP 边界见[接口安全专题](#ai-security-authorization-鉴权声明注解)。Service 仍负责业务事务、内置管理员保护和提交后刷新，不把登录检查加到 ISecurityManager 自己的身份加载路径上。
 
 | 操作 | 无状态 JWT 的行为 |
 | --- | --- |
@@ -5510,10 +6955,12 @@ Permission 枚举仍是业务权限字典，角色集合和用户详情按原有
 
 加载用户或权限失败时请求失败，不使用旧权限兜底。手工修改用户状态、角色或权限后，下一次请求会读到新值；经 Service 或直接改库重置密码都不会撤销 JWT。已经进入业务的请求不会被中途强制停止。删除用户后不要复用其 userId，否则旧 JWT 在有效期内可能被新身份接受。多实例使用一致的签名/校验配置和用户数据，不需要共享 Token 登录表；强制失效需求应选择有状态方案，不能将此案例宣称为在线会话管理。
 
+<a id="ai-practice-rbac-业务写法与-http-调用"></a>
 #### 业务写法与 HTTP 调用
 
 Controller 全部使用 `@PostMapping`，参数对象集中在 `RbacRequests`，开启 `@Valid`，返回 `R<E>`；Entity、PO、VO 分开。`UserPage extends PagePo` 用 `@JoinWhere` 解析用户名 LIKE 与状态等值条件；`RolePage` 支持角色编码等值、名称 LIKE。页码、每页条数和排序字段在 Service 校验，每页最多 100 条；HTTP 查询不接受继承自 PagePo 的任意 `and/or` 字段条件，避免访问密码等内部字段。
 
+<a id="ai-practice-rbac-service-完整-crud-与对外边界"></a>
 #### Service 完整 CRUD 与对外边界
 
 两个业务 Service 直接实现框架的 `ISuperService`，不再是只提供几个自定义方法的普通类，也不继承已经弃用的 ServiceImpl：
@@ -5536,7 +6983,7 @@ public class UserService implements ISuperService<UserEntity> {
 
 服务端可直接调用 `findById`、`findByIdIn`、`all`、`page(PagePo)`、`insertOne/insertList`、`updateOne/updateList`、`save/saveList`、`deleteById/deleteByIdIn`。必须通过注入的 Spring Service Bean 调用，才能建立事务。案例显式声明默认写方法的转发入口，并在批量写方法统一校验；单条和 save 分支也经过相同规则，不能绕过内置管理员角色保护、用户名/角色编码不可变和提交后资料刷新。服务端直接插入 UserEntity 时，passwordHash 必须先通过 `PasswordHash.encode` 生成，不能保存明文。
 
-HTTP 同样提供完整的列表、详情、分页、单条/批量增删改，但保留请求 DTO 与响应 VO，不直接继承 `RESTfulController` 的实体 `put/puts` 接口。原因是用户密码、角色、状态各有独立权限，直接开放 Entity 更新会绕过这些边界。普通无敏感字段的业务仍可按前文继承通用 Controller；RBAC 案例通过安全的 DTO 接口展示业务扩展。
+HTTP 同样提供完整的列表、详情、分页、单条/批量增删改，但保留请求 DTO 与响应 VO，不直接继承 `RESTfulController` 的实体 `put/puts` 接口。原因是用户密码、角色、状态各有独立权限，直接开放 Entity 更新会绕过这些边界。普通无敏感字段的业务仍可按[完整 CRUD 案例](#ai-practice-crud-example)继承通用 Controller；RBAC 案例通过安全的 DTO 接口展示业务扩展。
 
 批量创建/修改使用 `{"items":[...]}`，批量删除使用 `{"ids":[...]}`，每次 1–100 条；删除 ID 去重，返回实际处理条数。在一个 Service 事务内执行，数据库写入阶段失败会整体回滚；资料刷新回调在提交后执行，不撤销 JWT。批量新增和修改调用 Repository 的批量写入；删除角色先合并全部待删编码，对每个用户的角色集合只修改一次，再批量删除角色，避免同一用户关联多个待删角色时修改互相覆盖。`/users/list` 接收 UserPage，按页返回脱敏列表、最多 100 条，不是无界全表导出。用户普通更新（含批量）只修改昵称，授权、状态和密码仍走对应专用接口。
 
@@ -5599,3 +7046,7 @@ public void assignRoles(RbacRequests.AssignRoles request) {
 推荐按 [rbac.http](../admin/rbac.http) 顺序执行：管理员登录 → 创建只读角色 → 创建用户 → 用户登录 → 验证 403 → 修改角色权限 → 用原 Token 验证新增权限 → 停用账号 → 验证原 Token 返回 401。请求文件有演示密码和占位管理员密码，使用前替换；重复创建同名用户或角色会被唯一约束拒绝。
 
 本案例于 2026-10-20 迁移为 security-jwt 登录，并同步调整已有回归用例源码和 HTTP 请求示例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。
+
+---
+
+下一步：返回[项目实践主题目录](practice/README.md)按需选择相关专题。

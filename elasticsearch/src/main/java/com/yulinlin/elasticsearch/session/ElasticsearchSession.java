@@ -10,6 +10,8 @@ import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.session.AbstractSession;
+import com.yulinlin.data.core.session.SessionExecution;
+import com.yulinlin.elasticsearch.log.EsExecutionLog;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.elasticsearch.util.AggregationUtil;
 import com.yulinlin.elasticsearch.ElasticsearchSchemaManager;
@@ -23,6 +25,11 @@ import java.util.Map;
 
 @Slf4j
 public class ElasticsearchSession extends AbstractSession  {
+
+    @Override
+    protected void printExecution(SessionExecution execution) {
+        EsExecutionLog.print(execution, getSessionProperties().isLog());
+    }
 
     private ElasticsearchClient client;
     private final ElasticsearchSchemaManager schemaManager = new ElasticsearchSchemaManager();

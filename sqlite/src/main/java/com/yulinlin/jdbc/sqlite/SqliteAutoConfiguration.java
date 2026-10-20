@@ -1,6 +1,7 @@
 package com.yulinlin.jdbc.sqlite;
 
 import com.yulinlin.data.core.schema.SchemaMode;
+import com.yulinlin.jdbc.sqlite.coder.SqliteCoderManager;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
 import com.yulinlin.data.core.schema.SchemaEntityScanner;
@@ -29,7 +30,8 @@ public class SqliteAutoConfiguration {
     @Bean("sqliteSessionFactory")
     @ConditionalOnMissingBean(name = "sqliteSessionFactory")
     public JdbcSessionFactory sqliteSessionFactory(SqliteProperties properties) {
-        return new JdbcSessionFactory("jdbc:sqlite:", SqliteSession::new, properties);
+        return new JdbcSessionFactory("jdbc:sqlite:", SqliteSession::new, properties,
+                new SqliteCoderManager());
     }
 
     @Bean("sqliteSession")

@@ -1,6 +1,7 @@
 package com.yulinlin.jdbc.postgresql;
 
 import com.yulinlin.jdbc.DataJdbcApplication;
+import com.yulinlin.jdbc.postgresql.coder.PostgresqlCoderManager;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
 import com.yulinlin.data.core.schema.SchemaEntityScanner;
@@ -20,7 +21,8 @@ public class PostgresqlAutoConfiguration {
     @Bean("postgresqlSessionFactory")
     @ConditionalOnMissingBean(name = "postgresqlSessionFactory")
     public JdbcSessionFactory postgresqlSessionFactory(PostgresqlProperties properties) {
-        return new JdbcSessionFactory("jdbc:postgresql:", PostgresqlSession::new, properties);
+        return new JdbcSessionFactory("jdbc:postgresql:", PostgresqlSession::new, properties,
+                new PostgresqlCoderManager());
     }
 
     @Bean("postgresqlSession")

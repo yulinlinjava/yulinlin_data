@@ -6,6 +6,8 @@ import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.session.TransactionSession;
+import com.yulinlin.data.core.session.SessionExecution;
+import com.yulinlin.jdbc.log.JdbcExecutionLog;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
@@ -19,6 +21,10 @@ import java.util.*;
 @Slf4j
 public class JdbcSession extends AbstractJdbcSession implements TransactionSession  {
 
+    @Override
+    protected void printExecution(SessionExecution execution) {
+        JdbcExecutionLog.print(execution);
+    }
 
     public JdbcSession(DataSource dataSource) {
         super(dataSource);

@@ -2,6 +2,7 @@ package com.yulinlin.jdbc.sqlite;
 
 import com.yulinlin.data.core.schema.SchemaMode;
 import com.yulinlin.jdbc.JdbcSessionProperties;
+import com.yulinlin.jdbc.sqlite.coder.SqliteTemporalCoders;
 import com.yulinlin.jdbc.session.JdbcSession;
 
 import javax.sql.DataSource;
@@ -9,17 +10,11 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.List;
 
 /** Shared JDBC execution with SQLite SQL and startup schema initialization. */
 public class SqliteSession extends JdbcSession {
-    private static final DateTimeFormatter DATE_TIME_FORMAT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
     private final SqliteSchemaManager schemaManager = new SqliteSchemaManager();
     private volatile SchemaMode schemaMode = SchemaMode.CREATE;
 
@@ -47,15 +42,8 @@ public class SqliteSession extends JdbcSession {
     /** SQLite keeps framework temporal values as sortable fixed-format TEXT. */
     @Override
     protected void bindValue(PreparedStatement statement, int index, Object value) throws SQLException {
-        if (value instanceof Timestamp timestamp) {
-            statement.setString(index, DATE_TIME_FORMAT.format(timestamp.toLocalDateTime()));
-        } else if (value instanceof java.sql.Date date) {
-            statement.setString(index, date.toLocalDate().toString());
-        } else if (value instanceof Time time) {
-            statement.setString(index, TIME_FORMAT.format(time.toLocalTime()));
-        } else {
-            super.bindValue(statement, index, value);
-        }
+        // 编码器已产生 TEXT；保留原始 SQL/旧参数中的时间对象兼容，与编码器使用同一格式。
+        super.bindValue(statement, index, SqliteTemporalCoders.toTextValue(value));
     }
 
     @Override

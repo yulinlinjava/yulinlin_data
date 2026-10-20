@@ -7,6 +7,8 @@ import com.yulinlin.data.core.coder.IDataBuffer;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.parse.ParseType;
 import com.yulinlin.data.core.session.AbstractSession;
+import com.yulinlin.data.core.session.SessionExecution;
+import com.yulinlin.mongodb.log.MongoExecutionLog;
 import com.yulinlin.data.core.session.RequestType;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.BsonArray;
@@ -20,6 +22,11 @@ import java.util.stream.Collectors;
 
 @Slf4j
 public class MongoSession extends AbstractSession  {
+
+    @Override
+    protected void printExecution(SessionExecution execution) {
+        MongoExecutionLog.print(execution, getSessionProperties().isLog());
+    }
 
     private MongoDatabase client;
 

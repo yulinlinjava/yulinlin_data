@@ -1,7 +1,6 @@
 package com.yulinlin.mongodb;
 
 import com.yulinlin.data.core.session.EntitySession;
-import com.yulinlin.mongodb.log.MongoLogPrint;
 import com.yulinlin.mongodb.parse.MongoParseManager;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -14,11 +13,6 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 @EnableConfigurationProperties(MongoProperties.class)
 
 public class MongoDbAutoConfig {
-
-    @Bean
-    public MongoLogPrint mongoLogPrint(){
-        return new MongoLogPrint();
-    }
 
     @Bean
     public MongoFactory mongoFactory(){

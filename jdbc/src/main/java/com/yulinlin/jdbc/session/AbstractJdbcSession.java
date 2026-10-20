@@ -1,7 +1,6 @@
 package com.yulinlin.jdbc.session;
 
 
-import com.zaxxer.hikari.HikariDataSource;
 import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.coder.IDataBuffer;
 import com.yulinlin.data.core.node.INode;
@@ -34,14 +33,14 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
 
     private JdbcSessionProperties properties = new JdbcSessionProperties();
-    private volatile int parallelConnections = ConnectionUtil.DEFAULT_PARALLEL_CONNECTIONS;
-    private volatile int executeBatchSize = 256;
-    private final ThreadLocal<ConnectionPool> transactionPools = new ThreadLocal<>();
+    private volatile int parallelConnections = properties.getParallelConnections();
+    private volatile int executeBatchSize = properties.getExecuteBatchSize();
+    private final ThreadLocal<JdbcTransactionResources> transactionResources = new ThreadLocal<>();
 
     protected DataSource dataSource;
 
     public AbstractJdbcSession(DataSource dataSource) {
-        this.dataSource = ConnectionPool.targetDataSource(java.util.Objects.requireNonNull(dataSource, "dataSource"));
+        this.dataSource = JdbcTransactionResources.targetDataSource(java.util.Objects.requireNonNull(dataSource, "dataSource"));
 
     }
 
@@ -138,17 +137,17 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     @Override
     protected CompletableFuture<Integer> executeUpdateAsync(List<ParseResult> results, RequestType requestType) {
         // Capture the owning session's context, not a worker-thread ThreadLocal or global route.
-        ConnectionPool pool = transactionConnections();
+        JdbcTransactionResources resources = transactionConnections();
 
         CompletableFuture<Integer> future =   CompletableFuture.supplyAsync(() -> {
-            Connection connection  =  pool.getConnection();
+            Connection connection  =  resources.getConnection();
             try {
                 return executeUpdateNode(connection,results);
             } catch (Throwable error) {
-                pool.setRollbackOnly();
+                resources.setRollbackOnly();
                 throw error;
             }finally {
-                pool.releaseConnection(connection);
+                resources.releaseConnection(connection);
             }
         },getThreadPoolExecutor());
 
@@ -168,14 +167,14 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     protected Integer executeUpdate(List<ParseResult> list,RequestType requestType) {
 
 
-            ConnectionPool pool = transactionConnections();
-            Connection connection = pool.getConnection();
+            JdbcTransactionResources resources = transactionConnections();
+            Connection connection = resources.getConnection();
 
             try {
                 Integer value =  executeUpdateNode(connection,list);
                 return value;
             }finally {
-                pool.releaseConnection(connection);
+                resources.releaseConnection(connection);
             }
 
 
@@ -196,17 +195,17 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
         SqlNode sqlNode = (SqlNode)request.getRequest();
 
 
-        ConnectionPool pool = isOpenTransaction() ? transactionConnections() : null;
-        if (pool == null) {
+        JdbcTransactionResources resources = isOpenTransaction() ? transactionConnections() : null;
+        if (resources == null) {
             try (Connection connection = dataSource.getConnection()) {
                 return executeSelectNode(connection, sqlNode);
             }
         }
-        Connection connection = pool.getConnection();
+        Connection connection = resources.getConnection();
         try {
             return executeSelectNode(connection, sqlNode);
         } finally {
-            pool.releaseConnection(connection);
+            resources.releaseConnection(connection);
         }
 
     }
@@ -227,8 +226,8 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     public void startTransaction() {
-        if (transactionPools.get() == null)
-            transactionPools.set(new ConnectionPool(dataSource, parallelConnections, group(), String.valueOf(cluster())));
+        if (transactionResources.get() == null)
+            transactionResources.set(new JdbcTransactionResources(dataSource, parallelConnections, group(), String.valueOf(cluster())));
     }
 
     @Override
@@ -242,34 +241,34 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     }
 
     private void finishTransactionResource(boolean rollback) {
-        ConnectionPool pool = transactionPools.get();
-        transactionPools.remove();
-        if (pool != null) pool.finish(rollback);
+        JdbcTransactionResources resources = transactionResources.get();
+        transactionResources.remove();
+        if (resources != null) resources.finish(rollback);
     }
 
-    @Override public boolean isOpenTransaction() { return transactionPools.get() != null; }
+    @Override public boolean isOpenTransaction() { return transactionResources.get() != null; }
 
     @Override public void setRollbackOnly() {
-        ConnectionPool pool = transactionPools.get();
-        if (pool != null) pool.setRollbackOnly();
+        JdbcTransactionResources resources = transactionResources.get();
+        if (resources != null) resources.setRollbackOnly();
     }
 
     @Override public boolean isRollbackOnly() {
-        ConnectionPool pool = transactionPools.get();
-        return pool != null && pool.isRollbackOnly();
+        JdbcTransactionResources resources = transactionResources.get();
+        return resources != null && resources.isRollbackOnly();
     }
 
-    protected final ConnectionPool transactionConnections() {
-        ConnectionPool pool = transactionPools.get();
-        if (pool == null) throw new IllegalStateException("JDBC 事务资源尚未开启，请通过 RouteSession 执行写操作");
+    protected final JdbcTransactionResources transactionConnections() {
+        JdbcTransactionResources resources = transactionResources.get();
+        if (resources == null) throw new IllegalStateException("JDBC 事务资源尚未开启，请通过 RouteSession 执行写操作");
         // 只在真正执行 SQL 时借连接，并在交给批处理工作线程前由原线程初始化。
-        return pool.initialize();
+        return resources.initialize();
     }
 
     @Override protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results) {
         if (!super.isOpenAsync(request, results)) return false;
-        ConnectionPool pool = transactionConnections();
-        return pool.getLimit() > 1;
+        JdbcTransactionResources resources = transactionConnections();
+        return resources.getLimit() > 1;
     }
 
     @Override public boolean supportsParallelWrites() {
@@ -277,10 +276,9 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     }
 
     @Override protected int parallelWriteGroupCount() {
-        ConnectionPool pool = transactionPools.get();
-        if (pool != null) return pool.getLimit();
-        return dataSource instanceof HikariDataSource hikari
-                ? Math.min(parallelConnections, Math.max(1, hikari.getMaximumPoolSize())) : parallelConnections;
+        JdbcTransactionResources resources = transactionResources.get();
+        if (resources != null) return resources.getLimit();
+        return JdbcTransactionResources.connectionLimit(dataSource, parallelConnections);
     }
 
     public int getParallelConnections() { return parallelConnections; }

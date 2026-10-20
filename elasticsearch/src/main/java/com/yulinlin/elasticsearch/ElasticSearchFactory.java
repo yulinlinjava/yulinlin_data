@@ -6,7 +6,7 @@ import com.yulinlin.data.core.cache.NoOpQueryCache;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCaches;
 import com.yulinlin.data.core.coder.ICoderManager;
-import com.yulinlin.data.core.log.LogManager;
+import com.yulinlin.data.core.session.SessionExecutionListener;
 import com.yulinlin.data.core.proxy.EntityProxyService;
 import com.yulinlin.data.core.session.SessionFactory;
 import com.yulinlin.elasticsearch.coder.ElasticCoderManager;
@@ -23,8 +23,12 @@ public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient>
     EntityProxyService entityProxyService;
 
 
-@Autowired
-   private LogManager logManager;
+    private java.util.List<SessionExecutionListener> executionListeners = java.util.List.of();
+
+    @Autowired
+    void setExecutionListeners(ObjectProvider<SessionExecutionListener> listeners) {
+        this.executionListeners = listeners.orderedStream().toList();
+    }
 
 
 
@@ -58,7 +62,7 @@ public class ElasticSearchFactory implements SessionFactory<ElasticsearchClient>
         searchSession.setProxyService(entityProxyService);
 
 
-        searchSession.setLogManager(logManager);
+        searchSession.setExecutionListeners(executionListeners);
 
         searchSession.setGroup(group);
         return searchSession;

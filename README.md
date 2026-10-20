@@ -11,7 +11,7 @@
 - 通过 `JoinQuery`/`JoinLazy` 表达关联查询，主键关联可批量预加载，减少列表场景的 N+1。
 - 通过显式 `@JoinSync` 或 `.autoUpdate()` 在事务内按 setter 跟踪部分更新，不要求所有查询都进入持久化上下文。
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
-- 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.submit()`，按数据源、实体和主键把多次字段增减聚合为一次原子更新，再复用现有 Session 和 JDBC batch。
+- 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.submit()`，按数据源、实体和主键聚合原子更新；统计明细使用 `EntityCounter.insert(entity).submit()`，按非数字维度聚合数字后批量插入，支持大数、AtomicInteger/AtomicLong 和 Adder。
 - 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，支持全局及按 `table`/`group.table` 配置 TTL；Key 包含数据源与查询元数据，条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
 - 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描，Elasticsearch 提供同一入口的索引与基础 Mapping 初始化；只有 `autoSchema=true` 的完整实体才参与结构初始化。
@@ -53,7 +53,7 @@
 | 更新后的缓存失效 | 低但粗：默认让当前 Mapper namespace 缓存空间全部失效 | 中：实体缓存和查询缓存规则不同 | 低：单字段等值结构按条件值失效；出现多种或复杂结构后升级为表 namespace 整体失效 |
 | 多数据源、列表与 Count 缓存隔离 | 中高：业务缓存需自行设计 Key 和失效关系 | 中高：需区分 persistence unit、Region 与查询缓存 | 低：数据源、实体、SQL、参数和请求类型统一进入缓存元数据 |
 | 跨请求延迟批量写入 | 高：需自行开发队列、定时任务、分组、满量刷新和失败处理 | 高：事务 Flush 不是跨请求队列，仍需自行开发 | 低：`.queue()` 固化 INode，按 Session/类型/实体分组，按时间或 `flush-size` 刷新 |
-| 自动计数聚合（例如多次 `+1` 合成 `+N`） | 高：业务自行维护计数器、调度、失败恢复和批量 SQL | 高：事务 Flush 不跨请求，仍需业务实现聚合任务 | 低：`EntityCounter.submit()` 按数据源、实体和主键聚合多个数值字段，按时间或阈值批量原子更新 |
+| 自动计数聚合（例如多次 `+1` 合成 `+N`） | 高：业务自行维护计数器、调度、失败恢复和批量 SQL | 高：事务 Flush 不跨请求，仍需业务实现聚合任务 | 低：`EntityCounter` 支持按主键聚合更新、按非数字维度聚合插入，按时间或阈值刷新 |
 | 自动建表、索引与结构校验 | 高：通常维护 DDL 或接入迁移工具 | 低到中：Hibernate Schema 能力 | 低：Schema 扫描、`@JoinIndex` 和 CREATE/VALIDATE 安全子集 |
 | 慢操作聚合和查看页面 | 中高：另接监控组件 | 中高：另接 Statistics/Micrometer 与页面 | 低：引入 `monitor`，使用内置只读页面 |
 | MySQL/PostgreSQL 到 ES 的可靠同步 | 高：Outbox/MQ 自行实现 | 中：Hibernate Search 可降低 ORM 实体索引同步成本 | 高：当前仍需 Outbox/MQ；统一查询 API 不等于跨系统事务 |
@@ -85,7 +85,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 
 对比参考了 [MyBatis-Plus 官方文档](https://baomidou.com/)、[Spring Data JPA 文档](https://docs.spring.io/spring-data/jpa/reference/)、[Hibernate ORM User Guide](https://docs.jboss.org/hibernate/orm/current/userguide/html_single/Hibernate_User_Guide.html)、[Hibernate Search Reference](https://docs.jboss.org/hibernate/stable/search/reference/en-US/html_single/)、[PostgreSQL 全文检索文档](https://www.postgresql.org/docs/current/textsearch.html)和 [Elasticsearch Query DSL](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html)；yulinlin-data 一列以本仓库当前实现和后续专题为准。
 
-## 九个专题
+## 十个专题
 
 | 你要做什么 | 阅读入口 |
 | --- | --- |
@@ -94,7 +94,8 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 | 实体 CRUD、自定义 SQL、统计分析、实体计数聚合、批量与事务 | [CRUD 与统计分析](doc/02-CRUD与统计分析.md) |
 | 用户角色菜单、JoinQuery、懒加载、事务自动更新 | [关联查询与代理](doc/03-关联查询与代理.md) |
 | HTTP，以及 lang 的反射、JSON、日期、缓存、并发、事件等全部工具 | [工具类](doc/04-工具类.md) |
-| 新数据源模块、架构、排障、验收与历史性能 | [扩展开发与维护](doc/05-扩展开发与维护.md) |
+| 新数据源接入、编解码扩展、资源生命周期与排障 | [扩展开发与维护](doc/05-扩展开发与维护.md) |
+| 内部维护：core 组件、RouteSession 执行链、事务/缓存/代理/队列、日志与监控边界 | [核心组件与业务边界](doc/10-核心组件与业务边界.md) |
 | JSON 接口加解密、IP/设备限流与浏览器协议 | [接口安全](doc/06-接口安全.md) |
 | SQLite/H2 多线程写入结果、选型依据与复现 | [SQLite/H2 性能报告](doc/07-SQLite与H2性能报告.md) |
 | Caffeine/Ehcache/Redis 查询缓存、TTL、复杂 SQL 与多数据源 Key | [查询缓存](doc/08-查询缓存.md) |
@@ -121,7 +122,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 
 写入先确认主键/条件，框架不默认拦截全表操作。多库或多连接是本地事务协调，不是分布式原子提交。多会话组用显式 group 或 yulinlin.datasource.default-group；primary 不自动优先。
 
-每个专题按“入口与示例 → 常见场景 → API/配置 → 使用限制”组织。九份正文是唯一维护源，AI 单文件由使用专题派生，不再维护旧专题、存档或独立重复指南。
+使用专题按“入口与示例 → 常见场景 → API/配置 → 使用限制”组织，内部架构专题按组件与执行链组织。十份正文是唯一维护源，AI 单文件由七个使用专题派生；框架维护 AI 另外阅读第十专题，需要接入新模块时再读第五专题，不维护独立重复指南。
 
 框架维护默认只进行代码与文档修改、静态阅读检查，不主动执行编译、打包、测试、Spring YAML 属性绑定测试或 `git diff --check`；用户在当前任务中明确要求后才运行。完整约定见[扩展开发与维护](doc/05-扩展开发与维护.md#ai-使用约定)。
 

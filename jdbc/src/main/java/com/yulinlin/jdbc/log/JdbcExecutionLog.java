@@ -1,9 +1,8 @@
 package com.yulinlin.jdbc.log;
 
-import com.yulinlin.data.core.log.LogPrint;
+import com.yulinlin.data.core.session.SessionExecution;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.session.EntitySession;
-import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionLog;
 import com.yulinlin.jdbc.JdbcSessionProperties;
 import com.yulinlin.jdbc.session.AbstractJdbcSession;
@@ -18,24 +17,36 @@ import java.sql.Blob;
 import java.sql.Clob;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.StringJoiner;
 
-/** Emits one bounded, single-line entry for each physical JDBC operation. */
+/** Session 直接调用；一条日志事件内按摘要、SQL、参数分行展示，内容保持有界。 */
 @Slf4j
-public class SqlNodeLog implements LogPrint<SqlNode> {
+public final class JdbcExecutionLog {
     private static final int MAX_LOGGED_PARAMS = 20;
     private static final int MAX_LOGGED_TEMPLATES = 5;
     private static final int MAX_SQL_LENGTH = 4096;
     private static final int MAX_BATCH_SQL_LENGTH = 1024;
 
-    @Override
-    public void success(long elapsedMs, ParseResult result) {
-        success(elapsedMs, result, currentSession());
+    private JdbcExecutionLog() {
     }
 
-    @Override
-    public void success(long elapsedMs, ParseResult result, EntitySession session) {
+    public static void print(SessionExecution execution) {
+        if (execution.batch()) {
+            if (execution.error() == null) {
+                successBatch(execution);
+            } else {
+                errorBatch(execution);
+            }
+        } else {
+            ParseResult result = firstResult(execution.requests());
+            if (execution.error() == null) success(execution.elapsedMillis(), result, execution.session());
+            else error(execution.elapsedMillis(), execution.error(), result, execution.session());
+        }
+    }
+
+    private static void success(long elapsedMs, ParseResult result, EntitySession session) {
         try {
             JdbcSessionProperties properties = properties(session);
             boolean slow = isSlow(elapsedMs, properties);
@@ -50,100 +61,86 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
         }
     }
 
-    @Override
-    public void error(Throwable error, ParseResult result) {
-        error(error, result, currentSession());
-    }
-
-    @Override
-    public void error(Throwable error, ParseResult result, EntitySession session) {
-        error(-1, error, result, session);
-    }
-
-    @Override
-    public void error(long elapsedMs, Throwable error, ParseResult result, EntitySession session) {
+    private static void error(long elapsedMs, Throwable error, ParseResult result, EntitySession session) {
         try {
             if (!log.isErrorEnabled()) return;
-            log.error(singleMessage("SQL执行异常", elapsedMs, result, session, properties(session)), error);
+            log.error(singleMessage("SQL执行失败", elapsedMs, result, session, properties(session)), error);
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
         }
     }
 
-    @Override
-    public void successBatch(long elapsedMs, List<ParseResult> results, int affected, EntitySession session) {
+    private static void successBatch(SessionExecution execution) {
         try {
-            JdbcSessionProperties properties = properties(session);
-            boolean slow = isSlow(elapsedMs, properties);
-            if (!slow && !isSqlLogEnabled(properties, session)) return;
+            JdbcSessionProperties properties = properties(execution.session());
+            boolean slow = isSlow(execution.elapsedMillis(), properties);
+            if (!slow && !isSqlLogEnabled(properties, execution.session())) return;
             if (slow) {
                 if (log.isWarnEnabled()) {
-                    log.warn(batchMessage("SQL批量执行缓慢", elapsedMs, results, affected, session, properties));
+                    log.warn(batchMessage("SQL批量执行缓慢", execution, properties));
                 }
             } else if (log.isInfoEnabled()) {
-                log.info(batchMessage("SQL批量执行成功", elapsedMs, results, affected, session, properties));
+                log.info(batchMessage("SQL批量执行成功", execution, properties));
             }
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
         }
     }
 
-    @Override
-    public void errorBatch(Throwable error, List<ParseResult> results, EntitySession session) {
-        errorBatch(-1, error, results, session);
-    }
-
-    @Override
-    public void errorBatch(long elapsedMs, Throwable error, List<ParseResult> results, EntitySession session) {
+    private static void errorBatch(SessionExecution execution) {
         try {
             if (!log.isErrorEnabled()) return;
-            log.error(batchMessage("SQL批量执行异常", elapsedMs, results, -1, session, properties(session)), error);
+            log.error(batchMessage("SQL批量执行失败", execution, properties(execution.session())), execution.error());
         } catch (RuntimeException loggingFailure) {
             reportLoggingFailure(loggingFailure);
         }
     }
 
-    private String singleMessage(String event, long elapsedMs, ParseResult result, EntitySession session,
+    private static String singleMessage(String event, long elapsedMs, ParseResult result, EntitySession session,
                                  JdbcSessionProperties properties) {
         SqlNode node = sqlNode(result);
         StringBuilder message = base(event, elapsedMs, result, session)
-                .append(" sql=").append(quoteSql(node == null ? null : node.getSql()));
+                .append("\nSQL=").append(quoteSql(node == null ? null : node.getSql()));
         appendParams(message, node, properties);
         return message.toString();
     }
 
-    private String batchMessage(String event, long elapsedMs, List<ParseResult> results, int affected,
-                                EntitySession session, JdbcSessionProperties properties) {
+    private static String batchMessage(String event, SessionExecution execution,
+                                       JdbcSessionProperties properties) {
+        List<ParseResult> results = execution.requests();
         ParseResult sampleResult = firstResult(results);
         SqlNode sample = sqlNode(sampleResult);
         SqlTemplateSummary templates = sqlTemplates(results);
-        StringBuilder message = base(event, elapsedMs, sampleResult, session)
-                .append(" nodes=").append(results == null ? 0 : results.size());
-        if (affected >= 0) message.append(" affected=").append(affected);
-        message.append(" templates=").append(templates.count())
-                .append(" sqls=").append(templates.rendered());
+        StringBuilder message = base(event, execution.elapsedMillis(), sampleResult, execution.session());
+        // 使用原始纳秒计算分摊值，避免先截断为毫秒造成小批次平均值失真。
+        if (execution.error() == null && !results.isEmpty()) {
+            message.append(" 平均每条耗时=")
+                    .append(String.format(Locale.ROOT, "%.3f", execution.elapsedNanos() / 1_000_000.0 / results.size()))
+                    .append("ms");
+        }
+        message.append(" 操作数量=").append(results.size());
+        if (execution.error() == null && execution.affectedRows() != null && execution.affectedRows() >= 0) {
+            message.append(" 影响行数=").append(execution.affectedRows());
+        }
+        message.append(" SQL模板数=").append(templates.count())
+                .append("\nSQL=").append(templates.rendered());
         appendParams(message, sample, properties);
         return message.toString();
     }
 
-    private StringBuilder base(String event, long elapsedMs, ParseResult result, EntitySession session) {
+    private static StringBuilder base(String event, long elapsedMs, ParseResult result, EntitySession session) {
         return new StringBuilder(event)
-                .append(" txId=").append(token(result != null && result.getTransactionId() != null
+                .append(" 事务ID=").append(token(result != null && result.getTransactionId() != null
                         ? result.getTransactionId() : TransactionLog.current().id()))
-                .append(" group=").append(token(group(session)))
-                .append(" cluster=").append(token(cluster(session)))
-                .append(" type=").append(result == null || result.getType() == null ? "unknown" : result.getType())
-                .append(" elapsedMs=").append(Math.max(-1, elapsedMs));
+                .append(" 数据源=").append(token(group(session)))
+                .append(" 节点=").append(token(cluster(session)))
+                .append(" 操作=").append(result == null || result.getType() == null ? "unknown" : result.getType())
+                .append(" 总耗时=").append(Math.max(-1, elapsedMs)).append("ms");
     }
 
-    private void appendParams(StringBuilder message, SqlNode node, JdbcSessionProperties properties) {
-        appendParams(message, node, properties, " params=");
-    }
-
-    private void appendParams(StringBuilder message, SqlNode node, JdbcSessionProperties properties,
-                              String label) {
+    private static void appendParams(StringBuilder message, SqlNode node, JdbcSessionProperties properties) {
         if (properties == null || !properties.isLogParams()) return;
-        message.append(label).append(formatParams(node == null ? null : node.getList(),
+        message.append("\n参数=").append(formatParams(node == null ? null : node.getList(),
                 properties.getMaxParamLength()));
     }
 
@@ -234,10 +231,6 @@ public class SqlNodeLog implements LogPrint<SqlNode> {
 
     private static JdbcSessionProperties properties(EntitySession session) {
         return session instanceof AbstractJdbcSession jdbcSession ? jdbcSession.getProperties() : null;
-    }
-
-    private EntitySession currentSession() {
-        return SessionUtil.route() == null ? null : SessionUtil.route().session();
     }
 
     private static String group(EntitySession session) {

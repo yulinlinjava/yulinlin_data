@@ -1,6 +1,7 @@
 package com.yulinlin.jdbc.mysql;
 
 import com.yulinlin.jdbc.DataJdbcApplication;
+import com.yulinlin.jdbc.mysql.coder.MysqlCoderManager;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
 import com.yulinlin.data.core.schema.SchemaEntityScanner;
@@ -20,7 +21,8 @@ public class MysqlParseAutoConfig {
     @Bean("mysqlSessionFactory")
     @ConditionalOnMissingBean(name = "mysqlSessionFactory")
     public JdbcSessionFactory mysqlSessionFactory(MysqlProperties properties) {
-        return new JdbcSessionFactory("jdbc:mysql:", MysqlSession::new, properties);
+        return new JdbcSessionFactory("jdbc:mysql:", MysqlSession::new, properties,
+                new MysqlCoderManager());
     }
 
     @Bean("mysqlSession")

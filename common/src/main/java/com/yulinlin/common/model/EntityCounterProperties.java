@@ -13,7 +13,7 @@ public class EntityCounterProperties {
     /** 定时刷新间隔。 */
     private Duration flushInterval = Duration.ofMinutes(1);
 
-    /** 不同实体行达到该数量后立即异步刷新。 */
+    /** 更新行、插入维度组及待重试插入行合计达到该数量后立即异步刷新。 */
     private int flushSize = 1_024;
 
     /** 计数器写入后是否清理对应查询缓存。 */

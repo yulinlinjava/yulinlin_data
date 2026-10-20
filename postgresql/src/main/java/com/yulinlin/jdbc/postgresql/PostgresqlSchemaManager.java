@@ -214,6 +214,7 @@ public final class PostgresqlSchemaManager {
     }
 
     private static StorageType storageType(Class<?> type, TextColumnResolver.Definition text) {
+        type = com.yulinlin.jdbc.schema.JdbcScalarTypes.storageType(type);
         if (text.type() == TextTypeEnum.varchar) return StorageType.STRING;
         if (text.type() == TextTypeEnum.text) return StorageType.TEXT;
         if (type == boolean.class || type == Boolean.class) return StorageType.BOOLEAN;

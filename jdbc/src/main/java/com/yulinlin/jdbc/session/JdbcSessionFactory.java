@@ -3,7 +3,8 @@ package com.yulinlin.jdbc.session;
 import com.yulinlin.data.core.cache.NoOpQueryCache;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.cache.QueryCaches;
-import com.yulinlin.data.core.log.LogManager;
+import com.yulinlin.data.core.coder.ICoderManager;
+import com.yulinlin.data.core.session.SessionExecutionListener;
 import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.data.core.proxy.EntityProxyService;
 import com.yulinlin.data.core.session.SessionFactory;
@@ -22,18 +23,20 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
     private final String jdbcUrlPrefix;
     private final java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator;
     private final JdbcSessionProperties properties;
+    private final ICoderManager coderManager;
 
     private QueryCache queryCache = NoOpQueryCache.INSTANCE;
 
     @Autowired
     EntityProxyService entityProxyService;
 
-    @Autowired
-    private  LogManager logManager;
-
+    private java.util.List<SessionExecutionListener> executionListeners = java.util.List.of();
 
     @Autowired
-    private JdbcCoderManager jdbcCoderManager;
+    void setExecutionListeners(ObjectProvider<SessionExecutionListener> listeners) {
+        this.executionListeners = listeners.orderedStream().toList();
+    }
+
 
     @Autowired
     void setQueryCaches(ObjectProvider<QueryCache> providers) {
@@ -52,6 +55,11 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         this(parseManager, jdbcUrlPrefix, JdbcSession::new, properties);
     }
 
+    public JdbcSessionFactory(IParseManager parseManager, String jdbcUrlPrefix, JdbcSessionProperties properties,
+            ICoderManager coderManager) {
+        this(parseManager, jdbcUrlPrefix, JdbcSession::new, properties, coderManager);
+    }
+
     /** Create the concrete session, which installs its parsers and driver-specific value handling. */
     public JdbcSessionFactory(String jdbcUrlPrefix,
             java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator) {
@@ -64,13 +72,27 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         this(null, jdbcUrlPrefix, sessionCreator, properties);
     }
 
+    /** 直接使用数据库自己的编解码管理器，不传编码器列表、不依赖全局管理器 Bean。 */
+    public JdbcSessionFactory(String jdbcUrlPrefix,
+            java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator,
+            JdbcSessionProperties properties, ICoderManager coderManager) {
+        this(null, jdbcUrlPrefix, sessionCreator, properties, coderManager);
+    }
+
     private JdbcSessionFactory(IParseManager parseManager, String jdbcUrlPrefix,
             java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator,
             JdbcSessionProperties properties) {
+        this(parseManager, jdbcUrlPrefix, sessionCreator, properties, new JdbcCoderManager());
+    }
+
+    private JdbcSessionFactory(IParseManager parseManager, String jdbcUrlPrefix,
+            java.util.function.Function<DataSource, ? extends JdbcSession> sessionCreator,
+            JdbcSessionProperties properties, ICoderManager coderManager) {
         this.parseManager = parseManager;
         this.jdbcUrlPrefix = java.util.Objects.requireNonNull(jdbcUrlPrefix, "jdbcUrlPrefix");
         this.sessionCreator = java.util.Objects.requireNonNull(sessionCreator, "sessionCreator");
         this.properties = java.util.Objects.requireNonNull(properties, "properties");
+        this.coderManager = java.util.Objects.requireNonNull(coderManager, "coderManager");
     }
 
     public boolean supportsJdbcUrl(String url) {
@@ -91,9 +113,9 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         JdbcSession sqlSession = newSession(dataSource);
         sqlSession.setQueryCache(queryCache);
         sqlSession.setProperties(java.util.Objects.requireNonNull(properties, "properties"));
-        sqlSession.setCoderManager(jdbcCoderManager);
+        sqlSession.setCoderManager(coderManager);
         sqlSession.setGroup(group);
-        sqlSession.setLogManager(logManager);
+        sqlSession.setExecutionListeners(executionListeners);
         if (parseManager != null) sqlSession.setParseManager(parseManager);
 
         sqlSession.setProxyService(entityProxyService);

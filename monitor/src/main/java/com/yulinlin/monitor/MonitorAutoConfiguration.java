@@ -23,8 +23,8 @@ public class MonitorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public MonitorDatabaseLog monitorDatabaseLog(DatabaseMonitor monitor) {
-        return new MonitorDatabaseLog(monitor);
+    public MonitorExecutionListener monitorExecutionListener(DatabaseMonitor monitor) {
+        return new MonitorExecutionListener(monitor);
     }
 
     @Configuration(proxyBeanMethods = false)

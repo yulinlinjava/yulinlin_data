@@ -4,7 +4,6 @@ package com.yulinlin.elasticsearch;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.yulinlin.data.core.schema.SchemaEntityScanner;
 import com.yulinlin.data.core.schema.SchemaMode;
-import com.yulinlin.elasticsearch.log.EsLogPrint;
 import com.yulinlin.elasticsearch.parse.ElasticSearchParseManager;
 import com.yulinlin.elasticsearch.session.ElasticsearchSession;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -15,11 +14,6 @@ import org.springframework.context.annotation.Bean;
 @AutoConfiguration
 @EnableConfigurationProperties(ElasticSearchProperties.class)
 public class ElasticSearchAutoConfig {
-    @Bean
-    public EsLogPrint esLogPrint(){
-        return new EsLogPrint();
-    }
-
     @Bean
     public ElasticSearchFactory elasticSearchFactory(ElasticSearchProperties properties){
         return new ElasticSearchFactory(new ElasticSearchParseManager(properties.getHighlight()));

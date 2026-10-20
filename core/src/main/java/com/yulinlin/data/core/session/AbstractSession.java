@@ -15,7 +15,6 @@ import com.yulinlin.data.core.cache.OrmCacheKeyFactory;
 import com.yulinlin.data.core.cache.QueryCache;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.coder.IDataBuffer;
-import com.yulinlin.data.core.log.LogManager;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.data.core.parse.ParseResult;
@@ -53,7 +52,8 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     private EntitySessionProperties sessionProperties = new EntitySessionProperties();
 
-    private LogManager logManager;
+    private static final Logger EXECUTION_LOG = LoggerFactory.getLogger(AbstractSession.class);
+    private volatile List<SessionExecutionListener> executionListeners = List.of();
 
     private IParseManager parseManager;
 
@@ -223,15 +223,15 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         if (result != null) result.setTransactionId(TransactionLog.current().id());
         long started = System.nanoTime();
 
+        E val;
         try {
-            E val = executeOperation(callable);
-
-            if (logManager != null) logManager.success(elapsedMillis(started), result, this);
-            return  val;
-        }catch (Exception e){
-            if (logManager != null) logManager.error(elapsedMillis(started), e, result, this);
+            val = executeOperation(callable);
+        }catch (Throwable e){
+            completedExecution(result == null ? List.of() : List.of(result), started, null, e, false);
             throw e;
         }
+        completedExecution(result == null ? List.of() : List.of(result), started, null, null, false);
+        return val;
 
     }
 
@@ -547,10 +547,42 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     @Override public boolean isRollbackOnly() { return Boolean.TRUE.equals(resourceRollbackOnly.get()); }
 
     private void logBatch(List<ParseResult> results, long started, int affected, Throwable error) {
-        if (logManager == null) return;
-        long elapsedMs = elapsedMillis(started);
-        if (error == null) logManager.successBatch(elapsedMs, results, affected, this);
-        else logManager.errorBatch(elapsedMs, error, results, this);
+        completedExecution(results, started, error == null ? affected : null, error, true);
+    }
+
+    /** 数据库模块直接打印自己的请求格式；无需注册日志 Bean。 */
+    protected void printExecution(SessionExecution execution) {
+    }
+
+    private void completedExecution(List<ParseResult> results, long started, Integer affected,
+                                    Throwable error, boolean batch) {
+        SessionExecution execution = new SessionExecution(this, results,
+                System.nanoTime() - started, affected, error, batch);
+        try {
+            printExecution(execution);
+        } catch (RuntimeException failure) {
+            reportObserverFailure("日志打印", failure);
+        }
+        for (SessionExecutionListener listener : executionListeners) {
+            try {
+                listener.afterExecution(execution);
+            } catch (RuntimeException failure) {
+                reportObserverFailure("执行监听器 " + listener.getClass().getName(), failure);
+            }
+        }
+    }
+
+    private static void reportObserverFailure(String observer, RuntimeException failure) {
+        try {
+            EXECUTION_LOG.warn("{}失败，已与数据源执行隔离", observer, failure);
+        } catch (RuntimeException ignored) {
+            // 日志后端异常也不能覆盖原始执行结果。
+        }
+    }
+
+    /** 工厂初始化时传入可选监听器；空列表表示不启用监听。 */
+    public void setExecutionListeners(List<? extends SessionExecutionListener> listeners) {
+        executionListeners = listeners == null ? List.of() : List.copyOf(listeners);
     }
 
     private void cacheDebug(String event, CacheKey key, ParseResult result) {
@@ -573,10 +605,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         } catch (RuntimeException ignored) {
             // Cache observability must never change a query's result.
         }
-    }
-
-    private static long elapsedMillis(long startedNanos) {
-        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     private static Throwable unwrapCompletion(Throwable error) {
@@ -622,10 +650,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         return threadPoolExecutor;
     }
 
-    public LogManager getLogManager() {
-        return logManager;
-    }
-
     public IParseManager getParseManager() {
         return parseManager;
     }
@@ -642,10 +666,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         this.core = core;
     }
 
-
-    public void setLogManager(LogManager logManager) {
-        this.logManager = logManager;
-    }
 
 
 }

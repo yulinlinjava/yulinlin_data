@@ -1,6 +1,7 @@
 package com.yulinlin.jdbc.h2;
 
 import com.yulinlin.jdbc.DataJdbcApplication;
+import com.yulinlin.jdbc.h2.coder.H2CoderManager;
 import com.yulinlin.jdbc.session.JdbcSession;
 import com.yulinlin.jdbc.session.JdbcSessionFactory;
 import com.yulinlin.data.core.schema.SchemaEntityScanner;
@@ -29,7 +30,8 @@ public class H2AutoConfiguration {
     @Bean("h2SessionFactory")
     @ConditionalOnMissingBean(name = "h2SessionFactory")
     public JdbcSessionFactory h2SessionFactory(H2Properties properties) {
-        return new JdbcSessionFactory("jdbc:h2:", H2Session::new, properties);
+        return new JdbcSessionFactory("jdbc:h2:", H2Session::new, properties,
+                new H2CoderManager());
     }
 
     @Bean("h2Session")

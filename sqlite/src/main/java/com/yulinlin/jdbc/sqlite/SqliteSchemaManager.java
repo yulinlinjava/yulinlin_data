@@ -179,6 +179,7 @@ public final class SqliteSchemaManager {
     }
 
     private static String storageType(Class<?> type) {
+        type = com.yulinlin.jdbc.schema.JdbcScalarTypes.storageType(type);
         // ByteArrayCoder also emits Base64 text, so byte[] follows the TEXT fallback.
         if (type == boolean.class || type == Boolean.class || type == byte.class || type == Byte.class
                 || type == short.class || type == Short.class || type == int.class || type == Integer.class

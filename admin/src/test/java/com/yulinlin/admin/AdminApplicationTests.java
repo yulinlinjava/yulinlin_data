@@ -7,6 +7,7 @@ import com.yulinlin.admin.rbac.service.UserService;
 import com.yulinlin.common.model.EntityCounter;
 import com.yulinlin.common.model.ModelInsertWrapper;
 import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.common.util.SnowflakeUtil;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.RouteSession;
@@ -36,7 +37,7 @@ public class AdminApplicationTests {
 
         UserEntity userEntity = new UserEntity();
         userEntity.setNickname("2215546");
-        userEntity.setUsername("admi222121n");
+        userEntity.setUsername(SnowflakeUtil.nextIdStr());
         userEntity.setPasswordHash("21213");
         userService.insertOne(userEntity);
 

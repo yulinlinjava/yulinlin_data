@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * EntityCounter 的进程内聚合器。刷新后仍通过标准 ModelUpdateWrapper/RouteSession 路径执行。
+ * EntityCounter 的进程内聚合器。更新和插入共用刷新调度，分别通过标准 Wrapper/RouteSession 执行。
  */
 @Slf4j
 public final class EntityCounterManager implements AutoCloseable {
@@ -35,6 +35,23 @@ public final class EntityCounterManager implements AutoCloseable {
 
     private record GroupKey(String session, Class<?> entityClass) {
     }
+
+    private record InsertRow(CounterInsert.Snapshot snapshot, boolean clearCache) {
+        InsertRow merge(InsertRow other) {
+            return new InsertRow(snapshot.merge(other.snapshot), clearCache || other.clearCache);
+        }
+    }
+
+    /** 已经构造的请求保留主键和自动填充值，失败重试不重新生成 ID，也不并入下一窗口。 */
+    private static final class InsertBatch {
+        final GroupKey key;
+        final List<InsertRow> rows;
+        ExecuteRequest<?> request;
+        InsertBatch(GroupKey key, List<InsertRow> rows) { this.key = key; this.rows = rows; }
+    }
+
+    private record Window(ConcurrentHashMap<RowKey, RowAccumulator> updates,
+                          ConcurrentHashMap<CounterInsert.Key, InsertRow> inserts) { }
 
     private record RowSnapshot(RowKey key, Map<String, Long> deltas, boolean clearCache) {
     }
@@ -65,6 +82,10 @@ public final class EntityCounterManager implements AutoCloseable {
     private final EntityCounterProperties properties;
     private final ReentrantReadWriteLock activeLock = new ReentrantReadWriteLock();
     private volatile ConcurrentHashMap<RowKey, RowAccumulator> active = new ConcurrentHashMap<>();
+    private volatile ConcurrentHashMap<CounterInsert.Key, InsertRow> activeInserts = new ConcurrentHashMap<>();
+    // 仅 flush 持锁操作；对外计数使用 volatile 快照，不在提交锁内反向获取 flush 锁。
+    private List<InsertBatch> retryInserts = new ArrayList<>();
+    private volatile int retryInsertRows;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean immediateFlushRunning = new AtomicBoolean();
     private final AtomicBoolean immediateFlushRequested = new AtomicBoolean();
@@ -92,6 +113,33 @@ public final class EntityCounterManager implements AutoCloseable {
         return update(request);
     }
 
+    int executeInsert(String session, Object entity, Boolean clearCache) {
+        ensureOpen();
+        CounterInsert.Snapshot snapshot = CounterInsert.snapshot(
+                routeSession.resolveWriteGroup(entity.getClass(), session), entity);
+        return insert(new InsertBatch(new GroupKey(snapshot.key().session(), entity.getClass()),
+                List.of(new InsertRow(snapshot, clearCache == null ? properties.isClearCache() : clearCache))));
+    }
+
+    void submitInsert(String session, Object entity, Boolean clearCache) {
+        ensureOpen();
+        if (routeSession.isOpenTransaction())
+            throw new NoticeException("EntityCounter.insert().submit() 不能加入当前事务，请改用 execute() 或在事务外提交。");
+        CounterInsert.Snapshot snapshot = CounterInsert.snapshot(
+                routeSession.resolveWriteGroup(entity.getClass(), session), entity);
+        InsertRow row = new InsertRow(snapshot, clearCache == null ? properties.isClearCache() : clearCache);
+        boolean flushNow;
+        activeLock.readLock().lock();
+        try {
+            ensureOpen();
+            activeInserts.merge(snapshot.key(), row, InsertRow::merge);
+            flushNow = pendingRows() >= properties.getFlushSize();
+        } finally {
+            activeLock.readLock().unlock();
+        }
+        if (flushNow) requestImmediateFlush();
+    }
+
     void submit(Command command) {
         ensureOpen();
         if (command.deltas().isEmpty()) return;
@@ -106,7 +154,7 @@ public final class EntityCounterManager implements AutoCloseable {
             RowKey key = new RowKey(command.session(), command.entityClass(), command.id(), command.primaryKey());
             active.computeIfAbsent(key, ignored -> new RowAccumulator())
                     .add(command.deltas(), clearCache(command));
-            flushNow = active.size() >= properties.getFlushSize();
+            flushNow = pendingRows() >= properties.getFlushSize();
         } finally {
             activeLock.readLock().unlock();
         }
@@ -115,13 +163,14 @@ public final class EntityCounterManager implements AutoCloseable {
 
     /** 当前等待刷新的不同行数，不是 submit 调用次数。 */
     public int pendingRows() {
-        return active.size();
+        return active.size() + activeInserts.size() + retryInsertRows;
     }
 
     /** 手动刷新一个稳定快照；刷新期间的新提交留到下一轮。 */
     public synchronized int flush() {
-        ConcurrentHashMap<RowKey, RowAccumulator> snapshot = swapActive();
-        if (snapshot.isEmpty()) return 0;
+        Window window = swapActive();
+        ConcurrentHashMap<RowKey, RowAccumulator> snapshot = window.updates();
+        if (snapshot.isEmpty() && window.inserts().isEmpty() && retryInserts.isEmpty()) return 0;
 
         LinkedHashMap<GroupKey, List<RowSnapshot>> groups = new LinkedHashMap<>();
         snapshot.forEach((key, accumulator) -> {
@@ -143,10 +192,49 @@ public final class EntityCounterManager implements AutoCloseable {
                 else if (failure != error) failure.addSuppressed(error);
             }
         }
+        LinkedHashMap<GroupKey, List<InsertRow>> insertGroups = new LinkedHashMap<>();
+        window.inserts().values().forEach(row -> {
+            CounterInsert.Key key = row.snapshot().key();
+            insertGroups.computeIfAbsent(new GroupKey(key.session(), key.entityClass()), ignored -> new ArrayList<>())
+                    .add(row);
+        });
+        List<InsertBatch> batches = new ArrayList<>(retryInserts);
+        insertGroups.forEach((key, rows) -> batches.add(new InsertBatch(key, rows)));
+        List<InsertBatch> failed = new ArrayList<>();
+        for (InsertBatch batch : batches) {
+            try {
+                affected += insert(batch);
+            } catch (Throwable error) {
+                failed.add(batch);
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
+        }
+        retryInserts = failed;
+        retryInsertRows = failed.stream().mapToInt(batch -> batch.rows.size()).sum();
         if (failure instanceof Error error) throw error;
         if (failure instanceof RuntimeException error) throw error;
         if (failure != null) throw new IllegalStateException(failure);
         return affected;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private int insert(InsertBatch batch) {
+        if (batch.request == null) {
+            ExecuteRequest<?> merged = null;
+            for (InsertRow row : batch.rows) {
+                // 到真正刷新时才触发 insertBefore，自动 ID/时间不参与入队时的维度。
+                ModelInsertWrapper<?> wrapper = ModelInsertWrapper.newInstance(
+                        batch.key.session(), row.snapshot().entity());
+                wrapper.clearCache(row.clearCache());
+                if (merged == null) merged = wrapper.getRequest();
+                else merged.mergeQueued(wrapper.getRequest());
+            }
+            // 仍使用 JDBC executeBatch，但一个聚合插入组不拆多连接，缩小部分提交的风险。
+            merged.setBatch(false);
+            batch.request = merged;
+        }
+        return routeSession.insert((ExecuteRequest) batch.request);
     }
 
     private int executeGroup(List<RowSnapshot> rows) {
@@ -188,11 +276,12 @@ public final class EntityCounterManager implements AutoCloseable {
         return command.clearCache() == null ? properties.isClearCache() : command.clearCache();
     }
 
-    private ConcurrentHashMap<RowKey, RowAccumulator> swapActive() {
+    private Window swapActive() {
         activeLock.writeLock().lock();
         try {
-            ConcurrentHashMap<RowKey, RowAccumulator> snapshot = active;
+            Window snapshot = new Window(active, activeInserts);
             active = new ConcurrentHashMap<>();
+            activeInserts = new ConcurrentHashMap<>();
             return snapshot;
         } finally {
             activeLock.writeLock().unlock();
@@ -229,7 +318,7 @@ public final class EntityCounterManager implements AutoCloseable {
         try {
             flush();
         } catch (Throwable error) {
-            log.error("实体计数器刷新失败，增量已放回待刷新区", error);
+            log.error("实体计数器刷新失败，更新增量已放回活动区，失败插入批次保留待重试", error);
         }
     }
 

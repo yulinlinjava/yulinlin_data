@@ -106,6 +106,14 @@ public class RouteSession extends RegisterSession implements TransactionSession 
         }
     }
 
+    /** 在调用线程固定后台写入的数据源组；复用实体注解、选库作用域和默认组规则。 */
+    public String resolveWriteGroup(Class<?> fromClass, String group) {
+        ExecuteRequest<?> request = ExecuteRequest.ofInsert(fromClass);
+        request.setSession(group);
+        applyEntityRoute(request);
+        return session(request).group();
+    }
+
 
     /** SQL、缓存 Key 和失效范围都只读取过滤后的请求；不通过 Request 标记猜测入栈次数。 */
     private PreparedRequest before(BaseRequest<?> original) {

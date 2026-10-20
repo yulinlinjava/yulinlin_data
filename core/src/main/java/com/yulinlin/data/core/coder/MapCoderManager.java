@@ -27,6 +27,11 @@ public class MapCoderManager implements ICoderManager {
           this.registerCoder(new BigIntegerCoder());
           this.registerCoder(new BigDecimalCoder());
           this.registerCoder(new LongAdderCoder());
+          this.registerCoder(new AtomicIntegerCoder());
+          this.registerCoder(new AtomicLongCoder());
+          this.registerCoder(new AtomicBooleanCoder());
+          this.registerCoder(new ByteCoder());
+          this.registerCoder(new ShortCoder());
           this.registerCoder(new FloatCoder());
           this.registerCoder(new EnumCoder());
 
@@ -69,6 +74,16 @@ public class MapCoderManager implements ICoderManager {
      //注册一个类型拦截器
      public void registerCoder(ICoder serialize){
           serializeSet.add(serialize);
+     }
+
+     /** 初始化阶段按 Java 类型替换编码器；供需要明确覆盖默认类型的子类使用。 */
+     protected void replaceCoder(ICoder coder) {
+          Objects.requireNonNull(coder, "coder");
+          Class<?> type = Objects.requireNonNull(coder.getTypeClass(), "coder type");
+          serializeSet.removeIf(existing -> existing.getTypeClass() == type);
+          serializeSet.add(coder);
+          // check(Class) 可能匹配多个类型，不能只移除 type 对应的缓存。
+          cache.clear();
      }
 
 

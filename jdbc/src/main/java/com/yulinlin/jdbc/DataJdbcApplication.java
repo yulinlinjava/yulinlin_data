@@ -1,8 +1,6 @@
 package com.yulinlin.jdbc;
 
 import com.yulinlin.data.core.session.RouteSession;
-import com.yulinlin.jdbc.coder.JdbcCoderManager;
-import com.yulinlin.jdbc.log.SqlNodeLog;
 import com.yulinlin.jdbc.transaction.RouteTransactionManager;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -17,12 +15,6 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @AutoConfiguration(before = {DataSourceTransactionManagerAutoConfiguration.class, TransactionAutoConfiguration.class})
 @EnableTransactionManagement(order = 9999)
 public class DataJdbcApplication {
-    @Bean
-    @ConditionalOnMissingBean
-    public JdbcCoderManager jdbcCoderManager() {
-        return new JdbcCoderManager();
-    }
-
     @Bean("yulinlinTransactionManager")
     @Primary
     @ConditionalOnMissingBean(name = "yulinlinTransactionManager")
@@ -30,9 +22,4 @@ public class DataJdbcApplication {
         return new RouteTransactionManager(routes::getObject);
     }
 
-    @Bean
-    @ConditionalOnMissingBean
-    public SqlNodeLog sqlNodeLog() {
-        return new SqlNodeLog();
-    }
 }

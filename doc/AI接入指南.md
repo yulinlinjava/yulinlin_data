@@ -6,7 +6,7 @@
 
 ---
 
-用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存，以及 Common 公共模型和项目最佳实践；内部扩展与完整性能报告不在此导出中，按需另提供第五或第七专题。
+用途：给不能读取仓库的 AI 提供一个附件。包含接入、CRUD/统计/事务、关联代理、工具、接口安全、查询缓存，以及 Common 公共模型和项目最佳实践；内部架构、扩展与完整性能报告不在此导出中。内部维护另提供第十专题，扩展实现补充第五专题，性能报告提供第七专题。
 
 ---
 
@@ -97,6 +97,19 @@ MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换
 - `slow-sql-threshold` 默认 `0`（关闭）。配置为 `1s` 后，框架侧耗时达到 1 秒的执行以 `WARN` 输出，即使 `log=false` 也会记录。
 - SQL 异常始终以单条 `ERROR` 输出，包含实际耗时并携带原始堆栈。批量写入按执行组打印一条摘要；摘要列出最多 5 种 SQL 模板及模板总数，不再为每一行打印 INFO。
 
+SQL 日志指标使用中文：`事务ID`、`数据源`、`节点`、`操作`、`总耗时`、`操作数量`、`影响行数`、`SQL模板数`、`SQL`、`参数`。成功批次（含慢批次）额外展示 `平均每条耗时`，按原始纳秒耗时 ÷ 操作数量换算为毫秒，保留三位小数，是每条操作的分摊值而非逐条实测。失败批次不展示平均耗时和影响行数。驱动不提供精确影响行数时，框架可能按成功命令计数，不能把该值一律视为精确修改行数。
+
+```text
+SQL批量执行成功 事务ID=12 数据源=mysql 节点=master 操作=insert 总耗时=240ms 平均每条耗时=0.240ms 操作数量=1000 影响行数=1000 SQL模板数=1
+SQL=["insert into ..."]
+参数=[...]
+SQL批量执行失败 事务ID=12 数据源=mysql 节点=master 操作=insert 总耗时=240ms 操作数量=1000 SQL模板数=1
+SQL=["insert into ..."]
+参数=[...]
+```
+
+普通、批量、慢操作和失败 SQL 日志统一分行：首行摘要，下一行 SQL，开启 log-params 时再输出一行参数；仍是一次 logger 调用，不拆为多个日志事件。参数只在 log-params 开启时输出；批量仍仅取首个请求的参数，最多 20 项并限制每项长度，标签统一为“参数”，不代表打印整个批次所有值。并行拆组时各组单独计时，不能将各组耗时相加当作请求总耗时；此处不额外输出请求汇总日志。
+
 耗时是应用侧观察值，可能包含获取连接、JDBC 驱动、参数绑定和结果读取，并不等同于数据库服务器内部的纯执行时间。写入成功日志在 JDBC 执行返回后打印，不代表外层事务已经提交；事务结果应查看下面的事务诊断日志。查询缓存的 `HIT/MISS/REFRESH/BYPASS` 使用 `com.yulinlin.data.cache.QueryCache` 的 DEBUG 日志；延迟写队列刷新摘要使用 `com.yulinlin.data.core.queue.WriteQueueManager` 的 DEBUG 日志。需要排查缓存时可临时提高对应 logger 级别，或者使用 `.cache(CacheMode.REFRESH)` 强制访问数据库。
 
 #### 事务诊断日志
@@ -114,7 +127,7 @@ logging:
     com.yulinlin.data.core.transaction.TransactionLog: INFO
 ```
 
-日志统一使用中文事件描述。同一个最外层框架事务使用相同 `txId`，SQL 日志、嵌套事务、多个数据源及 JDBC 批处理工作线程共享该 ID；ID 只用于当前进程内关联，不是订单 ID，也不是跨服务链路 ID。普通查询没有框架事务时显示 `txId=none`。事务日志的 `elapsedMs` 从最外层框架事务开启时计算，包含事务内业务耗时，与单条 SQL 的执行计时不同。
+日志统一使用中文事件描述。同一个最外层框架事务使用相同事务 ID，SQL 日志以 `事务ID` 展示，事务生命周期日志仍使用 `txId`；嵌套事务、多个数据源及 JDBC 批处理工作线程共享该 ID。ID 只用于当前进程内关联，不是订单 ID，也不是跨服务链路 ID。普通查询没有框架事务时显示 `事务ID=none`。事务日志的 `elapsedMs` 从最外层框架事务开启时计算，包含事务内业务耗时，与 SQL 日志的 `总耗时` 计时范围不同。
 
 框架层记录开启、嵌套深度 `depth`、参与者数量 `participants`、只回滚标记 `rollbackOnly`、资源提交/回滚和上下文清理。JDBC 层额外记录 `group`、`cluster`、DataSource 实例标识、连接标识、连接数量、原始/当前自动提交状态和提交归属 `owner`。不额外借连接、查询数据库元数据或打印账号密码；连接标识是当前 JDBC 连接对象的标识，不是数据库服务器的连接编号。
 
@@ -132,14 +145,16 @@ logging:
 
 ```text
 事务开启 txId=1 elapsedMs=0 depth=1 participants=0 rollbackOnly=false
-SQL批量执行成功 txId=1 group=mysql cluster=master type=insert elapsedMs=8 nodes=1 affected=1 templates=1 sqls=["insert into `pay_order` (`id`) values (?)"] params=[order-1]
+SQL批量执行成功 事务ID=1 数据源=mysql 节点=master 操作=insert 总耗时=8ms 平均每条耗时=8.000ms 操作数量=1 影响行数=1 SQL模板数=1
+SQL=["insert into `pay_order` (`id`) values (?)"]
+参数=[order-1]
 JDBC连接开始提交 txId=1 elapsedMs=28 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
 JDBC连接提交成功 txId=1 elapsedMs=31 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
 ```
 
 排查时按 `txId` 找完整过程：只看到嵌套结束则检查最外层是否收尾；每个 JDBC 连接都应找到最终提交或回滚结果；出现提交失败、回滚失败或连接释放失败会记录 ERROR 与原始异常。只有 SQL 成功而没有最终结果时，不应直接下结论认为已提交或已回滚。ES/MongoDB 当前没有对应的物理事务，框架资源方法返回也不能证明其具备数据库回滚能力。
 
-关闭开关时不采集事务诊断计时、不输出生命周期日志，但仍生成轻量事务 ID，供 SQL 日志关联。SQL 普通、慢操作、异常和批量日志都包含 `txId`，是否输出仍遵守原有 SQL 日志配置；批处理 ID 在提交工作线程前捕获，不依赖工作线程的事务 ThreadLocal。手动声明 `TransactionListenerManager` Bean 的项目需自行调用 `setTransactionLog(true)`，默认自动配置会读取上述 YAML。
+关闭开关时不采集事务诊断计时、不输出生命周期日志，但仍生成轻量事务 ID，供 SQL 日志关联。SQL 普通、慢操作、异常和批量日志都包含 `事务ID`，是否输出仍遵守原有 SQL 日志配置；批处理 ID 在提交工作线程前捕获，不依赖工作线程的事务 ThreadLocal。手动声明 `TransactionListenerManager` Bean 的项目需自行调用 `setTransactionLog(true)`，默认自动配置会读取上述 YAML。
 
 JDBC 事务连接统一标记 `owner=framework`：直接向 DataSource 借连接，关闭自动提交，最终由框架提交/回滚、恢复连接状态并释放。不再复用 Spring 线程绑定连接，也不等待 Spring 的提交通知。DataSource 仍可由 Spring Boot、Druid 或 Hikari 配置和注入；`@Transactional` 仅通过注解适配器委托 RouteSession，不再交给原生 JDBC 事务管理器。多资源仍是多个本地事务，不提供跨库原子提交保证；原生 JdbcTemplate/MyBatis/JPA 与框架写入不共用事务。注解支持范围及多事务管理器选取见[Spring 事务注解兼容](02-CRUD与统计分析.md#spring-事务注解兼容)。
 
@@ -271,7 +286,17 @@ private String content;
 | `LocalDate` | `DATE` | `DATE` | `DATE` | `TEXT` |
 | `LocalTime` | `TIME` | `TIME WITHOUT TIME ZONE` | `TIME` | `TEXT` |
 
-JDBC 编码器会把这些值作为 `Timestamp`、`Date` 或 `Time` 参数绑定，不依赖数据库把 VARCHAR 隐式转换成时间。SQLite Session 会在绑定时重新格式化为固定长度文本，继续保持可排序的本地 TEXT 存储。时间字段不接受 `textType` 或 `textLength`；这两个选项只用于真正按文本编解码的字段。
+各数据库模块自己的 `coder` 包提供 `MysqlCoderManager`、`PostgresqlCoderManager`、`H2CoderManager`、`SqliteCoderManager`，均继承 `JdbcCoderManager`，内部注册本模块五种时间类型的编码器。具体时间规则仍分别定义在本模块的 `*TemporalCoders` 中；公共转换复用 `TemporalConversions`，空值/接口适配复用基类。工厂直接使用对应管理器，不传编码器列表，也不注入全局管理器；普通业务无需新增配置。不同数据库的管理器与编码规则独立，修改 H2 编码器不会修改其他模块。
+
+- MySQL、PostgreSQL、H2 各自的编码器当前都使用原生时间参数：框架 `DateTime` 编码为其内部 `LocalDateTime`，`LocalDateTime` 原样传给驱动，不再转为 `java.sql.Timestamp`。分别对应 `DATETIME`、`TIMESTAMP WITHOUT TIME ZONE` 和不带时区的 `TIMESTAMP`，不依赖 VARCHAR 的隐式转换；规则目前相同，但实现分别维护。
+- 这三个模块中，`java.util.Date` 仍编码为 `Timestamp`，`LocalDate` / `LocalTime` 仍编码为 `java.sql.Date` / `java.sql.Time`，保留原有行为；`Time` 编码仍是秒级精度。
+- SQLite 自己的编码器直接输出 TEXT：`DateTime` / `LocalDateTime` / `Date` 为 `yyyy-MM-dd HH:mm:ss`，`LocalDate` 为 `yyyy-MM-dd`，`LocalTime` 为 `HH:mm:ss`。格式器也定义在 SQLite 模块，保留旧数据的空格分隔、秒级精度；写入和查询条件使用相同规则，日期范围比较不混用带 `T` 的格式。原始参数绑定中的时间对象也调用 SQLite 自己的编码器。
+- JDBC 解码支持 `LocalDateTime`、旧驱动返回的 `Timestamp`，以及空格或 `T` 分隔、可带 1～9 位小数秒的日期时间文本。文本直接解析为本地时间，不经 `Timestamp` 中转；MySQL/PostgreSQL/H2 实际保存的小数秒精度仍由列定义与驱动决定，SQLite 保持秒级存储。
+- core 的 `DateTimeCoder`、JSON 展示，以及 MongoDB/Elasticsearch 的原有时间规则不变。扩展数据库时定义自己的 `CoderManager` 并在内部注册编码器，自行声明工厂时例如传入 `new H2CoderManager()`，参见 [第五专题：编解码](05-扩展开发与维护.md#编解码)。`SqlParseManager` 仍只负责 SQL 解析，字段编解码沿用 `ICoderManager`。
+
+`DateTime` / `LocalDateTime` 表示无时区的日期时间，这次修复避免它们因为被转成 `Timestamp` 而触发驱动的时间点换算。它不会修改 JVM 或数据库时区；`DateTime.now()` 仍取 JVM 本地时间。`java.util.Date` 表示时间点，保留原有时区处理；手工建成 MySQL `TIMESTAMP`、PostgreSQL/H2 带时区列的字段仍有数据库自身的时区语义，不能据此认为所有列都不再换算。历史上已经写偏的值不会自动修复，不要直接对整表统一加减 8 小时。升级时同步更新 core、jdbc 及项目使用的 mysql/postgresql/h2/sqlite 模块，避免新旧注册方法、工厂和编码器混用。
+
+时间字段不接受 `textType` 或 `textLength`；这两个选项只用于真正按文本编解码的字段。
 
 字符串主键统一按短标识处理：未指定长度时自动创建为 `VARCHAR(128)`，显式 `textLength` 只能是 1～128；超过 128 或把大文本声明为主键会在启动建表前报错。框架生成的普通/唯一索引也不接受大文本列。
 
@@ -365,7 +390,7 @@ ModelInsertWrapper.newInstance("h2", user).execute();
 
 H2 在 Session Bean 初始化时扫描配置包。schema-mode 的含义是：CREATE 创建缺失表、普通列和声明的索引并校验，VALIDATE 只校验且缺失时报错，NONE 完全跳过。自动增量只执行安全的 `ADD COLUMN`：不会自动增加或变更主键，不改已有列类型，也不删除旧列或旧索引。字段改名会被视为新增列，旧数据不会自动搬迁，必须使用版本迁移脚本。
 
-字段默认映射为 BOOLEAN、INTEGER、BIGINT、DOUBLE PRECISION 或 CHARACTER VARYING。日期、枚举、BigDecimal/BigInteger、byte[] 与 JSON 对象继续经过公共编码器存为文本。日期范围要求统一的可排序格式；文本数字范围和统计需要显式 CAST。JSON 路径条件当前不自动生成，使用可信的 H2 自定义 SQL。
+普通字段默认映射为 BOOLEAN、INTEGER、BIGINT、DOUBLE PRECISION 或 CHARACTER VARYING；日期时间字段使用上文列出的 DATE、TIME、TIMESTAMP，`DateTime` / `LocalDateTime` 直接按无时区时间绑定。枚举、BigDecimal/BigInteger、byte[] 与 JSON 对象继续经过公共编码器存为文本；文本数字范围和统计需要显式 CAST。JSON 路径条件当前不自动生成，使用可信的 H2 自定义 SQL。
 
 H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
 
@@ -446,7 +471,7 @@ yulinlin:
 
 模块创建 `postgresqlSessionFactory` 和 `postgresqlSession`，默认 group 为 `postgresql`，实际会话类型为 PostgresqlSession。`schema-mode` 默认 `NONE`；设为 `CREATE` 后会扫描实体并自动创建缺失表、普通列和声明索引，`VALIDATE` 只校验。`@JoinTable` 可使用普通表名，也可使用 `schema.table`，两段都会独立引用。
 
-现有编码器可能把日期、枚举、BigDecimal 或对象编码为字符串。`stringtype=unspecified` 让驱动按目标列或 SQL 上下文推断类型；它不是框架自动添加的参数，也不解决所有类型问题。无明确类型上下文时可在可信 SQL 中显式 CAST，例如 `CAST(#{payload} AS jsonb)`。不要推定原生 enum、UUID、数组、空间类型已有完整专用编解码支持。
+现有编码器可能把枚举、BigDecimal 或对象编码为字符串；已支持的日期时间类型由 JDBC 编码器以对应类型绑定，`DateTime` / `LocalDateTime` 不依赖 `stringtype=unspecified`。该参数让驱动按目标列或 SQL 上下文推断字符串类型；它不是框架自动添加的参数，也不解决所有类型问题。无明确类型上下文时可在可信 SQL 中显式 CAST，例如 `CAST(#{payload} AS jsonb)`。不要推定原生 enum、UUID、数组、空间类型已有完整专用编解码支持。
 
 标识符采用双引号，schema 限定名按段引用；实际列名应与模型映射一致。普通 CRUD 和实体可复用，原始 MySQL SQL、反引号、函数与 DDL 不会被自动翻译。自动 Schema 不负责序列、自增键、外键、分区表或数据迁移。
 
@@ -1285,12 +1310,12 @@ executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及�
 
 ### 实体计数器
 
-`common` 的 `EntityCounter` 面向播放量、点击量、热度等数值累加。一次 Builder 只描述一行，但同一行可以同时修改多个字段：
+`common` 的 `EntityCounter` 面向播放量、点击量、热度等数值累加。`update(...)` 表示按主键更新已有记录，`insert(entity)` 表示按维度聚合插入新记录；`execute()` 立即执行，`submit()` 交给后台聚合。旧 `newInstance(...)` 已移除，调用方统一改为 `update(...)`。一次更新 Builder 只描述一行，但同一行可以同时修改多个字段：
 
 ```java
 import com.yulinlin.common.model.EntityCounter;
 
-EntityCounter.newInstance("mysql", VideoEntity.class, videoId)
+EntityCounter.update("mysql", VideoEntity.class, videoId)
         .inc(VideoEntity::getViewCount, 1)
         .inc(VideoEntity::getHotValue, 5)
         .dec(VideoEntity::getRemainingQuota, 1)
@@ -1301,7 +1326,7 @@ EntityCounter.newInstance("mysql", VideoEntity.class, videoId)
 
 ```java
 for (VideoStat stat : stats) {
-    EntityCounter.newInstance("mysql", VideoEntity.class, stat.videoId())
+    EntityCounter.update("mysql", VideoEntity.class, stat.videoId())
             .inc(VideoEntity::getViewCount, stat.views())
             .inc(VideoEntity::getHotValue, stat.hotValue())
             .submit();
@@ -1311,7 +1336,7 @@ for (VideoStat stat : stats) {
 不传数据源时复用 RouteSession 的默认路由规则；单组自动选择，多组使用 `yulinlin.datasource.default-group`，实体上的 `@JoinSession` 仍可参与路由：
 
 ```java
-EntityCounter.newInstance(VideoEntity.class, videoId)
+EntityCounter.update(VideoEntity.class, videoId)
         .inc(VideoEntity::getViewCount)
         .submit();
 ```
@@ -1334,11 +1359,76 @@ yulinlin:
       clear-cache: false
 ```
 
-`flush-size` 统计待刷新的不同实体行数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；某个数据源/实体分组失败时把该组增量合回活动区，由后续刷新继续处理。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数。
+`flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
 
-字段必须是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为计数器。`inc/dec` 的数量必须是 `long` 范围内的非负整数。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
+上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc/dec` 的数量仍必须是 `long` 范围内的非负整数；下面插入模式的小数支持不会改变这个旧接口。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
 
 这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
+
+#### 按维度聚合插入统计数据
+
+`EntityCounter.insert(entity)` 不要求数据库中已有记录。它读取提交对象：全部非空数字字段分别求和，全部非空非数字字段的 `toString()` 作为维度；时间也作为维度，不截断为分钟。`null` 忽略，`0` 仍是有效数字，`false` 是维度。`@JoinWhere` 只影响查询条件，不控制这里的分组。
+
+```java
+import com.yulinlin.common.domain.SuperEntity;
+import com.yulinlin.common.model.EntityCounter;
+import com.yulinlin.data.core.anno.JoinTable;
+import lombok.Data;
+import java.util.concurrent.atomic.DoubleAdder;
+
+@Data
+@JoinTable("sta_metrics")
+public class StaMetricsEntity extends SuperEntity<StaMetricsEntity> {
+    private String name;
+    private String channel;
+    private String deviceType;
+    private String osName;
+    private DoubleAdder metrics = new DoubleAdder();
+}
+```
+
+业务每次构造一份新增贡献即可：
+
+```java
+StaMetricsEntity stat = new StaMetricsEntity();
+stat.setName("播放量");
+stat.setChannel("渠道A");
+stat.setDeviceType("web");
+stat.setOsName("Windows");
+stat.getMetrics().add(1.5);
+
+EntityCounter.insert("mysql", stat).submit();       // 默认一分钟聚合插入
+// 不指定数据源：EntityCounter.insert(stat).submit();
+// 立即插入：int affected = EntityCounter.insert(stat).execute();
+// 单次覆盖缓存策略：EntityCounter.insert(stat).clearCache(true).submit();
+```
+
+三个入口示例是替代选择，不应把同一份贡献重复提交。`submit()` 返回 void，不代表已落库；活动事务中拒绝 submit，`execute()` 则立即插入并加入当前事务。Builder 只能终结一次。
+
+分组键为“调用线程解析出的数据源组 + 实体类型 + 非数字字段名/字符串值集合”，不是简单拼接字符串。相同维度的 `metrics=1.5` 和 `metrics=2.5` 合成一条 `metrics=4.0` 的新记录；维度不同则分别插入。下一轮继续生成新记录，不查询旧记录、不做 upsert。省略数据源时复用实体 `@JoinSession`、当前注解选库作用域和默认组规则，提交时固定组名，避免后台线程丢失调用方选库上下文；路由过滤器仍在实际执行时运行。
+
+| 数字类型 | 插入聚合规则 |
+| --- | --- |
+| byte/Byte、short/Short、int/Integer、long/Long | 同名字段相加，超过原类型范围时拒绝本次提交，不部分更新其他字段 |
+| float/Float、double/Double | 同名字段相加，拒绝 NaN/无穷及结果溢出；不承诺十进制精度 |
+| BigInteger、BigDecimal | 内存中精确相加，不转成 double；数据库列容量仍由表结构决定 |
+| AtomicInteger、AtomicLong | 提交时读取数值快照，累加后仍按原字段类型还原 |
+| LongAdder、DoubleAdder | 提交时读取 sum 快照，不保留或清零调用者的累加器 |
+
+一行可以有多个数值字段，数字的正负值和零都允许。内部用不可变精确值求和，浮点字段在还原时转回原类型。`Boolean/boolean/AtomicBoolean` 是维度；AtomicReference、原子数组、LongAccumulator/DoubleAccumulator 以及其他自定义 Number 暂不支持，直接报错，不静默取 long 导致截断。声明为 Number/Object 的字段如果实际数字类型在提交间变化，也会拒绝合并；推荐声明具体数字类型。
+
+补充约束：
+
+- 实体须有 `@JoinTable`、可用的无参构造器和可写字段。静态、transient、合成字段与 `@JoinField(exist=false)` 不参与；`update=false` 不影响插入。
+- null 不是通配符：`channel=null` 与 `channel=A` 不同组；数字字段的 null 不增加维度，也不贡献数值。
+- `submit/execute` 时复制维度值并读取数字快照，之后修改原实体不影响已提交数据。复杂维度对象需支持框架 deepClone；推荐字符串、枚举、布尔和时间等简单类型，并保证 toString 稳定。同一对象重复提交会重复累计；不要并发修改它的多个字段来期待整体原子快照，Adder.sum 本身也不保证并发下的严格原子快照。
+- 不预填主键、创建时间。它们为 null 时不进入分组，真正构造插入请求时由 `insertBefore` 补齐。如果业务已经赋值，非数字 ID/时间也会成为维度，数字 ID 则与其他数字一样累加；框架不特殊排除，所以统计模型不应提前设置数字主键。
+- 维度以对象实际 toString 为准。例如 DateTime 默认字符串到秒，LocalDateTime 可含小数秒；不同字符串必定分组，不自动统一精度、时区或大小写。
+- 刷新间隔复用上面的 `yulinlin.data.counter` 配置，默认 1m，达到 1024 个待处理组可提前刷新。它不是自然分钟窗口；需要分钟报表时，业务自行设置统一分钟字符串维度。
+- 每个数据源/实体的插入分组使用 JDBC 批处理，但不主动拆多连接；仍通过标准 RouteSession、编解码器、日志和缓存失效路径执行。与按主键更新模式的聚合区隔离，不混成同一种请求。
+- 失败插入保留已构造的请求和生成主键，下一轮重试，不和新窗口重新求和；不会重新生成 ID 重复插入。但不保证 exactly-once：提交结果不确定、过滤器或回调异常、缺少唯一约束等仍需业务处理。失败组不会因其他组成功而丢弃；持续失败会积压，flush-size 不是容量上限。
+
+MySQL/PostgreSQL/H2/SQLite 自动建表已把原子数字和 Adder 映射为对应数字类型，AtomicBoolean 对应布尔存储；Byte/Short、AtomicInteger/AtomicLong/AtomicBoolean 的标量编解码也已注册。旧表如果把这些字段建成了 TEXT，不自动做破坏性改列，请按业务数据手动迁移。BigDecimal/BigInteger 延续各数据库模块原有存储规则。
 
 ### 延迟写队列
 
@@ -4048,7 +4138,7 @@ public R<Void> delete(@RequestBody IdPo po) {
 | `IdEntity<E>` | `String id` | 插入前在 `id` 为 null 或空串时生成 Snowflake 字符串 ID | 大多数由应用生成字符串主键的业务表 |
 | `SuperEntity<E>` | `id`、`crtTime`、`uptTime` | 包含 `IdEntity` 行为，插入时补齐空的创建/更新时间 | 同时具有主键和审计时间列的表 |
 | `TreeEntity<E>` | `id`、`crtTime`、`uptTime`、`parentId`、`parentPath` | 默认根节点 ID 为 `"0"`，`selectTree()` 可按 `ITreeNode` 组装 `children` | 菜单、部门和分类等树表 |
-| `EntityCounter` | 不持有表字段 | 对业务实体的数值字段立即原子更新，或按主键在内存聚合后批量更新 | 播放量、点击量、热度等计数；它是写入门面，不作为实体父类 |
+| `EntityCounter` | 不持有表字段 | 按主键立即/聚合自增更新；或按非数字维度聚合数字字段后批量插入统计记录 | 播放量、点击量、热度和分渠道统计；它是写入门面，不作为实体父类 |
 
 #### `IdEntity`
 
@@ -4067,7 +4157,7 @@ public class UserEntity extends IdEntity<UserEntity> {
 
 `nextIncrId()` 会用表中当前最大 ID 初始化进程内计数器，之后在本进程递增。它不是数据库自增 ID，也不保证多实例唯一；分布式业务保持默认 Snowflake 策略或接入统一 ID 服务。
 
-`IncrementEntity` 的动态表名/列名方式仅为旧代码保留，已经废弃。新代码使用类型安全的 `EntityCounter.newInstance(VideoEntity.class, videoId).inc(VideoEntity::getViewCount).submit()`；立即写入、聚合规则、配置和数据丢失边界见[实体计数器](02-CRUD与统计分析.md#实体计数器)。
+`IncrementEntity` 的动态表名/列名方式仅为旧代码保留，已经废弃。已有视频记录使用 `EntityCounter.update(VideoEntity.class, videoId).inc(VideoEntity::getViewCount).submit()`；统计明细使用 `EntityCounter.insert(stat).submit()`，非数字字段作为维度、数字字段分别累加，默认一分钟批量插入。不要提前填充统计实体的 ID/时间，以免它们意外成为不同维度。立即写入、类型范围、聚合规则、配置和数据丢失边界见[实体计数器](02-CRUD与统计分析.md#实体计数器)。
 
 #### `SuperEntity`
 
@@ -4474,7 +4564,7 @@ UserEntity findByUsernameEq(String username);
 
 ### 日志规范
 
-面向开发和运维人员的日志描述统一使用中文；类名、SQL、异常类型以及 `group`、`cluster`、`type`、`elapsedMs`、`key`等结构化检索键保持原始技术名称。这样日志可以直接阅读，也不会破坏日志平台按固定字段检索和聚合。
+面向开发和运维人员的日志描述统一使用中文。SQL 执行日志的指标也使用中文，如 `数据源`、`节点`、`总耗时`、`平均每条耗时`、`参数`；类名、SQL、异常类型以及数据库标识值保持原样。业务日志和事务生命周期日志可保留既有结构化键，避免不必要的接口变化；日志采集规则需按实际格式配置。
 
 推荐写法：
 
@@ -4495,7 +4585,15 @@ log.error("支付回调处理失败 orderId={} channel={}", orderId, channel, er
 - 不记录密码、密钥、令牌、完整身份证号、银行卡号和未脱敏请求体。SQL参数日志也必须遵守长度限制与脱敏策略。
 - 日志文字修改不应改变监控数据结构。数据库监控使用独立记录对象，`elapsedMs`等字段含义保持稳定。
 
-框架内置日志也遵守同一约定：中文描述配合稳定英文键。例如 `SQL慢查询 group=mysql cluster=master type=select elapsedMs=800 ...`。不要依赖整段日志文本进行业务控制；程序判断应使用异常、返回值或监控接口。
+SQL 日志在同一事件内分行展示，方便控制台阅读：
+
+```text
+SQL慢查询 事务ID=none 数据源=mysql 节点=master 操作=select 总耗时=800ms
+SQL="select ..."
+参数=[...]
+```
+
+参数行只在 log-params 开启时输出。批量成功时增加平均每条耗时（分组总耗时 ÷ 操作数量，三位小数），失败不展示平均值；参数标签统一为“参数”，批量只打印受限参数摘要。并行各组耗时不能相加当作请求耗时。不要依赖整段日志文本进行业务控制；程序判断应使用异常、返回值或监控接口。采集日志文本时配置多行合并，内置 monitor 不依赖日志文本格式。
 
 ### 多数据源规范
 

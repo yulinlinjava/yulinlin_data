@@ -46,6 +46,7 @@ public final class TextColumnResolver {
     }
 
     private static boolean usesTextStorage(Class<?> type) {
+        type = JdbcScalarTypes.storageType(type);
         if (type == boolean.class || type == Boolean.class) return false;
         if (Date.class.isAssignableFrom(type) || type == DateTime.class || type == LocalDate.class
                 || type == LocalDateTime.class || type == LocalTime.class) return false;

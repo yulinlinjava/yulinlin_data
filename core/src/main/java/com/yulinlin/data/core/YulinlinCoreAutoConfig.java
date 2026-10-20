@@ -14,8 +14,6 @@ import com.yulinlin.data.core.http.HttpRequestProperties;
 import com.yulinlin.data.core.loadbalan.LoadBalance;
 import com.yulinlin.data.core.loadbalan.LoadBalanceProperties;
 import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
-import com.yulinlin.data.core.log.LogManager;
-import com.yulinlin.data.core.log.LogPrint;
 import com.yulinlin.data.core.proxy.EntityProxyService;
 import com.yulinlin.data.core.queue.WriteQueueManager;
 import com.yulinlin.data.core.session.EntitySession;
@@ -72,12 +70,6 @@ public class YulinlinCoreAutoConfig {
         return wrapperFactory;
     }
 
-
-    @ConditionalOnMissingBean
-    @Bean
-    public LogManager logManager(List<LogPrint<?>> list) {
-        return new LogManager().register(list);
-    }
 
     @ConditionalOnMissingBean
     @Bean

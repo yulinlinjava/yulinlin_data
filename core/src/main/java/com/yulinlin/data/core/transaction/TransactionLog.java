@@ -24,7 +24,7 @@ public final class TransactionLog {
         return new TransactionLog(enabled, Long.toHexString(IDS.incrementAndGet()));
     }
 
-    /** 在所属线程捕获，JDBC 连接池可将此只读日志对象带到批处理线程。 */
+    /** 在所属线程捕获，JDBC 事务资源可将此只读日志对象带到批处理线程。 */
     public static TransactionLog current() {
         TransactionContext context = TransactionListenerManager.currentContext();
         return context == null ? NONE : context.transactionLog();

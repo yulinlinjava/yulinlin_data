@@ -16,12 +16,60 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 对一行实体的一个或多个数值字段执行原子增减。
+ * 通过 {@link #update(Class, Object)} 按主键原子增减，
+ * 或通过 {@link #insert(Object)} 按非数字维度聚合插入。
  * <p>
  * {@link #execute()} 立即写入数据库；{@link #submit()} 在进程内按数据源、实体和主键聚合后写入。
  * Builder 只能终结一次，也不应跨线程共享。
  */
 public final class EntityCounter<E> {
+
+    /** 按非数字字段维度聚合插入；不传数据源时使用实体注解和当前默认选库规则。 */
+    public static <E> Insert<E> insert(E entity) {
+        return new Insert<>(null, entity);
+    }
+
+    public static <E> Insert<E> insert(String session, E entity) {
+        if (session == null || session.isBlank()) throw new IllegalArgumentException("数据源名称不能为空");
+        return new Insert<>(session, entity);
+    }
+
+    /** 插入模式与按主键 inc/dec 分开，防止把统计插入误解释成更新。 */
+    public static final class Insert<E> {
+        private final String session;
+        private final E entity;
+        private Boolean clearCache;
+        private boolean completed;
+
+        private Insert(String session, E entity) {
+            this.session = session;
+            this.entity = Objects.requireNonNull(entity, "entity");
+        }
+
+        public Insert<E> clearCache(boolean clearCache) {
+            ensureOpen();
+            this.clearCache = clearCache;
+            return this;
+        }
+
+        /** 立即插入一次值快照，可加入当前事务。 */
+        public int execute() {
+            ensureOpen();
+            completed = true;
+            return EntityCounterManager.required().executeInsert(session, entity, clearCache);
+        }
+
+        /** 提交时固定值快照，不修改或清零传入对象；每次提交都是一份新增贡献。 */
+        public void submit() {
+            ensureOpen();
+            completed = true;
+            EntityCounterManager.required().submitInsert(session, entity, clearCache);
+        }
+
+        private void ensureOpen() {
+            if (completed) throw new IllegalStateException("聚合插入已经执行或提交");
+        }
+    }
 
     private final String session;
     private final Class<E> entityClass;
@@ -38,13 +86,13 @@ public final class EntityCounter<E> {
         this.primaryKey = PrimaryUtil.getPrimaryKeyName(entityClass);
     }
 
-    /** 使用 SessionUtil/RouteSession 的默认数据源规则。 */
-    public static <E> EntityCounter<E> newInstance(Class<E> entityClass, Object id) {
+    /** 更新已有记录；使用 SessionUtil/RouteSession 的默认数据源规则。 */
+    public static <E> EntityCounter<E> update(Class<E> entityClass, Object id) {
         return new EntityCounter<>(null, entityClass, id);
     }
 
-    /** 显式选择数据源组。 */
-    public static <E> EntityCounter<E> newInstance(String session, Class<E> entityClass, Object id) {
+    /** 更新已有记录；显式选择数据源组，不会自动插入不存在的记录。 */
+    public static <E> EntityCounter<E> update(String session, Class<E> entityClass, Object id) {
         if (session == null || session.isBlank()) {
             throw new IllegalArgumentException("session must not be blank; omit it to use the default session");
         }

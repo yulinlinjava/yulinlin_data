@@ -48,6 +48,7 @@ class CounterUpdateTest {
         @JoinField(exist = false) public int ignored = 99;
         public int zero;
         public Long getViews() { return views; }
+        public BigDecimal getHeat() { return heat; }
     }
 
     @Test
@@ -160,6 +161,96 @@ class CounterUpdateTest {
             var operation = wrapper.fields().getList().iterator().next();
             assertEquals(com.yulinlin.data.core.node.atomic.AtomicValue.OperateEnum.dec, operation.getOperate());
             assertEquals(2L, operation.getValue());
+        }
+    }
+
+    @Test
+    void chainAcceptsSignedIncrementsAndCancelsAggregatedDeltas() {
+        Harness harness = new Harness();
+        try (EntityCounterManager manager = harness.manager()) {
+            assertEquals(1, EntityCounter.update(Video.class, 1L).inc(Video::getViews, -5).execute());
+            var wrapper = (UpdateWrapper<?>) harness.requests.getFirst().getWrappers().getFirst();
+            var operation = wrapper.fields().getList().iterator().next();
+            assertEquals(com.yulinlin.data.core.node.atomic.AtomicValue.OperateEnum.dec, operation.getOperate());
+            assertEquals(5L, operation.getValue());
+
+            harness.requests.clear();
+            EntityCounter.update(Video.class, 1L).inc(Video::getViews, 5)
+                    .inc(Video::getViews, -2).submit();
+            EntityCounter.update(Video.class, 1L).inc(Video::getViews, -3).submit();
+            assertEquals(0, manager.flush());
+            assertTrue(harness.requests.isEmpty());
+            assertEquals(0, EntityCounter.update(Video.class, 1L).inc(Video::getViews, 0).execute());
+
+            // MIN_VALUE 不能先在 long 上取负，底层应通过 BigDecimal 生成正确的减量。
+            assertEquals(1, EntityCounter.update(Video.class, 1L)
+                    .inc(Video::getViews, Long.MIN_VALUE).execute());
+            wrapper = (UpdateWrapper<?>) harness.requests.getFirst().getWrappers().getFirst();
+            operation = wrapper.fields().getList().iterator().next();
+            assertEquals(new BigDecimal("9223372036854775808"), operation.getValue());
+            assertThrows(IllegalArgumentException.class, () ->
+                    EntityCounter.update(Video.class, 1L).inc(Video::getViews, Double.NaN));
+            harness.requests.clear();
+            EntityCounter.update(Video.class, 1L).inc(Video::getViews, Long.MIN_VALUE)
+                    .inc(Video::getViews, -1).execute();
+            wrapper = (UpdateWrapper<?>) harness.requests.getFirst().getWrappers().getFirst();
+            assertEquals(new BigDecimal("9223372036854775809"),
+                    wrapper.fields().getList().iterator().next().getValue());
+        }
+    }
+
+    @Test
+    void incAndDecAcceptSignedDecimalsLargeIntegersAndAtomicSnapshots() {
+        Harness harness = new Harness();
+        try (EntityCounterManager manager = harness.manager()) {
+            LongAdder integer = new LongAdder();
+            integer.add(-7);
+            DoubleAdder decimal = new DoubleAdder();
+            decimal.add(-0.125);
+            List<Number> numbers = List.of((byte) -2, (short) 3, -4, 5L, -0.5f, 0.25d,
+                    new BigInteger("-100000000000000000000"),
+                    new BigDecimal("0.123456789123456789"),
+                    new AtomicInteger(-3), new AtomicLong(4), integer, decimal, Long.MIN_VALUE);
+            for (Number number : numbers) {
+                for (boolean subtract : List.of(false, true)) {
+                    harness.requests.clear();
+                    var counter = EntityCounter.update(Video.class, 1L);
+                    if (subtract) counter.dec(Video::getHeat, number);
+                    else counter.inc(Video::getHeat, number);
+                    assertEquals(1, counter.execute());
+                    BigDecimal expected = CounterNumbers.snapshot(number);
+                    if (subtract) expected = expected.negate();
+                    var wrapper = (UpdateWrapper<?>) harness.requests.getFirst().getWrappers().getFirst();
+                    var operation = wrapper.fields().getList().iterator().next();
+                    assertEquals(expected.signum() < 0
+                                    ? com.yulinlin.data.core.node.atomic.AtomicValue.OperateEnum.dec
+                                    : com.yulinlin.data.core.node.atomic.AtomicValue.OperateEnum.inc,
+                            operation.getOperate());
+                    assertEquals(0, expected.abs().compareTo(new BigDecimal(operation.getValue().toString())));
+                }
+            }
+            harness.requests.clear();
+            AtomicLong amount = new AtomicLong(2);
+            var counter = EntityCounter.update(Video.class, 1L).inc(Video::getHeat, amount)
+                    .dec(Video::getHeat, new BigDecimal("-0.25"));
+            amount.set(999); // 链式调用时已读取快照
+            counter.submit();
+            EntityCounter.update(Video.class, 1L).inc(Video::getHeat, new BigDecimal("-2.25")).submit();
+            assertEquals(0, manager.flush());
+            assertTrue(harness.requests.isEmpty());
+            assertEquals(0, EntityCounter.update(Video.class, 1L).inc(Video::getHeat, 0.1f)
+                    .dec(Video::getHeat, new BigDecimal("0.1")).execute());
+            assertEquals(0, EntityCounter.update(Video.class, 1L).dec(Video::getHeat, -0.0).execute());
+            assertThrows(NullPointerException.class,
+                    () -> EntityCounter.update(Video.class, 1L).inc(Video::getHeat, null));
+            assertThrows(NullPointerException.class,
+                    () -> EntityCounter.update(Video.class, 1L).dec(Video::getHeat, null));
+            for (Number invalid : List.of(Double.NaN, Float.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> EntityCounter.update(Video.class, 1L).inc(Video::getHeat, invalid));
+                assertThrows(IllegalArgumentException.class,
+                        () -> EntityCounter.update(Video.class, 1L).dec(Video::getHeat, invalid));
+            }
         }
     }
 

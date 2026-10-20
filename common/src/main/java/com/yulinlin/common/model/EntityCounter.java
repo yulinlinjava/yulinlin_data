@@ -9,7 +9,6 @@ import com.yulinlin.data.lang.reflection.AnnotationUtil;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -124,7 +123,7 @@ public final class EntityCounter<E> {
     private final Class<E> entityClass;
     private final Object id;
     private final String primaryKey;
-    private final LinkedHashMap<String, Long> deltas = new LinkedHashMap<>();
+    private final LinkedHashMap<String, BigDecimal> deltas = new LinkedHashMap<>();
     private Boolean clearCache;
     private boolean completed;
 
@@ -152,17 +151,18 @@ public final class EntityCounter<E> {
         return inc(field, 1);
     }
 
+    /** 加上指定数字；支持正负整数、小数及原子数字快照，零不变。 */
     public EntityCounter<E> inc(LambdaPropertyFunction<E> field, Number value) {
-        return add(field, exactPositiveLong(value, "increment"));
+        return add(field, CounterNumbers.snapshot(Objects.requireNonNull(value, "increment")));
     }
 
     public EntityCounter<E> dec(LambdaPropertyFunction<E> field) {
         return dec(field, 1);
     }
 
+    /** 减去指定数字；负数表示增加，在 BigDecimal 上取负避免整数溢出。 */
     public EntityCounter<E> dec(LambdaPropertyFunction<E> field, Number value) {
-        long amount = exactPositiveLong(value, "decrement");
-        return add(field, -amount);
+        return add(field, CounterNumbers.snapshot(Objects.requireNonNull(value, "decrement")).negate());
     }
 
     /** 覆盖本次操作的 yulinlin.data.counter.clear-cache 默认值。 */
@@ -182,15 +182,15 @@ public final class EntityCounter<E> {
         EntityCounterManager.required().submit(complete());
     }
 
-    private EntityCounter<E> add(LambdaPropertyFunction<E> function, long delta) {
+    private EntityCounter<E> add(LambdaPropertyFunction<E> function, BigDecimal delta) {
         ensureOpen();
         Objects.requireNonNull(function, "field");
-        if (delta == 0) return this;
+        if (delta.signum() == 0) return this;
 
         Field field = LambdaUtils.lambdaMethodNameToField(function);
         validateField(field);
-        deltas.merge(field.getName(), delta, Math::addExact);
-        if (deltas.get(field.getName()) == 0) deltas.remove(field.getName());
+        deltas.merge(field.getName(), delta, BigDecimal::add);
+        if (deltas.get(field.getName()).signum() == 0) deltas.remove(field.getName());
         return this;
     }
 
@@ -217,8 +217,7 @@ public final class EntityCounter<E> {
     private EntityCounterManager.Command complete() {
         ensureOpen();
         completed = true;
-        Map<String, BigDecimal> snapshot = new LinkedHashMap<>();
-        deltas.forEach((field, delta) -> snapshot.put(field, BigDecimal.valueOf(delta)));
+        Map<String, BigDecimal> snapshot = new LinkedHashMap<>(deltas);
         return new EntityCounterManager.Command(session, entityClass, CounterUpdate.freezeId(id),
                 primaryKey, Collections.unmodifiableMap(snapshot), clearCache);
     }
@@ -237,21 +236,4 @@ public final class EntityCounter<E> {
                 || type == float.class || type == double.class;
     }
 
-    private static long exactPositiveLong(Number value, String label) {
-        Objects.requireNonNull(value, label);
-        final long result;
-        try {
-            if (value instanceof BigDecimal decimal) result = decimal.longValueExact();
-            else if (value instanceof BigInteger integer) result = integer.longValueExact();
-            else if (value instanceof Double || value instanceof Float) {
-                double number = value.doubleValue();
-                if (!Double.isFinite(number)) throw new ArithmeticException("not finite");
-                result = BigDecimal.valueOf(number).longValueExact();
-            } else result = value.longValue();
-        } catch (ArithmeticException error) {
-            throw new IllegalArgumentException(label + " must be an integer within long range: " + value, error);
-        }
-        if (result < 0) throw new IllegalArgumentException(label + " must not be negative: " + value);
-        return result;
-    }
 }

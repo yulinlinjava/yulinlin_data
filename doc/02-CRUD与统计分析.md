@@ -655,7 +655,18 @@ yulinlin:
 
 `flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
 
-上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc/dec` 的数量仍必须是 `long` 范围内的非负整数；模型更新与插入模式的小数支持不会改变这个接口。默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
+上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc(field, x)` 表示加上 x，`dec(field, x)` 表示减去 x，两者都支持正负整数、小数，零不变；`dec(field, -0.5)` 等价于 `inc(field, 0.5)`。不传数量默认 1。
+
+数量支持 `Byte/Short/Integer/Long/Float/Double`、`BigInteger/BigDecimal`、`AtomicInteger/AtomicLong/LongAdder/DoubleAdder`，不接受 null、NaN、无穷大或未支持的自定义 Number 类型。链式调用时立即读取数字快照，之后修改原子类不会改变已记录增量。内部统一使用 BigDecimal 精确聚合，不再受 long 范围限制；正负增量抵消为零时不生成该字段更新。浮点数已有的运算误差不会自动修复，精确小数建议 `new BigDecimal("0.1")`。最终写入仍受数据库列类型、范围和精度约束，不会自动修改表结构。
+
+```java
+EntityCounter.update("mysql", VideoEntity.class, videoId)
+        .inc(VideoEntity::getHeat, new BigDecimal("0.75"))
+        .dec(VideoEntity::getHeat, new BigDecimal("-0.25"))
+        .submit(); // 本次净增 1；改用 execute() 可立即执行
+```
+
+默认 `clear-cache=false`，避免浏览量高频更新反复清理查询缓存；业务确实要立即影响缓存查询时可单次调用 `.clearCache(true)`，或修改全局默认值。
 
 这是内存聚合，进程异常退出可能丢失最近一个刷新周期的数据，不用于余额、库存和必须审计的数据；这些场景使用 `execute()`，或接入具有持久化确认能力的 Redis/MQ。数据库最终执行仍是原子加减，多实例同时刷新不会互相覆盖，但每个实例各自持有尚未刷新的本地增量。
 

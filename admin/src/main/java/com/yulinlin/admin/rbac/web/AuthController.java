@@ -38,6 +38,7 @@ public class AuthController {
 
     @PostMapping("/logout")
     public R<Void> logout() {
+        // 无状态 JWT 不撤销已签发凭证；前端收到响应后自行删除保存的 Token。
         security.logout();
         return R.ok(null, "注销成功");
     }

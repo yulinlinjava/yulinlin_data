@@ -914,14 +914,14 @@ public void createOrder() throws Exception {
 ```java
 @Transactional
 @JoinSync
-public void disableUser(String id) {
+public void changeNickname(String id, String nickname) {
     UserEntity user = userRepository.findByIdEq(id);
-    user.setStatus(UserStatus.DISABLED);
-    TransactionUtil.afterCommit(() -> sessions.removeByUserId(id));
+    user.setNickname(nickname);
+    TransactionUtil.afterCommit(() -> security.refresh(id));
 }
 ```
 
-上例是方法片段，`userRepository` 为业务仓库，`sessions` 为注入的 `JwtSessionStore`，默认实现支持 `removeByUserId`，无需自建存储。实际业务还应保留自身保护等校验；允许撤销当前用户时，还要在删除成功后清理其本线程上下文。新版 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
+上例是方法片段，`userRepository` 为业务仓库，`security` 为注入的 `ISecurityManager`。刷新指定用户资料；若是当前用户，则更新本线程快照，不续期或撤销 JWT。实际业务还应保留输入校验。无状态 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
 
 | 场景 | 行为 |
 | --- | --- |

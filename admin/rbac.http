@@ -120,12 +120,27 @@ Authorization: Bearer {{adminToken}}
 POST {{baseUrl}}/rbac/auth/me
 Authorization: Bearer {{readerToken}}
 
-### 15. 重置密码（纯无状态 JWT 不会因改密失效；该用户仍因停用而被拒绝访问）
+### 14a. 重新启用账号（无状态 JWT 未被撤销）
+POST {{baseUrl}}/rbac/users/status
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{"id":"{{readerUserId}}","status":"enabled"}
+
+### 14b. 未过期的原 JWT 又能访问，验证停用不是永久撤销
+POST {{baseUrl}}/rbac/auth/me
+Authorization: Bearer {{readerToken}}
+
+### 15. 重置密码（纯无状态 JWT 不会因改密失效）
 POST {{baseUrl}}/rbac/users/password
 Content-Type: application/json
 Authorization: Bearer {{adminToken}}
 
 {"id":"{{readerUserId}}","password":"Another-Password-2026"}
+
+### 15a. 修改密码后，未过期的原 JWT 仍能访问
+POST {{baseUrl}}/rbac/auth/me
+Authorization: Bearer {{readerToken}}
 
 ### 16. 删除角色，同时移除用户集合内的对应编码
 POST {{baseUrl}}/rbac/roles/delete
@@ -184,6 +199,8 @@ Authorization: Bearer {{adminToken}}
 
 {"ids":["{{batchRoleId1}}","{{batchRoleId2}}"]}
 
-### 24. 注销当前管理员 Token
+### 24. 注销：只清理当前线程，客户端删除 Token；不会撤销 JWT
 POST {{baseUrl}}/rbac/auth/logout
 Authorization: Bearer {{adminToken}}
+
+> {% client.global.clear("adminToken"); %}

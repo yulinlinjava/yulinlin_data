@@ -127,6 +127,12 @@ class LoginContextTest {
         JwtSecurityManager restarted = new JwtSecurityManager(new AdminUserStore(users), properties);
         assertNotNull(restarted.resolveSession(result.token())); // 无需恢复任何登录记录
         assertEquals(result.expiresAt(), restarted.resolveSession(result.token()).expiresAt());
+        JwtProperties otherProperties = new JwtProperties();
+        byte[] otherKey = new byte[32];
+        java.util.Arrays.fill(otherKey, (byte) 1);
+        otherProperties.setSecret(java.util.Base64.getEncoder().encodeToString(otherKey));
+        assertNull(new JwtSecurityManager(new AdminUserStore(users), otherProperties)
+                .resolveSession(result.token())); // 无状态不代表放宽验签
         SecurityContext.set(session("old"));
         assertThrows(LoginException.class, () -> authentication.authenticate("alice", "wrong", null));
         assertNull(SecurityContext.getUser());

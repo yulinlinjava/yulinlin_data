@@ -4,7 +4,7 @@ package com.yulinlin.mongodb;
 import com.mongodb.client.MongoDatabase;
 import com.yulinlin.data.core.cache.NoOpQueryCache;
 import com.yulinlin.data.core.cache.QueryCache;
-import com.yulinlin.data.core.cache.QueryCaches;
+import com.yulinlin.data.core.cache.CacheRegistry;
 import com.yulinlin.data.core.coder.ICoderManager;
 import com.yulinlin.data.core.session.SessionExecutionListener;
 import com.yulinlin.data.core.proxy.EntityProxyService;
@@ -50,8 +50,8 @@ public class MongoFactory implements SessionFactory<MongoDatabase> {
     }
 
     @Autowired
-    void setQueryCaches(ObjectProvider<QueryCache> providers) {
-        this.queryCache = QueryCaches.single(providers.orderedStream().toList());
+    void setQueryCaches(CacheRegistry caches) {
+        this.queryCache = caches.defaultCache();
     }
 
     public MongoSession create(MongoDatabase restClient, String group){

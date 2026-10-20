@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 /** Redis L2 query cache with an optional decoded-object Caffeine L1. */
 public final class RedisQueryCache implements QueryCache {
+    @Override public String providerName() { return "redis"; }
 
     private static final Logger log = LoggerFactory.getLogger(RedisQueryCache.class);
     private static final String GLOBAL_VERSION = "@global";

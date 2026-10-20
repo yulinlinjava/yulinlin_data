@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Fast in-process query cache. */
 public final class CaffeineQueryCache implements QueryCache {
+    @Override public String providerName() { return "caffeine"; }
 
     private static final int MAX_PARTITION_VALUES = 4096;
 

@@ -37,7 +37,7 @@
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
 | 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
-| 可选查询缓存 | 单机内存用 cache-caffeine，本地磁盘持久化用 cache-ehcache，共享 Redis 用 cache-redis；三选一 |
+| 可选查询缓存 | cache-caffeine、cache-ehcache、cache-redis 可共存；单实现自动选择，多个实现用 yulinlin.cache.default 指定 ORM 默认缓存，客户端可指定名称 |
 | 实体基类、Model Wrapper、树和 ID | common |
 | 示例或基准 | admin，不作为业务依赖 |
 
@@ -3786,12 +3786,13 @@ yulinlin:
 
 | 配置 | 默认值 | 作用 |
 | --- | --- | --- |
+| `default` | 不指定 | 单实现自动选中；多个实现共存时必须指定 `caffeine`、`ehcache` 或 `redis` |
 | `ttl` | `10m` | 查询缓存默认有效期 |
 | `table-ttl` | `{}` | 按物理表名覆盖 ORM 查询 TTL；也可写 `group.table` 精确区分数据源，所有值必须大于 `0` |
 | `ttl-in-key` | `false` | TTL 是否参与 ORM 查询缓存 Key；不影响 `CacheClient` 业务缓存 |
 | `clear-on-write` | `true` | 成功写入后是否默认清理相关 ORM 查询缓存 |
 
-`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存。`QueryCacheProperties` 只由 `cache-caffeine`、`cache-ehcache` 或 `cache-redis` 的自动配置启用；未引入 Provider 时不存在查询缓存，该配置不会生效，写路径也不执行 namespace 解析和失效处理。
+`yulinlin.cache.clear-on-write`默认 `true`，控制写操作未显式选择时是否在提交成功后清理默认缓存中的相关 ORM 查询缓存。它不控制查询是否启用缓存，也不会清理 `CacheClient` 业务缓存或广播到其他缓存实现。`QueryCacheProperties` 由 cache-core 自动配置注册；未引入 Provider 且未显式指定 default 时使用空缓存，写路径不执行 namespace 解析和失效处理。
 
 ORM 查询 TTL 的优先级为：请求 `.cache(Duration)` 或 Repository 方法 `@JoinCache(ttl=...)`、`group.table`、普通表名、全局 `ttl`。JOIN、`JoinTableList` 或显式声明多个缓存 namespace 时，每张表先按该顺序得到 TTL，最终使用最短值；未配置的表以全局 TTL 参与比较。自定义 SQL 无法识别资源时使用全局 TTL，调用 `cacheNamespaces("table_name")` 后可以参与表级规则。
 
@@ -3813,7 +3814,31 @@ yulinlin:
 
 ### 选择实现
 
-只引入一个实现，不要同时引入多个。三个实现都会传递引入 `cache-core`，业务不需要重复声明；`cache-redis` 直接包含自己的 Caffeine L1，不依赖 `cache-caffeine` Provider。
+三个实现可以同时引入，固定名称为 `caffeine`、`ehcache`、`redis`，不用再配置各模块的 group。它们都会传递引入 `cache-core`，业务不需要重复声明。示例（需引入对应模块，并按 Redis 专题配置连接）：
+
+```yaml
+yulinlin:
+  cache:
+    default: redis
+    ttl: 10m
+    caffeine:
+      maximum-size: 10000
+    ehcache:
+      directory: data/cache
+    redis:
+      key-prefix: dev
+```
+
+- 没有实现且省略 default：照常启动，ORM 无缓存，客户端未命中。
+- 只有一个已注册实现：无需配置 default，兼容原有用法。
+- 多个实现：必须明确指定 default，禁止按 Bean 顺序随机挑选。
+- 显式 default 或客户端指定的缓存名称不存在：明确报错，不回退。缓存名称重复也报错。判断依据是实际注册的 Provider，不是只看 YAML 配置块；例如没有 RedisConnectionFactory 时不会注册 Redis Provider。
+- ORM 的 `.cache()`、CacheMode、TTL、`@JoinCache` 用法不变，只使用默认实现，不增加缓存名参数；配置默认缓存并不会自动让所有查询启用缓存。
+- 客户端可指定其他实现，缓存内容各自独立，不自动复制，不按多个 Provider 依次查找，也不广播清理。
+
+公共 ttl 等配置由这些实现复用；每个实现的容量、持久化、序列化等配置继续独立。选择在启动时固定，修改默认值需要重启。`table-ttl` 中的 `group.table` 仍指**数据源 group**，不是缓存名称。
+
+`cache-redis` 自带的 Caffeine L1 属于 `redis`，不依赖、不注册 `cache-caffeine` Provider。只引入 Redis 模块仍然算一个缓存实现；同时引入 cache-caffeine 后，独立的 caffeine 与 redis 内部 L1 也不会共享数据。
 
 #### Caffeine 内存缓存
 
@@ -3850,7 +3875,7 @@ yulinlin:
 | `executor` | `common-pool` | `common-pool` 异步执行维护任务；`direct` 在调用线程执行，少一次调度但可能增加请求延迟 |
 | `record-stats` | `false` | 是否记录命中率、淘汰数和加载统计；需要观测时显式开启，默认关闭以减少热点路径计数开销 |
 
-`expiration-policy`同时作用于 ORM 查询缓存和 `CacheClient`。请求级 `cache(Duration)` 或 `CacheClient.set(..., Duration)` 仍决定各条目的 TTL，策略只决定读取命中后是否重新开始计时。大多数接口服务建议保留 `after-write + common-pool`；会话类热点数据才考虑 `after-access`。
+`expiration-policy`同时作用于 ORM 查询缓存和业务缓存。请求级 `cache(Duration)` 或 `Cache.set(..., Duration)` 仍决定各条目的 TTL，策略只决定读取命中后是否重新开始计时。大多数接口服务建议保留 `after-write + common-pool`；会话类热点数据才考虑 `after-access`。
 
 需要监控时先配置 `record-stats: true`，再直接注入具体实现：
 
@@ -4075,43 +4100,82 @@ List<SysUser> refreshed = ModelSelectWrapper.newInstance("mysql", SysUser.class)
 
 未调用 `cache(...)` 时为 `NONE`。没有引入缓存 Provider 时，`READ_THROUGH`和`REFRESH`仍能查询数据源，但不会保存结果；`CACHE_ONLY`一定抛出 `CacheMissException`。
 
-### 业务缓存 CacheClient
+### 业务缓存：CacheClient 管理，Cache 操作
 
-框架始终暴露一个可注入的 `CacheClient` Bean。它与 ORM 查询缓存共用所选 Provider，但使用独立的 Key 和版本域；数据库写操作不会误删验证码、接口结果等业务缓存。
+框架始终暴露一个可注入的 `CacheClient` Bean，仅负责选择、查看缓存。通过它获取 `Cache` 对象后进行业务数据读写。两个接口位于 `com.yulinlin.data.core.cache`，不要与 Spring 的同名 Cache 接口混用。业务缓存与 ORM 使用独立的 Key 和版本域，数据库写操作不会误删验证码、接口结果等业务缓存。
 
 ```java
 @Resource
 private CacheClient cacheClient;
 
-cacheClient.set("user", "10001", user); // 使用系统默认 TTL
-cacheClient.set("user", "10002", user, Duration.ofMinutes(30));
+Cache cache = cacheClient.getCache();
+cache.set("user", "10001", user); // 使用系统默认 TTL
+cache.set("user", "10002", user, Duration.ofMinutes(30));
 
-SysUser user = cacheClient.get("user", "10001", SysUser.class);
-boolean exists = cacheClient.exists("user", "10001");
-cacheClient.remove("user", "10001");
-cacheClient.invalidate("user"); // 整个业务命名空间立即失效
-cacheClient.clear();             // 只清理业务缓存，不清理 ORM 查询缓存
+SysUser cachedUser = cache.get("user", "10001", SysUser.class);
+boolean exists = cache.exists("user", "10001");
+cache.remove("user", "10001");
+cache.clear("user"); // 整个业务命名空间立即失效
+cache.clear();       // 只清理当前实现的业务缓存，不清理 ORM 查询缓存
 ```
+
+选择指定实现，不改变全局默认缓存：
+
+```java
+Cache local = cacheClient.getCache("caffeine");
+Cache redis = cacheClient.getCache("redis");
+local.set("user", "10001", user);
+redis.set("user", "10001", user, Duration.ofMinutes(5));
+
+SysUser loaded = redis.getOrLoad(
+        "user", "10003", SysUser.class, Duration.ofMinutes(5),
+        () -> loadUser("10003")); // loadUser 是业务自行提供的方法
+
+String defaultName = cacheClient.defaultName();
+boolean hasRedis = cacheClient.contains("redis");
+Set<String> names = cacheClient.names();
+Map<String, Cache> caches = cacheClient.caches(); // 只读视图
+```
+
+单实现不必配置默认值；多实现必须配置 `yulinlin.cache.default`。每个实现复用一个 `Cache` 对象及其加载锁，默认选择与显式选择同一实现得到同一个对象。名称不存在直接报错；`contains` 对不存在、null 或空白名称返回 false。不提供运行时注册、删除或切换默认值。
+
+`Cache.name()` / `available()` 描述当前缓存；`clear(namespace)` 仅清当前实现的对应业务命名空间，`clear()` 仅清当前实现的全部业务缓存。都不会广播到其他实现，不执行 Redis FLUSHDB，也不清 ORM 缓存。
+
+API 迁移：旧 `cacheClient.get/set/...` 改成 `cacheClient.getCache().get/set/...`；旧 `named(name)` 改成 `getCache(name)`；旧命名空间 `invalidate(namespace)` 改成缓存对象上的 `clear(namespace)`。不再保留管理对象上的数据操作方法，避免职责混淆。
 
 集合等泛型数据使用 Jackson `TypeReference`：
 
 ```java
-List<SysUser> users = cacheClient.get(
+List<SysUser> users = cache.get(
         "user-list", "enabled",
         new TypeReference<List<SysUser>>() {}
 );
 ```
 
-`getOrLoad`在同一 Key 回源时使用分段锁和二次检查：
+`getOrLoad`支持 Class 和 TypeReference，均有默认 TTL 和指定 TTL 两种重载。单进程同一缓存对象内使用分段锁和二次检查，不保证跨进程只回源一次；加载结果为 null 时不写入缓存，加载异常向调用方传递：
 
 ```java
-SysUser user = cacheClient.getOrLoad(
+SysUser loadedUser = cache.getOrLoad(
         "user", userId, SysUser.class, Duration.ofMinutes(10),
         () -> userService.findById(userId)
 );
+
+List<SysUser> users = cache.getOrLoad(
+        "user-list", "enabled", new TypeReference<List<SysUser>>() {},
+        () -> loadEnabledUsers());
+
+cache.setAll("user", Map.of("10001", user1, "10002", user2));
+cache.setAll("user", Map.of("10003", user3), Duration.ofMinutes(5));
+Map<String, SysUser> hits = cache.getAll(
+        "user", List.of("10001", "10002"), SysUser.class);
+cache.removeAll("user", List.of("10001", "10002"));
 ```
 
-业务缓存不接受空 namespace、空 key 或 `set(..., null)`。未引入缓存模块时，`available()`返回 false，读取为未命中，写入和失效操作安全地退化为空操作。
+批量操作当前复用逐条 API，不新增线程或队列，不保证原子性；中途失败可能已有部分生效。`getAll` 只返回命中的条目。Redis 原有异步写入模式继续有效，批量方法返回不等于所有 Redis 写入均已完成。
+
+业务缓存不接受空 namespace、空 key 或 `set(..., null)`。不传 TTL 或传 null 使用配置默认 TTL。不引入任何缓存实现时，ORM 正常启动并直接访问数据库；`getCache()` 返回空缓存，`available()` 为 false，读取未命中，写入/清理无操作，`getOrLoad` 正常执行加载函数。此时 `defaultName()` 返回 null，`names()` / `caches()` 为空；显式 `getCache("redis")` 仍报错。
+
+`CacheClient` 不提供按表、实体或全部 ORM 缓存的手动清理入口，也不解析数据源和实体注解。ORM 写入后的失效由 `clear-on-write` / `clearCache(true)` 控制；需要刷新某条查询时使用 `.cache(CacheMode.REFRESH)`。绕过框架直接修改数据库不会自动触发 ORM 缓存失效，需要等待 TTL 或针对受影响查询刷新。业务缓存的 `Cache.clear(...)` 不能用于清理 ORM 查询缓存。
 
 ### Key 规则
 
@@ -4230,11 +4294,13 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 
 | 项目依赖 | 启动结果 |
 | --- | --- |
-| 不引入缓存模块 | 正常启动；`CacheClient.available()`为 false，缓存优先查询直接访问数据源 |
+| 不引入缓存模块 | 正常启动；`cacheClient.getCache().available()`为 false，缓存优先查询直接访问数据源 |
 | 只引入 `cache-caffeine` | 启用内存缓存 |
 | 只引入 `cache-ehcache` | 启用 Heap + Disk 缓存 |
 | 只引入 `cache-redis` | 启用 Redis L2；默认同时启用模块内置 Caffeine L1 |
-| 同时引入多个实现 | 启动失败并报告多个缓存 Provider |
+| 多个实现且已配置 `yulinlin.cache.default` | 正常启动；ORM 仅使用默认实现，客户端可显式选择 |
+| 多个实现但未配置 default | 启动报错，要求指定默认缓存 |
+| 显式指定未注册名称 / 名称重复 | 报错，不静默回退 |
 
 第一种情况下不会创建 `QueryCacheProperties`，也不会因 `clearCache(true)` 解析表 namespace。这不是“空缓存执行一遍失效”，而是写路径直接跳过整套缓存失效逻辑。
 

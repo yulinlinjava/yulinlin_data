@@ -13,7 +13,7 @@
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
 - 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.update(deltaModel).submit()` 或链式 `inc/dec`，按数据源、实体和主键聚合原子更新；统计明细使用 `EntityCounter.insert(entity).submit()`，按非数字维度聚合数字后批量插入，模型数字支持大数、AtomicInteger/AtomicLong 和 Adder。
 - 可选 `data-sync` 采用轻量方案：增量正常异步同步，全量由人工调用 MySQL/PostgreSQL 补同步 API，支持主键检查点续传和中文进度。全量期间内部暂停本进程相关增量消费，但业务必须先停写并排空队列；启动只开启增量，不提供自动全量开关。内存增量队列不承诺可靠交付，不是 CDC。[使用流程与边界](doc/01-接入与数据源.md#数据源增量同步)
-- 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，支持全局及按 `table`/`group.table` 配置 TTL；Key 包含数据源与查询元数据，条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
+- 查询缓存是可选模块：Caffeine、Ehcache、Redis+Caffeine 可共存；单实现自动选择，多个实现用 `yulinlin.cache.default` 指定默认缓存，ORM 只用默认缓存，`CacheClient` 可按名称选择。支持全局及按 `table`/`group.table` 配置 TTL；Key 包含数据源与查询元数据，条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。ORM 自动失效与业务缓存操作保持隔离，刷新查询使用 `CacheMode.REFRESH`，详见[查询缓存](doc/08-查询缓存.md)。
 - 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描，Elasticsearch 提供同一入口的索引与基础 Mapping 初始化；只有 `autoSchema=true` 的完整实体才参与结构初始化。
 - PostgreSQL 与 Elasticsearch 通过同一套 `match()`、`highlight()` 和实体全文字段声明提供常用全文检索；MySQL、SQLite、H2 保持 LIKE/原字段兼容回退。
@@ -51,6 +51,7 @@
 | Elasticsearch 查询、Mapping 和高亮 | 高：另接 ES Client/框架，维护 Document、DSL 和结果解析 | 中高：需引入 Hibernate Search 或 Spring Data ES，并学习新注解与 Search DSL | 低：引入 ES 模块，继续使用相同实体、Wrapper、`match()` 和 `highlight()` |
 | 高级 ES 同义词、建议、向量与语义搜索 | 高：ES 专项开发 | 中：Hibernate Search/ES 专项配置 | 中高：当前公共 Wrapper 未完整覆盖，必要时使用原生 ES 能力 |
 | 查询缓存接入 | 中：配置 MyBatis 二级缓存或 Spring Cache/Provider | 中：配置二级/查询缓存 Provider | 低：按需引入 Caffeine、Ehcache 或 Redis 模块，业务 API 不变 |
+| 多种缓存同时使用 | 中：配置 CacheManager 及选择规则 | 中：ORM Provider 与业务 CacheManager 分别配置 | 低：缓存模块共存，配置 default；ORM 统一默认，客户端可按名称选择 |
 | 更新后的缓存失效 | 低但粗：默认让当前 Mapper namespace 缓存空间全部失效 | 中：实体缓存和查询缓存规则不同 | 低：单字段等值结构按条件值失效；出现多种或复杂结构后升级为表 namespace 整体失效 |
 | 多数据源、列表与 Count 缓存隔离 | 中高：业务缓存需自行设计 Key 和失效关系 | 中高：需区分 persistence unit、Region 与查询缓存 | 低：数据源、实体、SQL、参数和请求类型统一进入缓存元数据 |
 | 跨请求延迟批量写入 | 高：需自行开发队列、定时任务、分组、满量刷新和失败处理 | 高：事务 Flush 不是跨请求队列，仍需自行开发 | 低：`.queue()` 固化 INode，按 Session/类型/实体分组，按时间或 `flush-size` 刷新 |
@@ -119,7 +120,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。
 - 接口报文加密：security；当前提供显式注解启用的 AES-CBC（默认）和 AES-GCM JSON 加解密。
-- 查询缓存完全可选：`cache-core` 只承载缓存 SPI、`CacheClient` 和 Key/TTL/失效模型，并由 ORM core 或 Provider 传递引入；不引入具体 Provider 时直接访问数据源。低延迟内存缓存引入 `cache-caffeine`，Heap + Disk 持久化缓存引入 `cache-ehcache`，Redis 共享缓存引入 `cache-redis`。三个 Provider 只能选择一个；`cache-redis` 已内置可关闭的 Caffeine L1，不要再引入 `cache-caffeine`。
+- 查询缓存完全可选：`cache-core` 承载缓存 SPI、`CacheClient` 管理入口、`Cache` 数据操作及 Key/TTL/失效模型，由 ORM core 或 Provider 传递引入；不引入具体 Provider 时 ORM 直接访问数据源，业务 API 返回空缓存。`cache-caffeine`、`cache-ehcache`、`cache-redis` 可以共存，单实现自动选择，多实现用 `yulinlin.cache.default` 指定默认。`cacheClient.getCache()` 获取默认缓存，`getCache("redis")` 人工选择，随后使用 `Cache.get/set/getOrLoad/getAll/setAll/removeAll/clear`。Redis 内置 L1 不等于独立的 caffeine 实现，详见[查询缓存](doc/08-查询缓存.md)。
 - 慢数据库监控：引入 `monitor`，访问 `/monitor/`；可通过 `yulinlin.monitor.enabled=false` 完全关闭采集与页面，页面内置账号密码验证对话框，验证结果保存在当前 Session，不依赖安全框架。
 
 完整依赖和配置见第一专题。制品来源由团队提供，不假设已发布 Maven Central；业务不依赖 admin 示例模块。

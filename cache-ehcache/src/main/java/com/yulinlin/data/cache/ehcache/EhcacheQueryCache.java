@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 /** Ehcache heap + persistent disk query cache. */
 public final class EhcacheQueryCache implements QueryCache {
+    @Override public String providerName() { return "ehcache"; }
 
     private static final Logger log = LoggerFactory.getLogger(EhcacheQueryCache.class);
     private static final String CACHE_ALIAS = "yulinlin-query-cache-v2";

@@ -12,6 +12,13 @@ import java.util.Set;
 @ConfigurationProperties("yulinlin.cache")
 public class QueryCacheProperties {
 
+    private String defaultCache;
+
+    /** 对应 yulinlin.cache.default；省略时仅允许零个或一个缓存实现。 */
+    public String getDefault() { return defaultCache; }
+
+    public void setDefault(String name) { defaultCache = CacheRegistry.name(name); }
+
     /** Queries always expire; reads never extend this duration. */
     private Duration ttl = Duration.ofMinutes(10);
 

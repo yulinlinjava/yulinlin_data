@@ -2,19 +2,13 @@ package com.yulinlin.data.core.cache;
 
 import java.util.List;
 
-/** Resolves the optional provider and rejects ambiguous classpaths. */
+/** 无显式默认配置的手动装配兼容入口；Spring 装配统一使用 CacheRegistry。 */
 public final class QueryCaches {
 
     private QueryCaches() {
     }
 
     public static QueryCache single(List<QueryCache> providers) {
-        if (providers == null || providers.isEmpty()) return NoOpQueryCache.INSTANCE;
-        if (providers.size() > 1) {
-            throw new IllegalStateException("Multiple query-cache providers found: "
-                    + providers.stream().map(QueryCache::providerName).toList()
-                    + ". Keep only one of cache-caffeine, cache-ehcache, or cache-redis.");
-        }
-        return providers.getFirst();
+        return new CacheRegistry(providers, null).defaultCache();
     }
 }

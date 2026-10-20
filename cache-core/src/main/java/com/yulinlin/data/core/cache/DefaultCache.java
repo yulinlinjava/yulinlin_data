@@ -9,17 +9,17 @@ import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Supplier;
 
-/** Keeps the public key/value API separate from ORM query-cache keys and invalidation. */
-public final class DefaultCacheClient implements CacheClient {
+/** 业务缓存对象：复用 Provider，业务 Key 和失效范围与 ORM 隔离。 */
+public final class DefaultCache implements Cache {
     private final QueryCache provider;
     private final SegmentLock locks = new SegmentLock();
 
-    public DefaultCacheClient(QueryCache provider) {
+    public DefaultCache(QueryCache provider) {
         this.provider = provider == null ? NoOpQueryCache.INSTANCE : provider;
     }
 
     @Override public boolean available() { return provider.available(); }
-    @Override public String providerName() { return provider.providerName(); }
+    @Override public String name() { return provider.providerName(); }
 
     @Override
     public <T> T get(String namespace, String key, Class<T> type) {
@@ -56,7 +56,7 @@ public final class DefaultCacheClient implements CacheClient {
         return provider.removeApplication(text(namespace, "namespace"), text(key, "key"));
     }
 
-    @Override public void invalidate(String namespace) {
+    @Override public void clear(String namespace) {
         provider.invalidateApplication(text(namespace, "namespace"));
     }
 
@@ -70,16 +70,32 @@ public final class DefaultCacheClient implements CacheClient {
     @Override
     public <T> T getOrLoad(String namespace, String key, Class<T> type,
                            Duration ttl, Supplier<T> loader) {
+        return load(namespace, key, Objects.requireNonNull(type, "type"), ttl, loader);
+    }
+
+    @Override
+    public <T> T getOrLoad(String namespace, String key, TypeReference<T> type, Supplier<T> loader) {
+        return getOrLoad(namespace, key, type, null, loader);
+    }
+
+    @Override
+    public <T> T getOrLoad(String namespace, String key, TypeReference<T> type,
+                           Duration ttl, Supplier<T> loader) {
+        return load(namespace, key, Objects.requireNonNull(type, "type").getType(), ttl, loader);
+    }
+
+    private <T> T load(String namespace, String key, Type type, Duration ttl, Supplier<T> loader) {
+        Objects.requireNonNull(loader, "loader");
         String checkedNamespace = text(namespace, "namespace");
         String checkedKey = text(key, "key");
-        T cached = get(checkedNamespace, checkedKey, type);
+        T cached = value(provider.getApplication(checkedNamespace, checkedKey, type));
         if (cached != null) return cached;
         Lock lock = locks.getLock(checkedNamespace + '\u0000' + checkedKey);
         lock.lock();
         try {
-            cached = get(checkedNamespace, checkedKey, type);
+            cached = value(provider.getApplication(checkedNamespace, checkedKey, type));
             if (cached != null) return cached;
-            T loaded = Objects.requireNonNull(loader, "loader").get();
+            T loaded = loader.get();
             if (loaded != null) set(checkedNamespace, checkedKey, loaded, ttl);
             return loaded;
         } finally {

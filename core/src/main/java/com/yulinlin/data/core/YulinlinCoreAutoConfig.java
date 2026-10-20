@@ -4,7 +4,7 @@ import com.yulinlin.data.core.aop.JoinSessionAop;
 import com.yulinlin.data.core.aop.JoinSyncAop;
 import com.yulinlin.data.core.aop.JoinTransactionAop;
 import com.yulinlin.data.core.cache.QueryCache;
-import com.yulinlin.data.core.cache.QueryCaches;
+import com.yulinlin.data.core.cache.CacheRegistry;
 import com.yulinlin.data.core.filter.IFilter;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.filter.InitFilter;
@@ -137,8 +137,8 @@ public class YulinlinCoreAutoConfig {
                                      LoadBalance loadbalance,IFilterManager filterManager,
                                      TransactionListenerManager listenerManager,
                                      WriteQueueManager writeQueueManager,
-                                     ObjectProvider<QueryCache> queryCaches){
-        QueryCache queryCache = QueryCaches.single(queryCaches.orderedStream().toList());
+                                     CacheRegistry caches){
+        QueryCache queryCache = caches.defaultCache();
         RouteSession build = RouteSession.builder()
 
 

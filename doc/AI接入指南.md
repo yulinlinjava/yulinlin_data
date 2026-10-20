@@ -3053,7 +3053,7 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 
 模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice、响应加密 Advice 和接口限流拦截器；多设备模式缺少 `unknown`、密钥或 CBC IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
 
-鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 注册拦截器，`yulinlin.security.auth.enabled` 默认 true，只控制该拦截器，不关闭权限 AOP。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
+鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
 
 ### 完整主配置
 
@@ -3062,10 +3062,6 @@ MutableTriple<String, Integer, Boolean> triple = MutableTriple.of("task", 1, tru
 ```yaml
 yulinlin:
   security:
-    auth:
-      # 控制登录拦截器自动注册（默认或自定义 Bean）；外部框架自行管理请求身份时关闭
-      enabled: true
-
     crypto:
       # true：严格加密；false：兼容明文/密文请求，响应统一明文
       enabled: true
@@ -3374,7 +3370,7 @@ SecurityUtil.manager();           // 获取底层 ISecurityManager，也可以�
 | JWT 生成及验签解析 | `jwt.JwtTokenCodec` | 提供 Bean，同时实现 `generate`、`parse`，默认 Codec 自动退出 |
 | 有状态登录、撤销、在线会话 | `auth.ISecurityManager` 或 Sa-Token 原生扩展 | 使用 security-sa-token，或提供自己的管理器；JWT 模块无存储接口 |
 | Token 从哪里读取、怎样恢复身份 | `web.LoginInterceptor` | 提供该类型 Bean；框架自动注册，不用再写 MVC 注册器 |
-| 整体接入其他安全框架 | `auth.ISecurityManager` | 提供 Bean，负责登录/注销/用户及会话；由外部维护请求身份时关闭 `auth.enabled` |
+| 整体接入其他安全框架 | `auth.ISecurityManager` + `web.LoginInterceptor` | 管理器委托登录/注销/用户能力；自定义拦截器接入外部身份生命周期，框架自动注册 |
 | Sa-Token 原生能力 | `satoken.SaTokenSecurityManager` | 使用 `stpLogic()`；存储和策略沿用 Sa-Token 自身扩展 |
 | IP 黑名单 | `limit.IpBlacklist` | 实现并注册 Bean，见 [IP 黑名单](#ip-黑名单) |
 
@@ -3422,8 +3418,6 @@ JWT 中不保存完整用户资料。每次正常请求恢复身份时，验签�
 ```yaml
 yulinlin:
   security:
-    auth:
-      enabled: true
     jwt:
       secret: ${YULINLIN_JWT_SECRET} # 至少 32 字节随机密钥的 Base64，不是 AES 设备密钥
       issuer: yulinlin
@@ -3525,9 +3519,11 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 }
 ```
 
-保持 `yulinlin.security.auth.enabled: true`。框架发现业务 `LoginInterceptor` Bean 后使用它，否则使用默认实现；框架负责 MVC 注册和清理包装，无需手动 `addInterceptors`，避免重复执行。Bean 返回类型应声明为 `LoginInterceptor` 或具体实现，不要只暴露为普通 `HandlerInterceptor`。
+框架发现业务 `LoginInterceptor` Bean 后使用它，否则使用默认实现；框架负责 MVC 注册和清理包装，无需手动 `addInterceptors`，避免重复执行。Bean 返回类型应声明为 `LoginInterceptor` 或具体实现，不要只暴露为普通 `HandlerInterceptor`。通常只提供一个；若确需多个 Bean，必须用 `@Primary` 明确选择。
 
-完全定制时也可直接实现 `LoginInterceptor`，但必须自己完成可信身份恢复并设置 `SecurityContext`，不能只从请求里读出 userId 就认为已登录。框架包装器负责请求开始、拒绝请求、异常、完成及异步切换的清理，不替自定义实现补做验签。Token 算法变化优先替换 `JwtTokenCodec`，不必改拦截器。
+旧的 `yulinlin.security.auth.enabled` 已移除，配置为 false 也不会阻止自动注册，请删除该配置。以前通过它接入外部框架的项目，应改为提供自定义 `LoginInterceptor` Bean。
+
+完全定制时也可直接实现 `LoginInterceptor`，必须自己完成可信身份恢复：使用框架上下文时设置 `SecurityContext`；使用外部上下文时配合自定义 `ISecurityManager` 读取身份。不能只从请求里读出 userId 就认为已登录。框架包装器负责请求开始、拒绝请求、异常、完成及异步切换时清理 **SecurityContext**，不替自定义实现补做验签或清理外部框架的上下文。Token 算法变化优先替换 `JwtTokenCodec`，不必改拦截器。
 
 #### Sa-Token 接入
 
@@ -3578,8 +3574,8 @@ SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理
 | 定制范围 | 实现/配置 | 请求身份由谁维护 |
 | --- | --- | --- |
 | 只改变 JWT 算法、密钥、声明格式 | security-jwt + 一个 JwtTokenCodec Bean | 框架默认拦截器和管理器 |
-| 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean，auth.enabled=true | 你的 resolveSession 校验凭证，框架设置/清理 SecurityContext |
-| 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean，auth.enabled=false | 外部框架负责恢复与清理，适配器读取其当前用户 |
+| 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean | 你的 resolveSession 校验凭证，默认拦截器设置/清理 SecurityContext |
+| 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean + 一个 LoginInterceptor Bean | 自定义拦截器接入外部身份生命周期，管理器读取其当前用户 |
 
 框架不要求自定义实现一定使用 UserStore；这是两种内置登录实现的用户加载扩展。如果自定义管理器使用它，可继承 `AbstractUserSecurityManager` 复用按 ID 加载和刷新，自己实现 login、logout、resolveSession；它不会替你实现任何存储、签名或撤销规则。
 
@@ -3595,14 +3591,7 @@ SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理
 
 resolveSession 校验失败返回 null 或抛 LoginException；login 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#自定义有状态登录)。
 
-如果选择已提供的 Sa-Token 适配，使用上一节即可，不必自己再写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean，委托该框架按 userId 登录、注销、查询用户和刷新。若由外部框架负责完整请求身份生命周期，则关闭本模块的登录拦截器自动注册：
-
-```yaml
-yulinlin:
-  security:
-    auth:
-      enabled: false
-```
+如果选择已提供的 Sa-Token 适配，使用上一节即可，不必自己再写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean，委托该框架按 userId 登录、注销、查询用户和刷新；再提供一个 `LoginInterceptor` Bean，负责接入该框架的请求身份恢复与清理，自动替换默认实现。
 
 不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 login(userId, deviceType)、logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；不要把原来的账号密码验证塞回协议参数。
 
@@ -3633,9 +3622,48 @@ public ISecurityManager securityManager(ExternalAuth auth) {
 }
 ```
 
-此示例选的是 `auth.enabled=false` 路径，必须已经安装外部框架的请求身份恢复/清理设施。不是仅注册 Bean、关闭拦截器就自动具备安全验证。若改用框架拦截器，应保持 true，并实现 resolveSession，不能沿用上面省略该方法的示例。
+配套的拦截器示例（同样放在业务配置类中；`restoreRequest`、`clearRequest` 是业务封装的方法）：
 
-ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限流也不受影响。外部框架负责身份恢复与清理；如果仍主动写入本模块的 SecurityContext，需要自己保证 finally 清理。该开关不替代外部框架自己的鉴权配置。只想换本模块拦截器 Bean 时不要关闭此开关，否则自定义 Bean 也不会被自动注册。
+```java
+import com.yulinlin.security.web.LoginInterceptor;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+@Bean
+public LoginInterceptor externalLoginInterceptor(ExternalAuth auth) {
+    return new LoginInterceptor() {
+        @Override
+        public boolean preHandle(HttpServletRequest request,
+                                 HttpServletResponse response, Object handler) throws Exception {
+            boolean accepted = false;
+            try {
+                // 校验凭证并恢复外部框架身份；拒绝时写入响应并返回 false。
+                accepted = auth.restoreRequest(request, response);
+                return accepted;
+            } finally {
+                // preHandle 返回 false 或抛异常时，不会收到自己的 afterCompletion。
+                if (!accepted) auth.clearRequest();
+            }
+        }
+
+        @Override
+        public void afterCompletion(HttpServletRequest request,
+                                    HttpServletResponse response, Object handler, Exception ex) {
+            auth.clearRequest();
+        }
+
+        @Override
+        public void afterConcurrentHandlingStarted(HttpServletRequest request,
+                                                  HttpServletResponse response, Object handler) {
+            auth.clearRequest();
+        }
+    };
+}
+```
+
+外部身份恢复必须验证真实凭证，不得信任客户端直接传入的用户 ID。若外部框架已有 Filter 完整管理请求身份，Filter 应先于 MVC 执行并在 finally 清理；自定义 LoginInterceptor 对接其已验证上下文即可，不要重复解析或重复注册同一拦截器。异步业务线程的身份传递需遵循外部框架自己的规则。
+
+ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限流不受影响。框架包装器只兜底清理 SecurityContext，外部上下文仍由上述适配或外部 Filter 负责。若不提供自定义 LoginInterceptor，则启用默认实现，此时管理器必须实现 resolveSession，不能沿用上面省略该方法的示例。
 
 ### 鉴权声明注解
 
@@ -5370,8 +5398,6 @@ yulinlin:
       - com.yulinlin.admin.rbac.domain
     log-params: false
   security:
-    auth:
-      enabled: true
     jwt:
       secret: ${ADMIN_JWT_SECRET}
       issuer: yulinlin-admin

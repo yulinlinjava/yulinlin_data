@@ -119,7 +119,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 - PostgreSQL 可用 `@JoinField(fullText=true)`、`match()` 和 `highlight()` 接入 pg_jieba 中文分词、GIN 索引与原字段高亮；其他 SQL 数据源保持 LIKE/原字段兼容语义。
 - PostgreSQL：postgresql；common/starter 按使用门面需要引入。
 - HTTP：core；反射、深克隆、JSON、日期、轻量缓存、并发与事件工具：lang。
-- 接口安全：仅加密、限流、权限协议用 `security`；登录模块二选一：`security-jwt` 纯无状态，`security-sa-token` 有状态。两者都通过 `login(userId, deviceType)` 登录、UserStore 加载用户；JWT 不提供登录存储和撤销，Sa-Token 会话管理使用其原生能力。详见[选型对比](doc/06-接口安全.md#jwt-与-sa-token-如何选择)。只改 JWT 格式用 JwtTokenCodec，其他安全框架或完整自定义实现提供唯一 ISecurityManager，详见[扩展入口](doc/06-接口安全.md#接入外部安全框架)。
+- 接口安全：仅加密、限流、权限协议用 `security`；登录模块二选一：`security-jwt` 纯无状态，`security-sa-token` 有状态。两者都通过 `login(userId, deviceType)` 登录、UserStore 加载用户；JWT 不提供登录存储和撤销，Sa-Token 会话管理使用其原生能力。详见[选型对比](doc/06-接口安全.md#jwt-与-sa-token-如何选择)。只改 JWT 格式用 JwtTokenCodec；登录拦截器有自定义 LoginInterceptor Bean 就用自定义，没有就用默认，无需开关。其他安全框架提供唯一 ISecurityManager，自管请求身份时配套提供 LoginInterceptor，详见[扩展入口](doc/06-接口安全.md#接入外部安全框架)。
 - 查询缓存完全可选：`cache-core` 承载缓存 SPI、`CacheClient` 管理入口、`Cache` 数据操作及 Key/TTL/失效模型，由 ORM core 或 Provider 传递引入；不引入具体 Provider 时 ORM 直接访问数据源，业务 API 返回空缓存。`cache-caffeine`、`cache-ehcache`、`cache-redis` 可以共存，单实现自动选择，多实现用 `yulinlin.cache.default` 指定默认。`cacheClient.getCache()` 获取默认缓存，`getCache("redis")` 人工选择，随后使用 `Cache.get/set/getOrLoad/getAll/setAll/removeAll/clear`。Redis 内置 L1 不等于独立的 caffeine 实现，详见[查询缓存](doc/08-查询缓存.md)。
 - 慢数据库监控：引入 `monitor`，访问 `/monitor/`；可通过 `yulinlin.monitor.enabled=false` 完全关闭采集与页面，页面内置账号密码验证对话框，验证结果保存在当前 Session，不依赖安全框架。
 

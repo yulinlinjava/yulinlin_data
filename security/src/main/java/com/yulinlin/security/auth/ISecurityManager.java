@@ -11,7 +11,7 @@ public interface ISecurityManager {
     /**
      * 为已经通过业务验证的用户建立登录，不验证密码或验证码。
      * 使用内置上下文时，登录成功必须设置 SecurityContext，失败不能保留旧身份；
-     * 外部安全框架适配可关闭内置拦截器并使用其自身的上下文。
+     * 外部安全框架适配可提供自定义 LoginInterceptor Bean，配合使用其自身的上下文。
      *
      * @param userId 业务验证得到的用户 ID，不是客户端未经验证的身份声明
      * @param deviceType 设备类型，例如 web、android、ios；设备类型不是认证凭证

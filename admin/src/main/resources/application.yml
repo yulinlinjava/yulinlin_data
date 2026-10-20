@@ -82,8 +82,6 @@ yulinlin:
     log: true
     alter-column-type: true
   security:
-    auth:
-      enabled: true
     jwt:
       # 必填：至少32字节随机密钥的Base64；不能使用每次启动变化的随机值。
       secret: ${ADMIN_JWT_SECRET}

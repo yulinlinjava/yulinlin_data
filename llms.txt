@@ -30,6 +30,8 @@ Schema 通过启动扫描和显式 autoSchema=true 参与；一张物理表只�
 
 JWT 是纯无状态，密钥稳定且未过期时重启后仍可验证；注销不撤销 Token。Sa-Token 使用有状态会话。登录实现二选一，业务验证后按 userId+deviceType 登录。自定义 LoginInterceptor Bean 自动替换默认实现，无 auth.enabled 开关；外部框架上下文由适配实现负责清理。
 
+接口加密：未配置任何 crypto.devices 设备密钥时不注册加解密组件，交给业务处理；JWT 密钥不触发报文加密。配置任意设备密钥后校验 unknown、key、IV；enabled=false 只表示兼容解密、响应明文，不代表卸载。无密钥时 ApiCrypto 注解不强制加密。
+
 默认只做源码/文档修改和静态阅读；除非当前任务明确授权，不执行编译、打包、单元测试、JMH、Spring YAML 属性绑定测试或 git diff --check。历史报告不代表当前改动已验证。
 
 ## 文档维护

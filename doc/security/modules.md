@@ -30,7 +30,7 @@
 </dependency>
 ```
 
-模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice、响应加密 Advice 和接口限流拦截器；多设备模式缺少 `unknown`、密钥或 CBC IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
+模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。未配置任何设备密钥时，不注册接口加解密组件，由业务自行处理；登录、权限、限流仍按各自规则工作。配置了任意设备密钥后才注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；此时缺少 `unknown`、其他已声明设备的密钥或 CBC IV 会启动失败，不生成临时密钥。启停和兼容模式见[加密接入](crypto.md#是否接管接口加解密)。
 
 鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
 

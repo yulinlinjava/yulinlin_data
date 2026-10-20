@@ -6,6 +6,7 @@
 
 ## 本页导航
 
+- [是否接管接口加解密](#是否接管接口加解密)
 - [完整主配置](#完整主配置)
 - [配置项与默认值](#配置项与默认值)
 - [接口注解](#接口注解)
@@ -16,6 +17,19 @@
 - [可选 AES-GCM](#可选-aes-gcm)
 - [手动使用](#手动使用)
 - [安全边界与限制](#安全边界与限制)
+
+## 是否接管接口加解密
+
+**不配置任何设备密钥，框架就不做接口加密解密。** 可以直接省略整个 `yulinlin.security.crypto` 配置，无需额外的关闭开关；JWT 签名密钥不属于这里的设备密钥。
+
+- `devices` 未配置、为空，或所有设备的 `key` 都为 null / 空白：不注册设备密钥管理器、设备解析器、加解密路径规则及请求/响应 Advice。
+- 没有密钥时，即使标注 `@ApiCrypto`，框架也不会读取、解密或改写正文，不附加加密响应头；请求和响应交给正常 MVC 流程，业务可自行实现加解密。
+- 不接管不等于“任意密文都能直接进入 Controller”。业务未提供解密逻辑时，JSON 转换器仍可能拒绝密文。正常 HTTP 大小限制仍由 Web 容器和业务配置负责。
+- 配置了任意一个非空设备密钥，就启用框架加解密；此时 `devices.unknown`、所有已声明设备的 key、CBC IV 和算法配置必须合法，错误配置启动时报错。
+- 配置了密钥时，`enabled=false` 仍为兼容模式：请求可明文或密文，响应明文；它不是完全关闭。
+- 登录、权限、限流不受设备密钥有无影响。业务手工创建的加密组件由业务自己管理；这里控制的是框架自动配置。配置在启动时判断，修改后需重启。
+
+密钥全部缺失会按“不接管”处理，部署时应核对环境变量和配置来源；需要强制加密的项目应确保密钥确实存在，不能只依赖 `@ApiCrypto` 注解。
 
 ## 完整主配置
 
@@ -99,7 +113,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 是否启用严格加密；关闭后注解接口接受明文或密文，响应统一明文 |
+| `enabled` | `true` | 配置设备密钥后控制严格加密；false 时注解接口接受明文或密文，响应统一明文；无密钥时不接管 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的 Spring 路径模式 |
 | `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
@@ -109,7 +123,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 | `devices.<name>.key-encoding` | `UTF8` | 默认字符密钥不需要填写；GCM 示例使用 `BASE64` |
 | `devices.<name>.iv-encoding` | `UTF8` | 默认字符 IV 不需要填写 |
 
-配置中的设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。HTTP 请求未携带设备头、设备头为空、格式异常或设备名未配置时，统一使用保留设备 `devices.unknown`。`devices` 和 `devices.unknown` 都是必填项；框架不支持外层 `algorithm`、`key`、`iv`，也不需要 `default-device` 或额外的 fallback 属性。框架不自动暴露单设备 `AesCrypto` Bean，手动操作统一使用 `DeviceCryptoManager`。
+启用框架加解密后，配置中的设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。HTTP 请求未携带设备头、设备头为空、格式异常或设备名未配置时，统一使用保留设备 `devices.unknown`。配置任意设备密钥后，`devices.unknown` 也是必填项；未配置任何密钥则完全不接管。框架不支持外层 `algorithm`、`key`、`iv`，也不需要 `default-device` 或额外的 fallback 属性。框架不自动暴露单设备 `AesCrypto` Bean；有设备密钥时手动操作统一使用 `DeviceCryptoManager`，无密钥时该管理器也不会自动注册。
 
 CBC 参数必须满足：
 
@@ -126,17 +140,18 @@ padding   = PKCS5/PKCS7
 
 ## 接口注解
 
-需要加密的业务接口使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。全局 `enabled` 控制严格加密模式，但不会删除请求解密能力：
+需要框架加密的业务接口先配置设备密钥，再使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。无密钥时不接管；有密钥时全局 `enabled` 控制严格加密模式：
 
 | 全局配置 | 接口注解 | 请求 | 响应 |
 | --- | --- | --- | --- |
-| `enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
-| `enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
-| `enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
+| 没有任何设备密钥 | 任意注解 | 框架不处理 | 框架不处理 |
+| 有密钥，`enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
+| 有密钥，`enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
+| 有密钥，`enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
 | 任意值 | 没有注解 | security 完全不处理 | 明文 |
 | 任意值 | 命中 `exclude-paths` | security 完全不处理 | 明文 |
 
-`enabled=false` 是兼容模式，不是卸载安全模块。设备密钥管理器和请求 Advice 仍会注册，key 与 IV 仍然必须配置，以便继续解密尚未升级的旧客户端；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。已经发送密文的客户端和已经切换明文的客户端可以并行迁移。
+有设备密钥时，`enabled=false` 是兼容模式，设备密钥管理器和请求 Advice 仍会注册，以便继续解密尚未升级的旧客户端；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。已经发送密文的客户端和已经切换明文的客户端可以并行迁移。完全交给业务处理时，移除所有设备密钥即可，不保留随机占位密钥。
 
 业务 JSON 接口推荐统一使用 `@PostMapping + @RequestBody`。请求 Advice 只处理 body，不加密 query 参数和 path 变量。
 

@@ -4,6 +4,8 @@ import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.crypto.AesCrypto;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
+import com.yulinlin.security.crypto.CryptoConfiguredCondition;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpInputMessage;
@@ -21,11 +23,13 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 
 @ControllerAdvice
+@Conditional(CryptoConfiguredCondition.class)
 public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
 
     private final DeviceCryptoManager cryptoManager;
     private final DeviceTypeResolver deviceTypeResolver;
     private final CryptoPathExclusions pathExclusions;
+    private final boolean configured;
     private final boolean enabled;
     private final long maxRequestBytes;
 
@@ -33,7 +37,8 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
             DeviceCryptoManager cryptoManager,
             DeviceTypeResolver deviceTypeResolver,
             SecurityCryptoProperties properties) {
-        this(cryptoManager, deviceTypeResolver, properties, new CryptoPathExclusions(properties));
+        this(cryptoManager, deviceTypeResolver, properties,
+                properties.hasDeviceKeys() ? new CryptoPathExclusions(properties) : null);
     }
 
     public CryptoRequestBodyAdvice(
@@ -44,11 +49,12 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         this.cryptoManager = cryptoManager;
         this.deviceTypeResolver = deviceTypeResolver;
         this.pathExclusions = pathExclusions;
+        this.configured = properties.hasDeviceKeys();
         this.enabled = properties.isEnabled();
-        if (properties.getMaxRequestSize() == null || properties.getMaxRequestSize().toBytes() < 0) {
+        if (configured && (properties.getMaxRequestSize() == null || properties.getMaxRequestSize().toBytes() < 0)) {
             throw new IllegalArgumentException("yulinlin.security.crypto.max-request-size must not be negative");
         }
-        this.maxRequestBytes = properties.getMaxRequestSize().toBytes();
+        this.maxRequestBytes = configured ? properties.getMaxRequestSize().toBytes() : 0;
     }
 
     @Override
@@ -56,6 +62,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
             MethodParameter methodParameter,
             Type targetType,
             Class<? extends HttpMessageConverter<?>> converterType) {
+        if (!configured) return false;
         ApiCrypto annotation = CryptoAnnotations.find(methodParameter);
         return annotation != null && !pathExclusions.isCurrentRequestExcluded();
     }
@@ -66,7 +73,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
             MethodParameter parameter,
             Type targetType,
             Class<? extends HttpMessageConverter<?>> converterType) throws IOException {
-        if (pathExclusions.isExcluded(inputMessage)) return inputMessage;
+        if (!configured || pathExclusions.isExcluded(inputMessage)) return inputMessage;
         byte[] requestBody = StreamUtils.copyToByteArray(inputMessage.getBody());
         checkSize(requestBody.length);
         ApiCrypto annotation = CryptoAnnotations.find(parameter);

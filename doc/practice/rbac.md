@@ -58,12 +58,7 @@ yulinlin:
       secret: ${ADMIN_JWT_SECRET}
       issuer: yulinlin-admin
       ttl: 2h
-    crypto:
-      enabled: false
-      devices:
-        unknown:
-          algorithm: AES/GCM/NoPadding
-          key: ${ADMIN_CRYPTO_KEY:${random.value}}
+    # 不配置 crypto.devices 密钥，框架不接管接口加解密。
     limit:
       enabled: true
       ip-header: X-Real-IP
@@ -74,7 +69,7 @@ yulinlin:
 
 RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](../datasources/routing.md)和 [Schema](../datasources/schema.md) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
-`security` 当前即使关闭加密，也需要 `unknown` 设备配置来兼容客户端密文。Admin 的基础配置使用运行时随机的 32 字符密钥，案例 Controller 标记 `@ApiCrypto(false)`，便于直接执行 JSON 请求。要与真实客户端联调加密，按[接口加密](../security/crypto.md)配置双方一致的设备密钥、启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`；随机密钥不作为客户端协议使用。报文加密不替代 HTTPS。
+Admin 默认不配置任何设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 在无密钥时也不会触发正文处理，可以直接发送普通 JSON。业务可自行提供加解密处理。要接入框架加密，按[接口加密](../security/crypto.md)配置双方一致的设备密钥（含 `unknown`）和 CBC IV，启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`。有密钥但 `enabled=false` 时仍会兼容解密，不能把它当作完全关闭。报文加密不替代 HTTPS。
 
 登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
 

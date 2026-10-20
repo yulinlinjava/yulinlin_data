@@ -23,6 +23,8 @@ public @interface ApiCrypto {
      * still decrypted; the response remains plaintext.
      * When {@code yulinlin.security.crypto.enabled=false}, both values use the
      * compatible request behavior and always return a plaintext response.
+     * Without any configured device key, the framework does not register request
+     * decryption or response encryption, regardless of this annotation's value.
      */
     boolean value() default true;
 }

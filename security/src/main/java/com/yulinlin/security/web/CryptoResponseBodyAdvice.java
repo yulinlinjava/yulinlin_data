@@ -8,6 +8,8 @@ import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.crypto.AesCrypto;
 import com.yulinlin.security.crypto.CryptoException;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
+import com.yulinlin.security.crypto.CryptoConfiguredCondition;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -23,6 +25,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 import java.nio.charset.StandardCharsets;
 
 @ControllerAdvice
+@Conditional(CryptoConfiguredCondition.class)
 public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object> {
 
     public static final String CRYPTO_HEADER = "X-Yulinlin-Crypto";
@@ -31,6 +34,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
     private final DeviceTypeResolver deviceTypeResolver;
     private final ObjectMapper objectMapper;
     private final CryptoPathExclusions pathExclusions;
+    private final boolean configured;
     private final boolean enabled;
     private final String deviceHeader;
 
@@ -39,7 +43,8 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             DeviceTypeResolver deviceTypeResolver,
             ObjectMapper objectMapper,
             SecurityCryptoProperties properties) {
-        this(cryptoManager, deviceTypeResolver, objectMapper, properties, new CryptoPathExclusions(properties));
+        this(cryptoManager, deviceTypeResolver, objectMapper, properties,
+                properties.hasDeviceKeys() ? new CryptoPathExclusions(properties) : null);
     }
 
     public CryptoResponseBodyAdvice(
@@ -52,17 +57,19 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         this.deviceTypeResolver = deviceTypeResolver;
         this.objectMapper = objectMapper;
         this.pathExclusions = pathExclusions;
+        this.configured = properties.hasDeviceKeys();
         this.enabled = properties.isEnabled();
-        if (properties.getDeviceHeader() == null || properties.getDeviceHeader().isBlank()) {
+        if (configured && (properties.getDeviceHeader() == null || properties.getDeviceHeader().isBlank())) {
             throw new IllegalArgumentException("yulinlin.security.crypto.device-header must not be blank");
         }
-        this.deviceHeader = properties.getDeviceHeader().trim();
+        this.deviceHeader = configured ? properties.getDeviceHeader().trim() : null;
     }
 
     @Override
     public boolean supports(
             MethodParameter returnType,
             Class<? extends HttpMessageConverter<?>> converterType) {
+        if (!configured) return false;
         ApiCrypto annotation = CryptoAnnotations.find(returnType);
         return enabled && annotation != null && annotation.value()
                 && !pathExclusions.isCurrentRequestExcluded();
@@ -76,7 +83,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             Class<? extends HttpMessageConverter<?>> selectedConverterType,
             ServerHttpRequest request,
             ServerHttpResponse response) {
-        if (pathExclusions.isExcluded(request)) return body;
+        if (!configured || !enabled || pathExclusions.isExcluded(request)) return body;
         boolean stringResponse = StringHttpMessageConverter.class.isAssignableFrom(selectedConverterType);
         if (!stringResponse && !isJson(selectedContentType)) {
             throw new CryptoException("@ApiCrypto response only supports JSON or String response bodies");

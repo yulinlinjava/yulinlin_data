@@ -87,14 +87,8 @@ yulinlin:
       secret: ${ADMIN_JWT_SECRET}
       issuer: yulinlin-admin
       ttl: 2h
-    # 引入 security 后需要 unknown 设备配置。默认关闭报文加密，密钥每次启动随机生成。
-    # 接入真实客户端时应设置 ADMIN_CRYPTO_KEY，并配置双方约定的设备密钥。
-    crypto:
-      enabled: false
-      devices:
-        unknown:
-          algorithm: AES/GCM/NoPadding
-          key: ${ADMIN_CRYPTO_KEY:${random.value}}
+    # 不配置 crypto.devices 密钥，框架不接管接口加解密；登录、权限和限流照常工作。
+    # 接入框架加密时，再配置双方约定的设备密钥（含 unknown）和 CBC IV。
     limit:
       enabled: true
 

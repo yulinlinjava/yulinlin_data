@@ -3847,7 +3847,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 </dependency>
 ```
 
-模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。引入后自动注册设备密钥管理器、请求解密 Advice、响应加密 Advice 和接口限流拦截器；多设备模式缺少 `unknown`、密钥或 CBC IV 时启动失败，不生成临时密钥，也不会静默退化成明文。
+模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。未配置任何设备密钥时，不注册接口加解密组件，由业务自行处理；登录、权限、限流仍按各自规则工作。配置了任意设备密钥后才注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；此时缺少 `unknown`、其他已声明设备的密钥或 CBC IV 会启动失败，不生成临时密钥。启停和兼容模式见[加密接入](#ai-security-crypto-是否接管接口加解密)。
 
 鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
 
@@ -3889,6 +3889,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 <a id="ai-security-crypto-本页导航"></a>
 ### 本页导航
 
+- [是否接管接口加解密](#ai-security-crypto-是否接管接口加解密)
 - [完整主配置](#ai-security-crypto-完整主配置)
 - [配置项与默认值](#ai-security-crypto-配置项与默认值)
 - [接口注解](#ai-security-crypto-接口注解)
@@ -3899,6 +3900,20 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 - [可选 AES-GCM](#ai-security-crypto-可选-aes-gcm)
 - [手动使用](#ai-security-crypto-手动使用)
 - [安全边界与限制](#ai-security-crypto-安全边界与限制)
+
+<a id="ai-security-crypto-是否接管接口加解密"></a>
+### 是否接管接口加解密
+
+**不配置任何设备密钥，框架就不做接口加密解密。** 可以直接省略整个 `yulinlin.security.crypto` 配置，无需额外的关闭开关；JWT 签名密钥不属于这里的设备密钥。
+
+- `devices` 未配置、为空，或所有设备的 `key` 都为 null / 空白：不注册设备密钥管理器、设备解析器、加解密路径规则及请求/响应 Advice。
+- 没有密钥时，即使标注 `@ApiCrypto`，框架也不会读取、解密或改写正文，不附加加密响应头；请求和响应交给正常 MVC 流程，业务可自行实现加解密。
+- 不接管不等于“任意密文都能直接进入 Controller”。业务未提供解密逻辑时，JSON 转换器仍可能拒绝密文。正常 HTTP 大小限制仍由 Web 容器和业务配置负责。
+- 配置了任意一个非空设备密钥，就启用框架加解密；此时 `devices.unknown`、所有已声明设备的 key、CBC IV 和算法配置必须合法，错误配置启动时报错。
+- 配置了密钥时，`enabled=false` 仍为兼容模式：请求可明文或密文，响应明文；它不是完全关闭。
+- 登录、权限、限流不受设备密钥有无影响。业务手工创建的加密组件由业务自己管理；这里控制的是框架自动配置。配置在启动时判断，修改后需重启。
+
+密钥全部缺失会按“不接管”处理，部署时应核对环境变量和配置来源；需要强制加密的项目应确保密钥确实存在，不能只依赖 `@ApiCrypto` 注解。
 
 <a id="ai-security-crypto-完整主配置"></a>
 ### 完整主配置
@@ -3984,7 +3999,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 是否启用严格加密；关闭后注解接口接受明文或密文，响应统一明文 |
+| `enabled` | `true` | 配置设备密钥后控制严格加密；false 时注解接口接受明文或密文，响应统一明文；无密钥时不接管 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的 Spring 路径模式 |
 | `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
@@ -3994,7 +4009,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 | `devices.<name>.key-encoding` | `UTF8` | 默认字符密钥不需要填写；GCM 示例使用 `BASE64` |
 | `devices.<name>.iv-encoding` | `UTF8` | 默认字符 IV 不需要填写 |
 
-配置中的设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。HTTP 请求未携带设备头、设备头为空、格式异常或设备名未配置时，统一使用保留设备 `devices.unknown`。`devices` 和 `devices.unknown` 都是必填项；框架不支持外层 `algorithm`、`key`、`iv`，也不需要 `default-device` 或额外的 fallback 属性。框架不自动暴露单设备 `AesCrypto` Bean，手动操作统一使用 `DeviceCryptoManager`。
+启用框架加解密后，配置中的设备名会去除首尾空白并转换为小写，只允许小写字母、数字、下划线和短横线，最大长度为 32。HTTP 请求未携带设备头、设备头为空、格式异常或设备名未配置时，统一使用保留设备 `devices.unknown`。配置任意设备密钥后，`devices.unknown` 也是必填项；未配置任何密钥则完全不接管。框架不支持外层 `algorithm`、`key`、`iv`，也不需要 `default-device` 或额外的 fallback 属性。框架不自动暴露单设备 `AesCrypto` Bean；有设备密钥时手动操作统一使用 `DeviceCryptoManager`，无密钥时该管理器也不会自动注册。
 
 CBC 参数必须满足：
 
@@ -4012,17 +4027,18 @@ padding   = PKCS5/PKCS7
 <a id="ai-security-crypto-接口注解"></a>
 ### 接口注解
 
-需要加密的业务接口使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。全局 `enabled` 控制严格加密模式，但不会删除请求解密能力：
+需要框架加密的业务接口先配置设备密钥，再使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。无密钥时不接管；有密钥时全局 `enabled` 控制严格加密模式：
 
 | 全局配置 | 接口注解 | 请求 | 响应 |
 | --- | --- | --- | --- |
-| `enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
-| `enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
-| `enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
+| 没有任何设备密钥 | 任意注解 | 框架不处理 | 框架不处理 |
+| 有密钥，`enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 必须传整个 JSON 加密后的 Base64 密文 | 加密 |
+| 有密钥，`enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
+| 有密钥，`enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
 | 任意值 | 没有注解 | security 完全不处理 | 明文 |
 | 任意值 | 命中 `exclude-paths` | security 完全不处理 | 明文 |
 
-`enabled=false` 是兼容模式，不是卸载安全模块。设备密钥管理器和请求 Advice 仍会注册，key 与 IV 仍然必须配置，以便继续解密尚未升级的旧客户端；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。已经发送密文的客户端和已经切换明文的客户端可以并行迁移。
+有设备密钥时，`enabled=false` 是兼容模式，设备密钥管理器和请求 Advice 仍会注册，以便继续解密尚未升级的旧客户端；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。已经发送密文的客户端和已经切换明文的客户端可以并行迁移。完全交给业务处理时，移除所有设备密钥即可，不保留随机占位密钥。
 
 业务 JSON 接口推荐统一使用 `@PostMapping + @RequestBody`。请求 Advice 只处理 body，不加密 query 参数和 path 变量。
 
@@ -6845,12 +6861,7 @@ yulinlin:
       secret: ${ADMIN_JWT_SECRET}
       issuer: yulinlin-admin
       ttl: 2h
-    crypto:
-      enabled: false
-      devices:
-        unknown:
-          algorithm: AES/GCM/NoPadding
-          key: ${ADMIN_CRYPTO_KEY:${random.value}}
+    # 不配置 crypto.devices 密钥，框架不接管接口加解密。
     limit:
       enabled: true
       ip-header: X-Real-IP
@@ -6861,7 +6872,7 @@ yulinlin:
 
 RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](#ai-datasources-routing)和 [Schema](#ai-datasources-schema) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
-`security` 当前即使关闭加密，也需要 `unknown` 设备配置来兼容客户端密文。Admin 的基础配置使用运行时随机的 32 字符密钥，案例 Controller 标记 `@ApiCrypto(false)`，便于直接执行 JSON 请求。要与真实客户端联调加密，按[接口加密](#ai-security-crypto)配置双方一致的设备密钥、启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`；随机密钥不作为客户端协议使用。报文加密不替代 HTTPS。
+Admin 默认不配置任何设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 在无密钥时也不会触发正文处理，可以直接发送普通 JSON。业务可自行提供加解密处理。要接入框架加密，按[接口加密](#ai-security-crypto)配置双方一致的设备密钥（含 `unknown`）和 CBC IV，启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`。有密钥但 `enabled=false` 时仍会兼容解密，不能把它当作完全关闭。报文加密不替代 HTTPS。
 
 登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
 

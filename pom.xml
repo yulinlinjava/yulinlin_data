@@ -6,6 +6,7 @@
     <modules>
         <module>cache-core</module>
         <module>core</module>
+        <module>data-sync</module>
         <module>cache-caffeine</module>
         <module>cache-ehcache</module>
         <module>cache-redis</module>

@@ -197,7 +197,44 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private Integer executeNow(EntitySession session, ExecuteRequest<?> request, boolean delayed) {
-        if (!isOpenTransaction()) return transaction(() -> executeNow(session, request, delayed));
+        return executeNow(session, request, delayed, false);
+    }
+
+    /**
+     * 重放已完成业务加工的写节点。仅供内部数据同步等适配器使用：
+     * 不执行 before/after，不补充业务默认值；仍参与路由事务、缓存失效及数据源日志。
+     * 调用方必须持有独立节点快照，明确指定目标组；不能传入延迟队列请求。
+     */
+    public Integer replayWrite(String targetGroup, ExecuteRequest<?> request) {
+        Objects.requireNonNull(request, "request");
+        if (targetGroup == null || targetGroup.isBlank())
+            throw new IllegalArgumentException("重放请求必须指定目标数据源");
+        if (request.isQueued()) throw new IllegalArgumentException("重放请求不能再次进入延迟队列");
+        if (request.getRequestType() != RequestType.insert && request.getRequestType() != RequestType.update
+                && request.getRequestType() != RequestType.delete)
+            throw new IllegalArgumentException("重放入口仅支持写请求");
+        request.setSession(targetGroup);
+        request.setCluster(JoinCluster.master);
+        EntitySession target = session(targetGroup, JoinCluster.master);
+        pushSession(target);
+        try {
+            return executeNow(target, request, false, true);
+        } finally {
+            popSession();
+        }
+    }
+
+    /** 独立维护事务已经提交后，清理目标实体命名空间；不用于代替普通写请求失效流程。 */
+    public void invalidateMaintenanceCache(EntitySession target, Class<?> entityClass) {
+        if (!queryCache().available()) return;
+        var namespaces = CacheNamespaceResolver.resolve(target.getClass(), target.group(), entityClass,
+                List.of(), java.util.Set.of());
+        queryCache().invalidate(namespaces);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Integer executeNow(EntitySession session, ExecuteRequest<?> request, boolean delayed, boolean replay) {
+        if (!isOpenTransaction()) return transaction(() -> executeNow(session, request, delayed, replay));
         TransactionContext context = TransactionListenerManager.currentContext();
         try {
             enlist(session);
@@ -209,6 +246,10 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
             };
             if (affected == null) return null;
+            if (replay) {
+                scheduleInvalidation(invalidation);
+                return affected;
+            }
             if (!delayed) {
                 scheduleInvalidation(invalidation);
                 return (Integer) after(session, request, affected, Integer.class);

@@ -12,6 +12,7 @@
 - 通过显式 `@JoinSync` 或 `.autoUpdate()` 在事务内按 setter 跟踪部分更新，不要求所有查询都进入持久化上下文。
 - 普通 JDBC batch 之上可选受控多连接拆分；SQLite 等不支持并发写的 Session 会主动退化为单写者。
 - 最终一致的普通小写入可显式使用 `.queue()`；播放量、点击量、热度等计数使用 `EntityCounter.update(deltaModel).submit()` 或链式 `inc/dec`，按数据源、实体和主键聚合原子更新；统计明细使用 `EntityCounter.insert(entity).submit()`，按非数字维度聚合数字后批量插入，模型数字支持大数、AtomicInteger/AtomicLong 和 Adder。
+- 可选 `data-sync` 采用轻量方案：增量正常异步同步，全量由人工调用 MySQL/PostgreSQL 补同步 API，支持主键检查点续传和中文进度。全量期间内部暂停本进程相关增量消费，但业务必须先停写并排空队列；启动只开启增量，不提供自动全量开关。内存增量队列不承诺可靠交付，不是 CDC。[使用流程与边界](doc/01-接入与数据源.md#数据源增量同步)
 - 查询缓存是可选模块：可选 Caffeine、Ehcache 或 Redis+Caffeine，支持全局及按 `table`/`group.table` 配置 TTL；Key 包含数据源与查询元数据，条件结构稳定为单字段等值查询时按条件值精确失效，出现多种或复杂条件结构后自动升级为表 namespace 整体失效。
 - 数据库优化监控是可选模块：`monitor` 聚合 SQL 平均/最大耗时并给出 P0–P4 优先级，有界保存慢操作与异常，自带登录对话框和只读 Element Plus 页面。
 - MySQL、PostgreSQL、SQLite、H2 提供显式开启的 Schema 扫描，Elasticsearch 提供同一入口的索引与基础 Mapping 初始化；只有 `autoSchema=true` 的完整实体才参与结构初始化。
@@ -91,6 +92,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 | --- | --- |
 | 复用 common 实体、PagePo 页面查询、通用 Service，并按推荐分层开发业务 | [Common 业务开发与项目最佳实践](doc/09-项目开发最佳实践.md) |
 | 选模块、连接数据库、多数据源与默认 group | [接入与数据源](doc/01-接入与数据源.md) |
+| MySQL/PostgreSQL 全量主键续传、增量同步、通配符规则与恢复 | [数据源同步](doc/01-接入与数据源.md#数据源增量同步) |
 | 实体 CRUD、自定义 SQL、统计分析、实体计数聚合、批量与事务 | [CRUD 与统计分析](doc/02-CRUD与统计分析.md) |
 | 用户角色菜单、JoinQuery、懒加载、事务自动更新 | [关联查询与代理](doc/03-关联查询与代理.md) |
 | HTTP，以及 lang 的反射、JSON、日期、缓存、并发、事件等全部工具 | [工具类](doc/04-工具类.md) |

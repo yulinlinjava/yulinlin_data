@@ -19,7 +19,7 @@
 
 先选数据库模块，再配置数据源和会话组。本文完成 Spring Boot 接入、MySQL 与 PostgreSQL 配置、SQLite/H2 本地存储，以及多数据源注册和默认组选取。
 
-阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [本地库选型](#sqliteh2-选型) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [慢数据库监控](#慢数据库监控) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
+阅读导航：[模块选择](#模块选择) · [MySQL](#mysql-接入) · [SQLite](#sqlite-接入) · [H2](#h2-接入) · [本地库选型](#sqliteh2-选型) · [PostgreSQL](#postgresql-接入) · [多数据源](#多数据源注册) · [增量同步](#数据源增量同步) · [慢数据库监控](#慢数据库监控) · [默认会话组](#默认会话组) · [配置速查](#配置速查)
 
 适用版本：JDK 25、Spring Boot 3.5.16、制品 3.0。本文于 2026-10-06 核对仓库源码；本地库 JMH、JDK 25 编译和 Schema 定向测试已执行。这里是自定义 ORM，不是 MyBatis-Plus、JPA 或 Spring Data。
 
@@ -35,6 +35,7 @@
 | 反射、深克隆、JSON | lang |
 | JSON 接口请求/响应加密 | security；需要 Spring MVC，独立于 ORM 数据库模块 |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
+| 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
 | 可选查询缓存 | 单机内存用 cache-caffeine，本地磁盘持久化用 cache-ehcache，共享 Redis 用 cache-redis；三选一 |
 | 实体基类、Model Wrapper、树和 ID | common |
@@ -690,6 +691,209 @@ public class MixedSessionConfig {
 MySQL 与 SQLite 共存时，保留原主库配置即可，SQLite 使用内部池和独立 sqlite 组。多个主 DataSource 没有唯一候选时，全部会话显式创建，不任意猜测。
 
 使用容器管理的 JdbcSessionFactory：`create(...)` 返回前已初始化编码器、解析器、代理服务、日志、配置、group 和缓存；未引入缓存实现时使用空缓存，不影响启动。RouteSession 注册时只登记节点，不再补充或覆盖 Session 配置；过滤器只由 RouteSession 执行。不要把手动 `new JdbcSessionFactory(...)` 当成已完成容器注入的工厂。`create(DataSourceProperties, group)` 会新建池，资源所有者仍须负责关闭，不自动等价于独立 DataSource Bean。
+
+### 数据源增量同步
+
+`data-sync` 是可选模块。增量模式把经过框架 RouteSession 的写请求，在源事务提交成功后异步重放到目标组；复用 `INode`，不把 MySQL SQL 原文发送给 PostgreSQL。另提供 MySQL/PostgreSQL 全量 API，按主键分页复制，并在目标库保存检查点。
+
+当前采用**轻量同步：日常增量正常运行，全量只在人工维护时调用**。启动只校验数据源组并启动增量消费，不扫描实体或执行全量。内部暂停的是增量消费者，不是业务接口或数据库写权限；全量前必须由业务停写，不能把暂停消费当作不停写同步方案。
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>data-sync</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+先按上文注册 MySQL、PostgreSQL 两个数据源。`source` / `target` 是框架注册的 **group**，不是 Spring DataSource Bean 名；规则内未注册组会阻止同步模块启动。业务表需通过原有 Schema 配置或迁移脚本准备；全量 API 只自动创建自身的进度表。
+
+```yaml
+yulinlin:
+  sync:
+    enabled: true                  # 默认 false；不引入模块或关闭时不注册同步过滤器
+    capacity: 10000                # 每条规则最多保留的写节点数，不是字节数
+    full-batch-size: 1000           # 全量 API 每批读取/提交条数，1～10000；与增量 capacity 无关
+    rules:
+      - name: video-search         # 可省略，默认 mysql->postgresql
+        source: mysql
+        target: postgresql
+        entities:
+          - com.example.video.VideoEntity
+          - com.example.video.CommentEntity
+```
+
+#### 全量 API：自动读取主键进度
+
+完成下面的停写、排空步骤后，注入 `com.yulinlin.sync.DataSyncClient` 调用；无需自己查询最后一条记录或记录主键。人工 API 不要求实体命中增量 `entities`，调用方显式传入实体类，并自行确认权限和迁移范围：
+
+```java
+import com.yulinlin.sync.DataSyncClient;
+import com.yulinlin.sync.SyncResult;
+import org.springframework.stereotype.Service;
+
+@Service
+public class VideoSyncService {
+    private final DataSyncClient dataSyncClient;
+
+    public VideoSyncService(DataSyncClient dataSyncClient) {
+        this.dataSyncClient = dataSyncClient;
+    }
+
+    // 前提：已停写、在途事务结束、相关增量队列排空。
+    // 不加 @Transactional；人工触发后台维护任务，方法阻塞到完成或失败。
+    public SyncResult syncVideos() {
+        return dataSyncClient.sync("mysql", "postgresql", VideoEntity.class);
+    }
+
+    // 明确开启新一轮：从头复制，但不清空目标表。
+    public SyncResult restartVideos() {
+        return dataSyncClient.restart("mysql", "postgresql", VideoEntity.class);
+    }
+}
+```
+
+仅用人工 API 时可以不配置增量规则：
+
+```yaml
+yulinlin:
+  sync:
+    enabled: true
+    full-batch-size: 1000
+    rules: []
+```
+
+| 调用 / 状态 | 行为 |
+| --- | --- |
+| 首次 `sync(source, target, class)` | 主键升序，从第一批开始 |
+| 中断或失败后再次 `sync(...)` | 保持停写且源数据未变化时，从 `主键 > 最后成功主键` 继续，不使用 OFFSET；若已恢复写入，先核对是否需 `restart` |
+| 已完成后再次 `sync(...)` | 返回已有完成结果，本次复制数为 0；不会自动追加源库新增数据 |
+| `restart(...)` | 新任务 ID、清零该任务进度，从头按主键新增或覆盖；不删除目标额外数据 |
+| 映射、主键结构或实际连接指纹变化 | 拒绝沿用旧进度，核对后使用 `restart` |
+| 检测到全量期间源写入 | 暂停相关增量规则，全量进度标记 `RESTART_REQUIRED`；停写、人工修复并排空规则后 `restart`，不能直接续传 |
+
+`SyncResult` 返回 `taskId/source/target/entity/status/lastPrimaryKey/completedRows/rowsThisRun/batchesThisRun/elapsedMillis`。`completedRows` 是本轮累计复制的源行数，`rowsThisRun` 是这次调用确认提交的源行数，不是数据库 UPDATE 的 changed-rows；覆盖相同值也计入复制数。失败会抛异常，并保留可恢复的检查点。
+
+**主键与字段要求：**
+
+- 使用完整单表 `@JoinTable` 实体，主键声明 `@JoinMeta(primaryKey = true)`，且与两端实际单列主键一致；不要求实体 `autoSchema=true`。
+- 主键支持 `String`、byte/short/int/long 及其包装类、`BigInteger`；不支持复合主键、浮点主键、UUID Java 类型。主键不能为空，需保持稳定；字符串按源数据库排序，不执行数字“+1”。
+- 复制实体声明的持久化字段，包括 `null`、`update=false`、ID 和时间；跳过 `exist=false`、计算字段、关联加载字段。使用源 CoderManager 解码、目标 CoderManager 编码，复用对应 Session 的值读取/绑定策略。
+- 拒绝聚合投影和 JoinTableList 联表实体。不经过业务过滤器、代理、自动补时间或增量回放；不能依赖租户过滤器限制迁移范围，也不支持动态分表。应由有权限的维护代码调用，模块不公开 HTTP 管理接口。
+- 仅支持 MySQL/PostgreSQL。目标 MySQL 业务表与进度表必须是 InnoDB；触发器、生成列、自增序列、额外唯一约束、字段范围和排序规则需人工确认。复制显式主键不会自动调整 PostgreSQL sequence；序列型主键后续插入前应自行校准。
+
+**进度、事务和日志：**
+
+进度存入目标连接默认库/schema 的 `yulinlin_sync_progress`，任务按源 group + 目标 group + 实体类区分；每个任务只保存最新一轮进度，不保存所有历史轮次。需要该表的建表和读写权限，业务表需 SELECT/INSERT/UPDATE 权限。每批数据和检查点使用同一目标连接提交，失败回滚本批；已提交批次不回滚。目标按主键区分 INSERT/UPDATE，不使用 MySQL 任意唯一键冲突覆盖。每批提交后主动清理目标实体缓存。
+
+运行全量时持有源、目标各一个维护连接；目标事务按批提交，不使用多连接批处理。相同任务通过目标库会话锁防止重复运行。进程异常退出后可续传，连接断开后的锁释放以数据库为准；持久化 RUNNING 不代表仍有工作线程。不要同时用不同 group 别名/不同实体启动对同一物理表的全量任务。
+
+日志示例（数值仅示意）：
+
+```text
+全量同步开始 源=mysql 目标=postgresql 实体=com.example.VideoEntity 任务=... 每批=1000 恢复主键=2000 累计完成=2000
+全量同步进度 源=mysql 目标=postgresql 实体=com.example.VideoEntity 本批=1000 本次完成=1000 累计完成=3000 最后成功主键=3000 本批耗时=120ms
+全量同步完成 源=mysql 目标=postgresql 实体=com.example.VideoEntity 本次完成=1000 累计完成=3000 批次=1 总耗时=135ms
+```
+
+不预先 COUNT 全表，所以不提供百分比。异常日志提示排查和续传；提交确认异常时，以目标进度表实际值为准，不用旧内存游标覆盖已提交进度。
+
+#### 人工全量流程：业务停写，内部暂停增量
+
+按下面的顺序操作，无需业务再写一套暂停/恢复增量消费者的代码：
+
+1. **业务停写**：关闭相关源/目标业务写入口，覆盖所有应用实例、定时任务及其他程序的写入。先停止产生新任务，再让 EntityCounter、`.queue()` 和在途事务处理完；不能只暂停 HTTP 接口。
+2. **排空增量**：保持增量消费正常运行，等待提交后的同步任务完成。用 `syncManager.statuses()` 核对写向本次目标组的规则无积压、无错误。不要先关闭整个同步模块，否则不能排空。
+3. **人工调用**：在业务事务之外调用 `sync(source, target, class)`，需要重新覆盖全部历史数据时调用 `restart(...)`。API 会再次检查规则是否空闲；尚在执行、积压、已暂停或被其他全量占用时直接报错，不自动等待、不丢弃任务。状态计数只是观察入口，最终以 API 检查为准。
+4. **内部暂停**：检查通过后，本进程所有写向该目标 group 的增量规则进入维护保护，不再调度消费；不只是当前实体或当前源组。随后逐批复制，业务行与检查点同批提交。
+5. **完成并恢复**：API 正常返回时释放内部维护保护，未处于错误暂停状态的规则恢复正常调度。核对结果、日志和规则状态后，再由业务恢复写入。正常全量完成不需要调用 `resumeAfterRepair`。
+
+**内部暂停不等于业务停写。** 不会拦截用户请求、不撤销源事务，也不会停止其他应用实例、原生 SQL 或数据库客户端的修改。若其他源组的规则也写向这个目标 group，同样需要协调它们的停写。目标读取未被禁止，但全量按批提交，期间可能看到部分新、部分旧的数据，不能把它当作整表原子切换。
+
+| 情况 | 内部处理 | 业务操作 |
+| --- | --- | --- |
+| 全量正常完成 | 释放维护保护，正常规则恢复调度 | 核对后恢复写入 |
+| 普通读取/写入失败，没有源写入冲突 | 回滚未提交批次，保留已提交进度；退出时释放维护保护，正常规则可再次调度 | 保持停写，排查后续传；不能因为消费者已恢复就认定全量成功 |
+| 全量期间检测到匹配规则的源写入或提交 | 标记冲突、暂停相关增量规则；全量任务处理中检测到冲突会中止并记录需要重做 | 保持停写，人工核对、修复和处理积压，再 `restart`；不要盲目重放 inc/dec |
+| 进程退出 | 全量检查点已落在目标库；内存增量任务和运行状态不保证保留 | 重启后先确认数据及缺口，不把“队列空了”当作已同步成功 |
+
+失败恢复期间也需保持停写；如果期间已恢复写入，旧游标之前的数据可能变化，需要核对并重新全量。全量不会删除目标额外记录，漏同步的删除仍需人工清理。正常匹配规则之外、其他进程或原生 SQL 的修改可能检测不到，因此这**不是不停机快照与 CDC 无缝衔接**。
+
+启动自动全量及其扩展入口已移除；升级时删除旧配置中的 `rules[].full`，不再填写 true/false。`full-batch-size` 仍保留，用于人工全量 API 每批读取/提交数量，不是自动全量开关。
+
+#### 实体通配符
+
+`entities` 按写请求 `fromClass.getName()` 匹配并按类缓存结果；增量模式不扫描实体包。表达式是 Java 完整类名，不是表名：
+
+| 表达式 | 含义 |
+| --- | --- |
+| `com.example.video.VideoEntity` | 指定类 |
+| `com.example.video.*` | 当前包内的类，不跨包 |
+| `com.example.video.**` | 当前包及子包内的类 |
+| `com.example.*.entity.**` | 中间一级包通配，entity 下递归 |
+| `com.example.video.*Entity` | 当前包下以 Entity 结尾的类 |
+
+`**` 必须独占一个包段；多个表达式命中同一类只生成一个规则任务。不同规则可以分别转发到不同目标。规则名称不能重复，同一 source/target 应合并在一条规则内；entities 为空、源目标相同、capacity 非正数均启动报错。实体来自继承父类、DTO 或业务投影时，匹配的仍是本次请求的实际 fromClass，不会自动改成其父类。
+
+#### 执行语义
+
+1. 业务通过 Model/Request 正常写入，无须改每个调用点。
+2. RouteSession 的 `before` 已确定最终源组、表名和节点；实际写后过滤器生成独立快照，不保留业务 root。事务回滚会丢弃提交回调。
+3. 最外层提交成功后立即尝试入队，不等待凑批。每条规则只有一个顺序消费者，不同规则可并发。
+4. 目标通过 `RouteSession.replayWrite` 直接重放已准备节点：保留源 ID/字段值，跳过业务 before/after 过滤器，不再次补 ID/默认时间，不递归产生同步任务。目标事务、缓存失效和 SQL 日志仍然生效。
+
+目标的租户隔离、改表名等业务过滤器也不会执行，因此只向明确授权、结构映射兼容的目标组同步。两个数据源应使用相容的字段映射与命名规则，不能借目标过滤器重新改写源表名。目标缓存失效默认跟随其配置，请求显式 clearCache 值会保留。
+
+| 写入类型 | 第一版行为 |
+| --- | --- |
+| 插入 | 重放相同 ID/值，不是 upsert；目标有重复主键时正常报错并暂停 |
+| 任意条件更新/删除 | 重放相同条件与字段节点，包括 inc/dec；影响行数为 0 也可以重放 |
+| 批量操作 | 一个任务携带原请求的节点集合与 batch 选项；容量按节点数计 |
+| `.queue()` | 排队时不捕获，后台实际执行、事务提交后才入同步队列 |
+| EntityCounter | 捕获聚合后实际执行的写请求，不捕获每一次 submit |
+| 懒同步代理 | 代理在提交阶段实际刷出的框架写请求也登记同步任务 |
+| 自定义 SQL / fromClass=null 或 Object.class | 不自动同步 |
+| 混入原始 Expression、第三方自定义节点 | 不静默复制：快照失败，规则暂停并报告可能缺口 |
+
+节点结构由模块独立复制，普通字段值复用 lang 深克隆；无需实体实现 Serializable。日期、集合、Map、原子数字等沿用深克隆能力。无法深克隆的自定义值（例如当前不支持的 record 或没有适用构造器的 Bean）会报告失败，不会共享可变引用冒充快照。同步目标不执行对象生命周期钩子，节点中的源字段值才是同步内容。
+
+#### 状态与人工恢复
+
+通过注入 `com.yulinlin.sync.SyncManager` 查看状态，不提供管理页面或 HTTP 管理端点：
+
+```java
+// 方法体片段，syncManager 由 Spring 注入。
+List<SyncStatus> statuses = syncManager.statuses();
+```
+
+状态包含规则、源/目标、STARTING/RUNNING/FULL_SYNC/PAUSED/CLOSED、待处理任务数/节点数、完成任务数、拒绝请求数、失败任务 ID、最近错误及 `requiresRepair`。RUNNING 表示规则启用，不代表此刻正在执行 SQL；没有任务时不会创建轮询线程。该接口展示增量规则，不列出进度表中的全部全量任务。
+
+- 目标执行失败或任务确认失败：保留队列头，暂停规则，不自动重试、不让后续任务越过。其他规则不受影响。
+- 暂停期间仍可接收新任务，达到容量后拒绝并记录缺口。执行中和失败头任务也占容量；单个请求超过容量同样拒绝。
+- 源提交后的队列满、存储失败不会回滚源事务，也不使业务“自动重试插入”；模块输出中文 ERROR 并更新状态。快照失败也会暂停并标记可能缺口，即便之后源事务回滚，该告警也不会自动解除。
+- `requiresRepair=false` **不表示目标一定没提交**。执行报错也可能需要人工确认，尤其是 inc/dec 和提交结果不确定的情况。
+
+人工确认数据已修复、重试不会重复执行后才调用：
+
+```java
+syncManager.resumeAfterRepair("video-search", false); // 保留并重试头任务
+// 二选一：确认失败头任务已在目标提交，或已经人工补齐其影响：
+syncManager.resumeAfterRepair("video-search", true);  // 丢弃该失败头任务，继续后续任务
+```
+
+`true` 只允许存在失败任务 ID 时使用，不会把“队列满”的正常头任务随意丢弃。调用表示用户已经核对并修复全部缺口，不是自动修复或自动对账。暂停不自动冻结源库；修复期间宜暂停相关源写入。
+
+#### 一致性与第一版边界
+
+- 这叫**请求级单向增量同步**，不是 CDC/数据库复制。只捕获 RouteSession 写入，不捕获数据库客户端、触发器、原生 JDBC 或其他应用直接改库。
+- 增量本身不补历史；可在停写窗口用全量 API 准备初始数据。相同条件在不同库可能命中不同记录，受初始数据、同步延迟、比较规则、排序和时间表达式影响。
+- 每条规则仅保证任务入队顺序，不保证源端并发事务内部的执行顺序。一个源事务中的多次请求是多个目标事务，不保证跨请求原子性；目标再次被其他业务修改也可能产生差异。
+- 内置存储是进程内有界队列；源提交到入队之间、进程崩溃和关闭时都可能丢任务，没有持久化历史、exactly-once 或跨库回滚保证。capacity 限制节点数，不限制单个字段字节数，也不覆盖提交前事务持有的快照。
+- 关闭只停止接收/调度，不强行打断正在执行的目标事务；剩余内存任务记录警告，不承诺排空。重新启动不会自动恢复失败状态与积压，需人工对账。
+- 不做双向冲突处理，也不做级联转发：A→B 的重放不会触发 B→C。需要多个目标时直接配置 A→B、A→C。
+- 全量是按实体主键复制/覆盖，不删除目标额外记录，不是完整数据库备份；只提供人工 API，不提供启动自动全量、创建时间筛选、在线一致性快照或自动对账。全量检查点不等于增量队列具备持久化可靠性。
+
+新增模块本轮仅完成代码和静态核对，回归测试源码位于 admin 测试目录，按要求未编译、未运行测试；尚未验证真实 MySQL/PostgreSQL 服务端组合。
 
 ### 默认会话组
 

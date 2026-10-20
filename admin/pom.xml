@@ -82,6 +82,12 @@
         <!-- 各模块的回归测试统一放在 admin；以下依赖不进入正式运行环境。 -->
         <dependency>
             <groupId>com.yulinlin</groupId>
+            <artifactId>data-sync</artifactId>
+            <version>${yulinlin.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
             <artifactId>cache-caffeine</artifactId>
             <version>${yulinlin.version}</version>
             <scope>test</scope>

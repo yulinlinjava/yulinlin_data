@@ -126,6 +126,62 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         statement.setObject(index, value);
     }
 
+    @FunctionalInterface
+    public interface MaintenanceWork<T> {
+        T apply(Connection connection) throws Exception;
+    }
+
+    /**
+     * 数据迁移等基础设施专用独立连接，不参加业务事务。回调自行确定批次提交边界；
+     * 退出时回滚未提交内容并恢复连接状态，不向业务暴露 DataSource。
+     */
+    public <T> T withMaintenanceConnection(MaintenanceWork<T> work) throws Exception {
+        if (isOpenTransaction()
+                || com.yulinlin.data.core.transaction.TransactionListenerManager.currentContext() != null
+                || org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("数据维护操作不能在业务事务中执行");
+        try (Connection connection = dataSource.getConnection()) {
+            boolean auto = connection.getAutoCommit();
+            Throwable failure = null;
+            try {
+                return work.apply(connection);
+            } catch (Exception | Error error) {
+                failure = error;
+                throw error;
+            } finally {
+                try {
+                    if (!connection.isClosed()) {
+                        if (!connection.getAutoCommit()) connection.rollback();
+                        if (connection.getAutoCommit() != auto) connection.setAutoCommit(auto);
+                    }
+                } catch (SQLException cleanup) {
+                    // 回滚失败后禁止切换自动提交，避免意外提交未完成批次。
+                    try { connection.abort(Runnable::run); }
+                    catch (SQLException abort) { cleanup.addSuppressed(abort); }
+                    if (failure != null) failure.addSuppressed(cleanup);
+                    else throw cleanup;
+                }
+            }
+        }
+    }
+
+    /** 维护工具复用数据库专属读取/绑定策略，避免绕过时间和布尔值适配。 */
+    public Object readMaintenanceValue(ResultSet rows, String label, int type) throws SQLException {
+        return readColumn(rows, label, type);
+    }
+
+    public void bindMaintenanceValue(PreparedStatement statement, int index, Object value) throws SQLException {
+        bindValue(statement, index, value);
+    }
+
+    public String maintenanceColumnName(java.lang.reflect.Field field) {
+        var mapping = com.yulinlin.data.lang.reflection.AnnotationUtil.findAnnotation(
+                field, com.yulinlin.data.core.anno.JoinField.class);
+        String name = mapping != null && !mapping.name().isEmpty() ? mapping.name() : field.getName();
+        return isMapUnderscoreToCamelCase()
+                ? com.yulinlin.data.lang.util.StringUtil.javaToColumn(name) : name;
+    }
+
 
 
 

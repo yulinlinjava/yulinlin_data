@@ -57,10 +57,14 @@
 | 自动计数聚合（例如多次 `+1` 合成 `+N`） | 高：业务自行维护计数器、调度、失败恢复和批量 SQL | 高：事务 Flush 不跨请求，仍需业务实现聚合任务 | 低：`EntityCounter` 支持按主键聚合更新、按非数字维度聚合插入，按时间或阈值刷新 |
 | 自动建表、索引与结构校验 | 高：通常维护 DDL 或接入迁移工具 | 低到中：Hibernate Schema 能力 | 低：Schema 扫描、`@JoinIndex` 和 CREATE/VALIDATE 安全子集 |
 | 慢操作聚合和查看页面 | 中高：另接监控组件 | 中高：另接 Statistics/Micrometer 与页面 | 低：引入 `monitor`，使用内置只读页面 |
-| MySQL/PostgreSQL 到 ES 的可靠同步 | 高：Outbox/MQ 自行实现 | 中：Hibernate Search 可降低 ORM 实体索引同步成本 | 高：当前仍需 Outbox/MQ；统一查询 API 不等于跨系统事务 |
+| 框架内跨数据源轻量增量同步 | 高：需自行监听变化、适配目标写入和异步队列，或接入同步工具 | 中高：关系库到 ES 可接 Hibernate Search；通用跨库同步仍需另做 | 低：引入 `data-sync`，配置 source/target/entities，提交后重放框架写请求；有界内存队列、失败暂停 |
+| MySQL/PostgreSQL 人工全量补同步与续传 | 高：自行分页、目标写入、保存进度和恢复 | 高：通用关系库间补同步仍需自行实现；索引重建不等于跨库迁移 | 低：`sync(source,target,class)` 自动读取主键进度，`restart(...)` 从头覆盖；业务停写，内部暂停相关增量消费 |
+| 崩溃可恢复的可靠同步（含关系库到 ES） | 高：另接 CDC，或实现事务 Outbox、消费与重试 | 中高：ORM 实体到 ES 可接 Hibernate Search outbox-polling，仍需额外依赖、配置和运维 | 高：当前轻量队列不保证可靠交付，仍需 CDC 或事务 Outbox 等额外机制；不是已经内置的能力 |
 | 多节点共享缓存 | 需 Redis/广播等外部能力 | 需 Redis/广播等外部能力 | 内置 `cache-redis`；关闭其 Caffeine L1 后所有节点直接读取 Redis |
 
 JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分；但 Hibernate Search 不是 JPA 查询语法的延续。接入后仍需学习 `@Indexed`、`@FullTextField`、`SearchSession`、Predicate/Projection/Highlight DSL、Analyzer 和索引生命周期，因此属于复杂扩展，而不是“引入即用”的简单扩展。yulinlin-data 的数据库、搜索和缓存也是按需模块，但模块继续复用原实体和查询 API，所以按简单扩展计算。
+
+同步成本要区分“已有功能”和“可靠性保障”：`data-sync` 已提供跨 group 的轻量增量入口，目标使用自身解析器，因此不应再把所有同步都写成必须自行实现 Outbox/MQ。ES 作为增量目标时仍受其节点解析、字段映射和写入语义限制，不能据此宣称所有 SQL 条件均已兼容；当前人工全量只支持 MySQL/PostgreSQL，不包含 ES。以上同步实现尚未完成真实服务端组合验证。若要求源提交与事件持久化原子完成、崩溃恢复、可靠重试，则属于另外一档成本；Hibernate Search 的 [outbox-polling](https://docs.jboss.org/hibernate/stable/search/reference/en-US/html_single/#coordination-outbox-polling) 是这类 ORM 索引同步扩展，不能与普通提交后异步通知混为一谈。
 
 ### 开发效率参考分
 
@@ -80,7 +84,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 
 这个分数针对“多数据库 + 搜索 + 缓存 + 延迟写入”的复杂新系统。若只是单 MySQL CRUD，MyBatis-Plus 和 JPA 的开发效率会明显提高；若项目以复杂领域对象图为核心，JPA 的关系与实体生命周期模型更完整；若项目要逐条控制历史 SQL，MyBatis-Plus 更直接。
 
-从快速交付上述视频网站的角度，推荐先用 MySQL 承载用户、会员、订单和支付，用 PostgreSQL + pg_jieba 承载视频内容与常用全文检索，用 Caffeine 做单机查询加速；确实需要模糊纠错、搜索建议、复杂评分、水平扩展、向量或语义检索时，再引入 Elasticsearch。yulinlin-data 能保持 `match()`、`highlight()` 等业务调用不变，但关系库到 ES 的可靠同步仍需独立设计。
+从快速交付上述视频网站的角度，推荐先用 MySQL 承载用户、会员、订单和支付，用 PostgreSQL + pg_jieba 承载视频内容与常用全文检索，用 Caffeine 做单机查询加速；确实需要模糊纠错、搜索建议、复杂评分、水平扩展、向量或语义检索时，再引入 Elasticsearch。yulinlin-data 能保持 `match()`、`highlight()` 等业务调用不变，并已提供 `data-sync` 轻量增量同步和 MySQL/PostgreSQL 人工全量续传；只有要求崩溃可恢复等可靠交付保障时，才需要进一步接入 CDC 或事务 Outbox 等机制。不要把“有轻量同步”表述成“已有可靠数据库复制”。
 
 能力边界必须明确：yulinlin-data 的跨库提交是本地事务协调，不是 XA/2PC；自动 Schema 默认不改列类型，MySQL/PostgreSQL/H2 可在人工确认并备份后显式开启 `alter-column-type`，不负责字段改名、删列和跨列数据搬迁；自动更新要求有效路由事务，回滚不会恢复 Java 对象的内存值；原始 SQL 不会自动翻译为其他方言；本地缓存不自动解决多应用节点一致性。
 

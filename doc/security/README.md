@@ -2,26 +2,27 @@
 
 [返回文档首页](../README.md)
 
-按需接入登录、权限、加密、限流；JWT 与 Sa-Token 二选一。
+按需接入登录、权限、加密、限流；JWT、Sa-Token 或现有 Spring Security 选择一种适配。
 
 ## 按需阅读
 
 | 小专题 | 解决什么问题 |
 | --- | --- |
-| [安全模块选型](modules.md) | 仅需加密限流用 security；登录选择 JWT 或 Sa-Token。 |
+| [安全模块选型](modules.md) | 仅需加密限流用 security；选择一种登录实现或现有认证适配。 |
 | [接口加密与前端对接](crypto.md) | 完整配置、多设备、CBC/GCM、明密文兼容和安全边界。 |
 | [限流与 IP 黑名单](rate-limit.md) | 注解限流、业务黑名单和 Nginx 可信真实 IP。 |
-| [用户模型与安全管理器](user.md) | IUserDetails、UserStore、安全协议与扩展入口。 |
+| [用户模型与安全管理器](user.md) | 统一 loginByUsername；IUserDetails、UserAuthenticator、UserStore 的分工与扩展。 |
 | [无状态 JWT 登录](jwt.md) | 最小接入和请求身份恢复；注销不会撤销已发出的 JWT。 |
 | [自定义 Token 生成与解析](token-codec.md) | 替换 JwtTokenCodec，统一生成与解析协议。 |
 | [自定义安全实现与拦截器](extension.md) | 有 LoginInterceptor Bean 就使用用户实现，否则自动提供默认实现。 |
-| [有状态 Sa-Token 登录](sa-token.md) | 使用原生会话能力；存储、注销与 JWT 的区别。 |
+| [有状态 Sa-Token 登录](sa-token.md) | 保留 StpUtil.login/logout，自动桥接上下文；原生请求头/Cookie 和会话存储。 |
+| [Spring Security 接入](spring.md) | 保留原流程或 loginByUsername 账号密码登录；统一用户上下文、角色权限与自定义 principal 映射。 |
 | [登录上下文生命周期](context.md) | 线程身份恢复、请求结束清理与异步边界。 |
 | [登录、角色与权限注解](authorization.md) | ApiLogin、ApiRole、ApiPerm、ApiPublic 和默认匿名行为。 |
 
 ## 建议顺序
 
-- 登录：选型 → [用户模型](user.md) → [JWT](jwt.md) 或 [Sa-Token](sa-token.md) → [请求上下文](context.md) → [权限注解](authorization.md)。
+- 登录：选型 → [用户模型](user.md) → [JWT](jwt.md)、[Sa-Token](sa-token.md) 或 [Spring Security](spring.md) → [请求上下文](context.md) → [权限注解](authorization.md)。
 - 只需要加密或限流：直接阅读[加密](crypto.md)或[限流](rate-limit.md)，不必接入登录实现。
 - 替换行为：按需求阅读 [Token 编解码](token-codec.md)或[管理器与拦截器扩展](extension.md)。
 

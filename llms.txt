@@ -13,9 +13,9 @@ JDK 25、Spring Boot 3.5.16、制品 3.0 的自定义 ORM 和工具库。不是 
 - 关联与自动更新：[JoinQuery](doc/relations/query.md)、[懒加载](doc/relations/lazy.md)、[事务](doc/relations/transactions.md)、[代理更新](doc/relations/auto-update.md)。
 - 批量和同步：[批量](doc/write-sync/batch.md)、[队列](doc/write-sync/queue.md)、[EntityCounter](doc/write-sync/counter.md)、[增量](doc/write-sync/incremental.md)、[人工全量续传](doc/write-sync/full.md)。
 - 缓存：[配置](doc/cache/config.md)、[查询 API](doc/cache/query.md)、[业务 API](doc/cache/client.md)、[失效语义](doc/cache/invalidation.md)、[各实现目录](doc/cache/README.md)。
-- 安全：[选型](doc/security/modules.md)、[用户模型](doc/security/user.md)、[JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[上下文](doc/security/context.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md)。
+- 安全：[选型](doc/security/modules.md)、[用户模型](doc/security/user.md)、[JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[Spring Security](doc/security/spring.md)、[上下文](doc/security/context.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md)。
 - 安全扩展：[JwtTokenCodec](doc/security/token-codec.md)、[管理器和 LoginInterceptor](doc/security/extension.md)。
-- 工具：[HTTP](doc/tools/http.md)、[反射与克隆](doc/tools/reflection.md)、[其他工具目录](doc/tools/README.md)。
+- 工具：[HTTP](doc/tools/http.md)、[HTTP 执行器规范与替换](doc/tools/http-executor.md)、[反射与克隆](doc/tools/reflection.md)、[其他工具目录](doc/tools/README.md)。
 - 业务开发：[公共实体/PagePo/R](doc/practice/models.md)、[通用 Service](doc/practice/service.md)、[完整 CRUD](doc/practice/crud-example.md)、[Admin RBAC](doc/practice/rbac.md)、[规范](doc/practice/conventions.md)。
 - 运维：[日志](doc/operations/sql-log.md)、[慢操作监控](doc/operations/monitor.md)、[本地库性能报告](doc/operations/local-benchmark.md)。
 - 框架维护先读：[组件职责](doc/internal/architecture.md)、[执行链](doc/internal/execution.md)、[事务连接资源](doc/internal/transactions.md)、[维护约定](doc/internal/maintenance.md)；新增数据源再读[扩展流程](doc/internal/extension.md)与[JDBC 示例](doc/internal/jdbc.md)。
@@ -28,7 +28,9 @@ Schema 通过启动扫描和显式 autoSchema=true 参与；一张物理表只�
 
 多库/多连接事务是本地协调，不是分布式原子提交。代理遵循路由事务和原线程。全量同步要求业务停写并排空队列，内存增量同步不保证可靠交付。缓存失效、序列化和跨节点语义按缓存专题，不把业务缓存与 ORM namespace 混用。
 
-JWT 是纯无状态，密钥稳定且未过期时重启后仍可验证；注销不撤销 Token。Sa-Token 使用有状态会话。登录实现二选一，业务验证后按 userId+deviceType 登录。自定义 LoginInterceptor Bean 自动替换默认实现，无 auth.enabled 开关；外部框架上下文由适配实现负责清理。
+三个登录模块统一公开 loginByUsername(username,password[,deviceType])，设备默认 default；ISecurityManager/SecurityUtil 及内置实现已移除 login(userId[,deviceType])。JWT/Sa-Token 通过业务 UserAuthenticator Bean 校验账号密码，返回安全 IUserDetails 后内部使用真实 userId 建立登录；UserStore 负责后续用户恢复，不负责密码校验。JWT 纯无状态，注销不撤销 Token；Sa-Token 有状态，原生 StpUtil.login/logout 兼容不变。security-spring 使用 AuthenticationManager Bean，SpringUserMapper 映射用户，默认 Session 登录 getToken 为 null。三个登录模块只选一个。自定义 LoginInterceptor Bean 自动替换默认实现，无 auth.enabled 开关；外部上下文由原体系清理。
+
+UserAuthenticator.authenticate 按 username 校验账号密码；UserStore.load 按稳定 userId 恢复用户，不改为按用户名加载。两个接口可由一个业务 Bean 实现，admin 的 AdminAuthenticationService 已合并实现，避免重复注册。
 
 接口加密：未配置任何 crypto.devices 设备密钥时不注册加解密组件，交给业务处理；JWT 密钥不触发报文加密。配置任意设备密钥后校验 unknown、key、IV；enabled=false 只表示兼容解密、响应明文，不代表卸载。无密钥时 ApiCrypto 注解不强制加密。
 

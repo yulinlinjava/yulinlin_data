@@ -22,8 +22,8 @@
 - **关联与事务**：[事务与提交后回调](#ai-relations-transactions) · [关联查询](#ai-relations-query) · [懒加载与批量预加载](#ai-relations-lazy) · [代理自动更新](#ai-relations-auto-update)
 - **批量与同步**：[增量同步](#ai-write-sync-incremental) · [人工全量同步与续传](#ai-write-sync-full) · [批量与多连接写入](#ai-write-sync-batch) · [EntityCounter 聚合插入与更新](#ai-write-sync-counter) · [延迟写队列](#ai-write-sync-queue)
 - **缓存**：[缓存选择与公共配置](#ai-cache-config) · [Caffeine 内存缓存](#ai-cache-caffeine) · [Ehcache 持久化缓存](#ai-cache-ehcache) · [Redis 与可选本地缓存](#ai-cache-redis) · [缓存序列化](#ai-cache-serialization) · [ORM 查询缓存](#ai-cache-query) · [CacheClient 业务缓存](#ai-cache-client) · [缓存 Key、失效与一致性](#ai-cache-invalidation)
-- **接口安全**：[安全模块选型](#ai-security-modules) · [接口加密与前端对接](#ai-security-crypto) · [限流与 IP 黑名单](#ai-security-rate-limit) · [用户模型与安全管理器](#ai-security-user) · [无状态 JWT 登录](#ai-security-jwt) · [自定义 Token 生成与解析](#ai-security-token-codec) · [自定义安全实现与拦截器](#ai-security-extension) · [有状态 Sa-Token 登录](#ai-security-sa-token) · [登录上下文生命周期](#ai-security-context) · [登录、角色与权限注解](#ai-security-authorization)
-- **常用工具**：[lang 定位与类型目录](#ai-tools-catalog) · [HTTP 请求、上传与下载](#ai-tools-http) · [反射复制与深克隆](#ai-tools-reflection) · [JSON 转换](#ai-tools-json) · [日期、数字与字符串工具](#ai-tools-value) · [轻量缓存与资源池](#ai-tools-local-cache) · [线程、调度与事件](#ai-tools-concurrency) · [Lambda、泛型与包扫描](#ai-tools-types) · [序列化、元组与扩展 SPI](#ai-tools-serialization)
+- **接口安全**：[安全模块选型](#ai-security-modules) · [接口加密与前端对接](#ai-security-crypto) · [限流与 IP 黑名单](#ai-security-rate-limit) · [用户模型与安全管理器](#ai-security-user) · [无状态 JWT 登录](#ai-security-jwt) · [自定义 Token 生成与解析](#ai-security-token-codec) · [自定义安全实现与拦截器](#ai-security-extension) · [有状态 Sa-Token 登录](#ai-security-sa-token) · [Spring Security 接入](#ai-security-spring) · [登录上下文生命周期](#ai-security-context) · [登录、角色与权限注解](#ai-security-authorization)
+- **常用工具**：[lang 定位与类型目录](#ai-tools-catalog) · [HTTP 请求、上传与下载](#ai-tools-http) · [HTTP 执行器规范与替换](#ai-tools-http-executor) · [反射复制与深克隆](#ai-tools-reflection) · [JSON 转换](#ai-tools-json) · [日期、数字与字符串工具](#ai-tools-value) · [轻量缓存与资源池](#ai-tools-local-cache) · [线程、调度与事件](#ai-tools-concurrency) · [Lambda、泛型与包扫描](#ai-tools-types) · [序列化、元组与扩展 SPI](#ai-tools-serialization)
 - **项目实践**：[项目开发规范](#ai-practice-conventions) · [公共实体与页面参数](#ai-practice-models) · [通用 Service 与树服务](#ai-practice-service) · [完整 CRUD 分层案例](#ai-practice-crud-example) · [Admin RBAC 与 JWT 登录案例](#ai-practice-rbac)
 
 ---
@@ -3817,7 +3817,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 
 [文档首页](README.md) / [接口安全](security/README.md)
 
-仅需加密限流用 security；登录选择 JWT 或 Sa-Token。
+仅需加密限流用 security；登录选择 JWT、Sa-Token 或已有 Spring Security 适配。
 
 <a id="ai-security-modules-本页导航"></a>
 ### 本页导航
@@ -3828,13 +3828,14 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 <a id="ai-security-modules-引入模块"></a>
 ### 引入模块
 
-一个项目只选一种登录实现，不同时引入 `security-jwt` 和 `security-sa-token`。它们均依赖公共 `security`，无需重复声明公共模块：
+一个项目只选一种登录实现/适配，不混用 `security-jwt`、`security-sa-token`、`security-spring`。它们均依赖公共 `security`，无需重复声明公共模块：
 
 | 业务需要 | 引入的制品 | 业务需要提供 |
 | --- | --- | --- |
 | 仅加密、限流或公共权限协议 | `security` | 不需要登录实现；默认匿名管理器可启动 |
-| 无状态 JWT 登录 | `security-jwt` | `UserStore` Bean、JWT 签名配置；不存登录记录，不提供 Token 撤销 |
-| Sa-Token 登录 | `security-sa-token` | `UserStore` Bean；会话策略和存储使用 Sa-Token 自身配置 |
+| 无状态 JWT 登录 | `security-jwt` | `UserStore`、发起登录时的 `UserAuthenticator` Bean、JWT 签名配置；不存登录记录，不提供 Token 撤销 |
+| Sa-Token 登录 | `security-sa-token` | `UserStore`、使用统一账号密码登录时的 `UserAuthenticator` Bean；会话策略和存储使用 Sa-Token 自身配置 |
+| 已有 Spring Security 登录 | `security-spring` | 保留原有认证配置；可选 SpringUserMapper 映射业务用户 ID，无需默认提供 UserStore |
 | 已有其他安全框架 | `security` | 适配该框架的 `ISecurityManager` Bean |
 
 下面为仅引入公共模块的示例；需要登录时，将 `artifactId` 换成上表选定的实现即可。
@@ -3847,9 +3848,11 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 </dependency>
 ```
 
-模块不依赖 Spring Security，也不要求引入 ORM 或数据库驱动。未配置任何设备密钥时，不注册接口加解密组件，由业务自行处理；登录、权限、限流仍按各自规则工作。配置了任意设备密钥后才注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；此时缺少 `unknown`、其他已声明设备的密钥或 CBC IV 会启动失败，不生成临时密钥。启停和兼容模式见[加密接入](#ai-security-crypto-是否接管接口加解密)。
+公共 security 不依赖 Spring Security，也不要求引入 ORM 或数据库驱动；只有 security-spring 适配模块依赖 Spring Security API。未配置任何设备密钥时，不注册接口加解密组件，由业务自行处理；登录、权限、限流仍按各自规则工作。配置了任意设备密钥后才注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；此时缺少 `unknown`、其他已声明设备的密钥或 CBC IV 会启动失败，不生成临时密钥。启停和兼容模式见[加密接入](#ai-security-crypto-是否接管接口加解密)。
 
-鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
+鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用所选登录模块的默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
+
+已有 Spring Security 项目看 [Spring 接入](#ai-security-spring)，不必换成下表两种实现。security-spring 不重新签发 Token，也不替业务创建 AuthenticationManager；可保留原登录流程，或调用 `SecurityUtil.loginByUsername(username, password[, deviceType])`，复用 AuthenticationManager Bean 并保存 Session 身份。框架三个实现都不再公开按 ID 登录 API。
 
 <a id="ai-security-modules-jwt-与-sa-token-如何选择"></a>
 #### JWT 与 Sa-Token 如何选择
@@ -3867,7 +3870,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 | 修改密码 | 默认不撤销旧 JWT | 仅修改密码也不会自动踢人；业务需在提交后调用原生注销/踢人能力 |
 | 停用/删除账号 | UserStore 拒绝加载，阻止后续访问；不等于永久撤销 JWT | UserStore 拒绝加载；适配器处理不存在/不允许登录的用户 |
 | 自动续期 | 不提供，refresh 只刷新用户资料 | 活跃超时/续期规则取决于原生 Sa-Token 配置 |
-| 业务登录调用 | login(userId, deviceType) | 同左 |
+| 业务登录调用 | loginByUsername(username, password, deviceType)，UserAuthenticator 先认证 | 同左；也可保留原生 StpUtil.login/logout，自动兼容 SecurityContext |
 
 简单无状态认证选 JWT；需要服务端强制失效、设备会话管理选 Sa-Token。JWT 的服务端 logout 不足以防止已经泄漏的 Token 再次使用；重新启用账号后，其仍未过期的旧 JWT 可能再次被接受。删除账号后不要复用旧 userId，否则该身份的旧 JWT 在有效期内也可能被新账号接受。高要求业务应使用有状态方案或自定义凭证版本等校验。
 
@@ -4493,20 +4496,22 @@ location /api/ {
 
 [文档首页](README.md) / [接口安全](security/README.md)
 
-IUserDetails、UserStore、安全协议与扩展入口。
+IUserDetails、UserAuthenticator、UserStore、安全协议与扩展入口。
 
 <a id="ai-security-user-本页导航"></a>
 ### 本页导航
 
 - [登录用户模型](#ai-security-user-登录用户模型)
 - [安全管理器](#ai-security-user-安全管理器)
+- [业务账号认证](#ai-security-user-业务账号认证)
+- [一个业务组件实现两个接口](#ai-security-user-一个业务组件实现两个接口)
 - [常用组件扩展入口](#ai-security-user-常用组件扩展入口)
 - [加载用户信息](#ai-security-user-加载用户信息)
 
 <a id="ai-security-user-登录用户模型"></a>
 ### 登录用户模型
 
-完整业务接入参考 [Admin 两表 RBAC 与无状态 JWT 登录案例](#ai-practice-rbac-admin-两表-rbac-与登录案例)：业务认证后用 userId 登录，`AdminUserStore` 加载最新用户与权限。admin 只引入 security-jwt，不保存登录记录，不实现安全管理器或撤销逻辑；本轮源码迁移未编译、未执行测试。
+完整业务接入参考 [Admin 两表 RBAC 与无状态 JWT 登录案例](#ai-practice-rbac-admin-两表-rbac-与登录案例)：统一调用 loginByUsername，`AdminAuthenticationService` 一个 Bean 同时实现 UserAuthenticator、UserStore，分别负责账号认证和按 ID 加载用户。admin 只引入 security-jwt，不保存登录记录，不实现安全管理器或撤销逻辑；本轮源码迁移未编译、未执行测试。
 
 登录用户模型只约束最小身份、角色和权限协议，不规定用户表、登录流程、密码校验、Token，以及权限数据如何存储、加载。业务用户模型按需实现 `IUserDetails`：
 
@@ -4571,23 +4576,24 @@ if (loginUser.hasPermission("video:update")) {
 <a id="ai-security-user-安全管理器"></a>
 #### 安全管理器
 
-业务先校验账号、密码、验证码和状态，再用可信 `userId` 登录。框架不处理账号密码，也不查询指定用户表。使用 JWT 或 Sa-Token 实现时，不需要自己实现整个 `ISecurityManager`。
+统一公开账号密码登录入口 `loginByUsername`。**原来的 login(userId)、login(userId, deviceType) 已移除**，不是废弃后仍可调用，也不能改名成别的公开 ID 登录方法绕过认证。框架内部仍使用认证结果中的真实 userId 建立 JWT/Sa-Token 登录。
+
+JWT / Sa-Token 通过业务 `UserAuthenticator` 验证账号密码并返回安全用户；[security-spring](#ai-security-spring) 继续通过 `AuthenticationManager`，不使用这个业务 SPI。三个实现都可以使用同样的调用形式，不规定用户表或密码存储规则：
 
 ```java
 import com.yulinlin.security.auth.LoginResult;
 import com.yulinlin.security.auth.SecurityUtil;
 
-// 业务代码：校验密码、验证码、状态，返回真实用户 ID。
-String userId = accountService.authenticate(username, password, code);
-LoginResult result = SecurityUtil.login(userId, "web");
+// 有验证码时业务先校验，账号密码校验由所选实现委托认证组件。
+LoginResult result = SecurityUtil.loginByUsername(username, password, "web");
 // Controller 将 result 包装成项目的 R<LoginResult> 返回。
 ```
 
-上面的 `accountService` 是业务服务，不是框架组件。不能把前端传入的 userId 直接交给 login，否则会绕过身份认证。失败时业务可抛出 `LoginException`，账号不存在和密码错误应使用相同对外提示；基础设施错误不要伪装成登录成功。
+账号不存在和密码错误应使用相同对外提示，认证失败抛 `LoginException`；基础设施错误不要伪装成登录成功。不要把用户名直接当作 userId，也不能只查询到用户就视为密码校验通过。
 
 ```java
-SecurityUtil.login(userId);        // deviceType 默认 "default"
-SecurityUtil.login(userId, "web"); // 设备类型由本次登录明确传入
+SecurityUtil.loginByUsername(username, password);        // deviceType 默认 "default"
+SecurityUtil.loginByUsername(username, password, "web"); // 设备类型由本次登录明确传入
 SecurityUtil.getUserDetails();    // 当前用户，未登录为 null
 SecurityUtil.requireUser();       // 当前用户，未登录抛 LoginException
 SecurityUtil.getUserDetails(userId); // 读取指定用户，不切换当前身份
@@ -4600,9 +4606,68 @@ SecurityUtil.logout();            // JWT：清理线程；Sa-Token：注销当�
 SecurityUtil.manager();           // 获取底层 ISecurityManager，也可以直接注入它
 ```
 
-`login(String, String)` 现在表示 **userId + deviceType**，不再表示用户名和密码；旧三参数登录也已移除。登录成功返回 `LoginResult(token, expiresAt, user)`。`user` 为不含密码的 `IUserDetails`，不要返回含凭证的 ORM 用户实体。登录设备与加密用的 `Device-Type` 请求头不是自动绑定关系。
+注入的 ISecurityManager 同样提供两个 loginByUsername 重载，与静态入口一致。Spring 配置见[账号密码登录配置](#ai-security-spring-账号密码登录配置)。JWT/Sa-Token 未提供 UserAuthenticator 时仍可启动和恢复既有凭证，但调用账号密码登录会明确报错，不回退到按用户名/ID 直接签发。默认匿名管理器不支持登录，抛 UnsupportedOperationException。
+
+登录成功返回 `LoginResult(token, expiresAt, user)`。`user` 为不含密码的 `IUserDetails`，不要返回含凭证的 ORM 用户实体；Spring 默认 Session 登录的 token/expiresAt 为 null。登录设备与加密用的 `Device-Type` 请求头不是自动绑定关系。
 
 `SecurityUtil` 只是静态委托入口，应用单例初始化完成后可用；不要在 Bean 构造器等过早阶段调用。普通业务也可以直接注入唯一的 `ISecurityManager`。不需要设计多管理器选择或运行时切换。
+
+<a id="ai-security-user-业务账号认证"></a>
+#### 业务账号认证
+
+JWT / Sa-Token 使用一个 `UserAuthenticator` Bean，Spring Security 不需要它：
+
+```java
+import com.yulinlin.security.auth.UserAuthenticator;
+
+@Bean
+public UserAuthenticator userAuthenticator(AccountService accounts) {
+    return (username, password) -> accounts.authenticate(username, password);
+}
+```
+
+`AccountService` 是业务服务。这里的 authenticate 必须验证密码哈希及用户状态，返回包含真实 userId、角色、权限的 `IUserDetails` 安全 DTO，不含密码/密码哈希。返回 null 或抛 LoginException 表示拒绝；数据服务故障正常抛出。不能返回未经验证的“根据 username 查到的对象”，不能在认证实现内再次调用 loginByUsername。
+
+认证结果直接用于本次登录，内部不为了同一结果再调用一次 UserStore。后续请求恢复身份仍通过 UserStore.load(userId) 重新加载状态和权限。两个接口可以由同一个业务组件实现，但各自职责不能混淆；验证码在 Controller/业务入口先校验，不扩展为框架统一密码规则。
+
+旧代码迁移：将原 Controller 里的账号密码验证抽到 UserAuthenticator，Controller 改调 loginByUsername。不要继续保留旧 login 的覆盖方法；自定义 ISecurityManager 按需实现三参数 loginByUsername。Sa-Token 的原生 StpUtil.login/logout 不属于被移除的框架 API，已有原生接入可以不改。
+
+<a id="ai-security-user-一个业务组件实现两个接口"></a>
+#### 一个业务组件实现两个接口
+
+两个接口不要求两个实现类。推荐小型项目提供一个业务组件；**与上述独立 @Bean 注册方式二选一，不要重复注册**：
+
+```java
+import com.yulinlin.security.auth.IUserDetails;
+import com.yulinlin.security.auth.UserAuthenticator;
+import com.yulinlin.security.auth.UserStore;
+import org.springframework.stereotype.Service;
+
+@Service
+public class AccountSecurityService implements UserAuthenticator, UserStore {
+    private final AccountService accounts;
+
+    public AccountSecurityService(AccountService accounts) {
+        this.accounts = accounts;
+    }
+
+    @Override
+    public IUserDetails authenticate(String username, String password) {
+        // 业务按用户名查账号，验证密码哈希和状态，返回安全 DTO。
+        return accounts.authenticate(username, password);
+    }
+
+    @Override
+    public IUserDetails load(String userId) {
+        // 业务按稳定 ID 加载最新资料和权限，拒绝已删除/停用用户；不再比较密码。
+        return accounts.loadSecurityUser(userId);
+    }
+}
+```
+
+AccountService 仍是业务服务，两个示例方法按上述契约实现，不是框架提供的类。框架通过不同接口注入同一个 Bean：登录使用 username/password，恢复身份使用已验证 Token 中的 userId。用户名修改后仍按原 ID 找到该用户；不要因此把旧 Token 的 ID 当成新用户名查询。
+
+完整实现见 [AdminAuthenticationService](../admin/src/main/java/com/yulinlin/admin/rbac/auth/AdminAuthenticationService.java)。本例仅整合业务组件，不改变 Spring Security 的 AuthenticationManager 接入。
 
 <a id="ai-security-user-常用组件扩展入口"></a>
 #### 常用组件扩展入口
@@ -4612,12 +4677,15 @@ SecurityUtil.manager();           // 获取底层 ISecurityManager，也可以�
 | 需要定制的能力 | 扩展点及包 | 怎么接入 |
 | --- | --- | --- |
 | 安全用户模型 | `auth.IUserDetails` | 业务安全 DTO 实现接口，排除密码等敏感字段 |
+| JWT / Sa-Token 账号密码认证 | `auth.UserAuthenticator` | 提供 Bean，验证账号密码和状态后返回安全 IUserDetails；不自行签发 Token |
 | 加载用户、角色、权限 | `auth.UserStore` | 提供 Bean，实现 `load(userId)`；JWT、Sa-Token 都使用它 |
 | JWT 生成及验签解析 | `jwt.JwtTokenCodec` | 提供 Bean，同时实现 `generate`、`parse`，默认 Codec 自动退出 |
 | 有状态登录、撤销、在线会话 | `auth.ISecurityManager` 或 Sa-Token 原生扩展 | 使用 security-sa-token，或提供自己的管理器；JWT 模块无存储接口 |
 | Token 从哪里读取、怎样恢复身份 | `web.LoginInterceptor` | 提供该类型 Bean；框架自动注册，不用再写 MVC 注册器 |
 | 整体接入其他安全框架 | `auth.ISecurityManager` + `web.LoginInterceptor` | 管理器委托登录/注销/用户能力；自定义拦截器接入外部身份生命周期，框架自动注册 |
 | Sa-Token 原生能力 | `satoken.SaTokenSecurityManager` | 使用 `stpLogic()`；存储和策略沿用 Sa-Token 自身扩展 |
+| Spring principal 与业务用户 ID、角色权限映射 | `spring.SpringUserMapper` | security-spring 自动桥接已有认证；提供 mapper Bean 替换默认安全映射 |
+| Spring 账号密码登录 | Spring `AuthenticationManager` Bean | loginByUsername 委托现有认证；SecurityContextRepository、SessionAuthenticationStrategy Bean 可替换并与过滤器链共用 |
 | IP 黑名单 | `limit.IpBlacklist` | 实现并注册 Bean，见 [IP 黑名单](#ai-security-rate-limit-ip-黑名单) |
 
 表中包名前缀均为 `com.yulinlin.security`。加密设备密钥、限流参数优先使用本专题配置和注解，不必为普通配置需求替换整个安全管理器。
@@ -4664,7 +4732,7 @@ JWT 中不保存完整用户资料。每次正常请求恢复身份时，验签�
 <a id="ai-security-jwt-jwt-最小接入"></a>
 ### JWT 最小接入
 
-引入 `com.yulinlin:security-jwt:3.0`，注册上述 `UserStore`，再配置：
+引入 `com.yulinlin:security-jwt:3.0`，注册 [UserStore 与 UserAuthenticator](#ai-security-user)；前者恢复用户，后者校验账号密码。统一调用 `SecurityUtil.loginByUsername(username, password[, deviceType])`，再配置：
 
 ```yaml
 yulinlin:
@@ -4753,7 +4821,7 @@ public record TokenInfo(
 - 兼容旧 Token 未携带 deviceType：解析结果可为 null，不从服务端记录补齐；其他签名、用户、tokenId、有效期校验不放宽。新登录生成的 Token 仍需携带匹配的 deviceType。
 - 提供自定义 Codec 后，无需默认 Codec 的 secret/issuer；签名策略由自定义实现负责。它不负责存储、注销、加载用户或设置线程上下文。
 
-如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码。正常登录调用 `SecurityUtil.login`，由管理器加载用户、核对生成结果并建立当前线程身份。手动签发的 JWT 满足相同验签、时间和用户检查时也可被接受，不需要服务端登记。
+如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码，只能由可信服务端代码使用，不应封装成接收任意 userId 的公开登录接口。正常登录调用 `SecurityUtil.loginByUsername`，由 UserAuthenticator 验证账号密码，管理器核对签发结果并建立当前线程身份。手动签发的 JWT 满足相同验签、时间和用户检查时也可被接受，不需要服务端登记。
 
 ---
 
@@ -4797,7 +4865,7 @@ public record TokenInfo(
 <a id="ai-security-extension-自定义登录拦截器"></a>
 ### 自定义登录拦截器
 
-仅需改变 Token 请求头时，继承默认实现，保留它的验证与上下文处理：
+JWT 或自定义管理器仅需改变 Token 请求头时，继承默认实现，保留它的验证与上下文处理。Sa-Token 应优先修改其 `sa-token.token-name/token-prefix` 等原生配置，内置适配器会自动使用，无需另写拦截器。
 
 ```java
 import com.yulinlin.security.auth.ISecurityManager;
@@ -4834,23 +4902,25 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 | 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean | 你的 resolveSession 校验凭证，默认拦截器设置/清理 SecurityContext |
 | 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean + 一个 LoginInterceptor Bean | 自定义拦截器接入外部身份生命周期，管理器读取其当前用户 |
 
-框架不要求自定义实现一定使用 UserStore；这是两种内置登录实现的用户加载扩展。如果自定义管理器使用它，可继承 `AbstractUserSecurityManager` 复用按 ID 加载和刷新，自己实现 login、logout、resolveSession；它不会替你实现任何存储、签名或撤销规则。
+框架不要求自定义实现一定使用 UserStore；JWT/Sa-Token 用它恢复用户，使用 UserAuthenticator 验证账号密码；security-spring 只在按 ID 查询其他用户时可选使用 UserStore。自定义管理器可继承 `AbstractUserSecurityManager`，通过构造器传入 UserStore、UserAuthenticator，复用账号认证、加载和刷新，实现 protected createLogin(IUserDetails, deviceType)、logout、resolveSession；createLogin 只供内部已认证流程调用，不应扩大为 public。它不会替你实现存储、签名或撤销规则。
 
 继续使用框架上下文时，各方法的要求是：
 
 | 方法 | 实现要求 |
 | --- | --- |
-| login(userId, deviceType) | 业务已经验证凭证；加载安全用户、生成凭证，成功设置 SecurityContext 并返回 LoginResult；失败不保留旧身份 |
+| loginByUsername(username, password, deviceType) | 可选覆盖：认证账号密码与状态，再建立登录；两参数默认方法自动使用设备 default；未覆盖时明确抛 UnsupportedOperationException |
 | resolveSession(token) | 不依赖当前线程身份，从可信凭证恢复 LoginSession；检查签名/会话、有效期和用户状态，不能只解码或信任客户端 userId |
 | logout() | 无状态仅清理上下文；有状态先执行自己的撤销，finally 清理上下文；不要声称 JWT 清理等于撤销 |
 | getUserDetails(userId) | 读取指定用户，不切换当前身份 |
 | refresh(userId) | 重载用户；为当前用户时重新校验凭证并更新快照，不把其他用户切换成当前用户，不隐式续期 |
 
-resolveSession 校验失败返回 null 或抛 LoginException；login 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#ai-security-extension-自定义有状态登录)。
+resolveSession 校验失败返回 null 或抛 LoginException；loginByUsername 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#ai-security-extension-自定义有状态登录)。
 
-如果选择已提供的 Sa-Token 适配，按 [Sa-Token 专题](#ai-security-sa-token)接入即可，不必自己再写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean，委托该框架按 userId 登录、注销、查询用户和刷新；再提供一个 `LoginInterceptor` Bean，负责接入该框架的请求身份恢复与清理，自动替换默认实现。
+已经提供的 [Sa-Token](#ai-security-sa-token) 或 [Spring Security](#ai-security-spring) 适配按对应专题接入，不必自己重写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean；再提供一个 `LoginInterceptor` Bean，接入该框架请求身份的恢复与清理。不支持的统一 API 必须明确报错，不能凭 userId 绕过外部认证或只清理线程冒充注销。
 
-不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 login(userId, deviceType)、logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；不要把原来的账号密码验证塞回协议参数。
+如果还希望业务直接读取 `SecurityContext`，可让 **同一个 ISecurityManager 实现类**额外实现 `SecurityContextResolver`：实现 `resolveContext(LoginSession cached)`，每次按外部当前身份校验，身份未变可复用 cached.user()，已注销返回 null，基础设施故障正常抛出。Spring 选中的管理器自动接入，无需额外注册 Resolver Bean；解析过程和 UserStore 不得递归读取 SecurityContext。内置 Sa-Token 使用这个桥接，因此无需修改原来的 StpUtil.login/logout 代码。
+
+不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；账号密码入口按需覆盖 loginByUsername。旧 login(userId) 已从协议和工具类移除，不再实现或调用它。
 
 下面是注册形式，放在业务 `@Configuration` 中。`ExternalAuth` 代表**业务自己封装的外部框架服务，不是本项目提供的类**；其中方法需按上表的安全和生命周期约定实现：
 
@@ -4863,8 +4933,8 @@ import org.springframework.context.annotation.Bean;
 @Bean
 public ISecurityManager securityManager(ExternalAuth auth) {
     return new ISecurityManager() {
-        @Override public LoginResult login(String userId, String deviceType) {
-            return auth.loginByUserId(userId, deviceType);
+        @Override public LoginResult loginByUsername(String username, String password, String deviceType) {
+            return auth.loginByUsername(username, password, deviceType);
         }
         @Override public void logout() { auth.logout(); }
         @Override public IUserDetails getUserDetails() { return auth.currentUser(); }
@@ -4935,7 +5005,7 @@ ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限
 
 [文档首页](README.md) / [接口安全](security/README.md)
 
-使用原生会话能力；存储、注销与 JWT 的区别。
+保留原生 StpUtil 登录/注销，自动接入用户上下文与框架权限注解。
 
 前置阅读：[安全模块选型](#ai-security-modules)、[用户模型与 UserStore](#ai-security-user)。请求恢复与清理见[登录上下文](#ai-security-context)，自定义接入见[扩展专题](#ai-security-extension)。
 
@@ -4943,21 +5013,344 @@ ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限
 ### 本页导航
 
 - [Sa-Token 接入](#ai-security-sa-token-sa-token-接入)
+- [保留原来的登录代码](#ai-security-sa-token-保留原来的登录代码)
+- [请求头与 Cookie](#ai-security-sa-token-请求头与-cookie)
+- [上下文与扩展边界](#ai-security-sa-token-上下文与扩展边界)
 
 <a id="ai-security-sa-token-sa-token-接入"></a>
 ### Sa-Token 接入
 
-选择 `com.yulinlin:security-sa-token:3.0`，不引入 `security-jwt`；仍提供相同的 `UserStore`。业务继续调用 `SecurityUtil.login(userId, deviceType)`、`logout()` 和 `getUserDetails()`，权限注解不用改。
+选择 `com.yulinlin:security-sa-token:3.0`，不引入 `security-jwt`；仍提供相同的 `UserStore`。可以保留原来的 `StpUtil.login/logout`，也可以提供 [UserAuthenticator](#ai-security-user-业务账号认证)，使用 `SecurityUtil.loginByUsername(username, password, deviceType)`、`logout()` 和 `getUserDetails()`，两种入口共用 Sa-Token 登录记录，权限注解不用改。框架不再公开 login(userId)，原生 StpUtil API 不受此调整影响。
+
+`UserStore.load(userId)` 用来加载安全用户资料、角色和权限，不负责再次登录。不能返回含密码的用户对象；不存在或不允许继续登录时返回 null。实现里按传入的 userId 查询，**不要再调用 SecurityContext.getUser() / SecurityUtil.getUserDetails() 获取当前用户**，否则形成循环，框架会明确报错。
 
 Token 生命周期、设备策略、会话存储由 Sa-Token 负责，配置沿用 `sa-token.*`。默认内存存储不能保证重启保留登录；多实例和重启恢复需要按所用 Sa-Token 版本接入其 Redis 等共享存储，并保证记录仍在、未过期。不通过 JWT 配置增加存储，也不实现 JwtTokenCodec。
 
 需要踢人、在线会话管理等能力时注入 `SaTokenSecurityManager`，调用 `stpLogic()` 获取底层对象。业务重置密码后若要求强制重新登录，应在事务提交后调用对应原生能力；本适配器不会监听账号表变化自动踢人。单独引入项目中的 ORM cache-redis 模块，不会自动替换 Sa-Token 会话存储。
 
-统一 HTTP 入口仍默认读取 `Authorization: Bearer <token>`；适配器本身不读写 Cookie。若业务另外使用原生 `StpUtil` 的 HTTP 入口，需自行对齐其 Token 读取配置，不能假设两套请求头规则自动相同。接口详情以所用版本的 [Sa-Token 登录文档](https://sa-token.com/use/login-auth.html) 为准。
+<a id="ai-security-sa-token-保留原来的登录代码"></a>
+### 保留原来的登录代码
+
+业务先验证账号、密码、验证码和账号状态，再执行原来的登录即可。以下代码在 HTTP 请求内运行：
+
+```java
+import cn.dev33.satoken.stp.StpUtil;
+import com.yulinlin.security.auth.IUserDetails;
+import com.yulinlin.security.auth.SecurityContext;
+import com.yulinlin.security.auth.SecurityUtil;
+
+// userId 来自业务已经验证的账号，不能直接信任客户端提交的 userId。
+StpUtil.login(userId); // 原生入口由业务先验证身份，不必手动 set 框架上下文
+String token = StpUtil.getTokenValue();
+
+// 首次读取时按 Sa-Token 当前身份加载 UserStore；同一请求复用用户资料。
+IUserDetails user = SecurityContext.requireUser();
+String currentUserId = SecurityContext.getUserId();
+IUserDetails sameUser = SecurityUtil.getUserDetails();
+
+StpUtil.logout();
+boolean loggedIn = SecurityContext.isLogin(); // false
+IUserDetails anonymous = SecurityContext.getUser(); // null
+```
+
+原生 `StpUtil.login(userId, "web")` 设备登录也可使用。同一请求重新登录另一个账号后，下一次读取上下文会加载新账号，不返回上一个账号的资料。踢人、注销、Token 失效也会在后续读取时重新检查，不仅依赖请求开始时的一次校验。
+
+统一入口仍然可用：
+
+```java
+LoginResult result = SecurityUtil.loginByUsername(username, password, "web");
+String token = StpUtil.getTokenValue(); // 与 result.token() 一致
+StpUtil.logout();                      // 能注销这次登录
+```
+
+原生 login 按 Sa-Token 配置写 Cookie/响应头；SecurityUtil.loginByUsername 返回 LoginResult，只同步原生请求存储，不额外写登录 Cookie/响应头。客户端按所选入口接收并保存 Token。
+
+<a id="ai-security-sa-token-请求头与-cookie"></a>
+### 请求头与 Cookie
+
+内置 `SaTokenLoginInterceptor` 优先按 **Sa-Token 自己的规则**读取 Token：名称、前缀、请求参数、Header、Cookie 均由 `sa-token.*` 配置决定，不要求原有客户端统一改成 Authorization。
+
+例如只允许原生请求头携带 Token：
+
+```yaml
+sa-token:
+  token-name: satoken
+  timeout: 86400
+  is-read-header: true
+  is-read-body: false
+  is-read-cookie: false
+```
+
+前端后续请求使用 `satoken: <token>`。需要沿用 Cookie 登录时，按业务需要开启 `is-read-cookie`。配置项的完整含义见 [Sa-Token 官方文档](https://sa-token.com/use/login-auth.html)。
+
+兼容既有框架调用：**没有原生凭证时**也接受 `Authorization: Bearer <token>`。校验成功后把 Token 写入 Sa-Token 的本次请求存储，因此 Bearer 请求内调用 StpUtil.getLoginId()/logout() 也能使用相同身份。若原生凭证和 Bearer 同时存在，以原生凭证为准；原生凭证无效或前缀不正确时直接拒绝，不降级切换到另一份身份。
+
+没有凭证时按匿名处理，权限注解决定是否允许访问；携带无效凭证返回 401，包括公开接口。重新登录时移除已失效的旧凭证。
+
+<a id="ai-security-sa-token-上下文与扩展边界"></a>
+### 上下文与扩展边界
+
+- 自动桥接在 Spring 初始化完成后生效，跟随 SecurityUtil 选定的 ISecurityManager；JWT 和默认匿名实现不启用此桥接。
+- SecurityContext 读取时校验 Sa-Token 当前 Token 及会话状态，**只缓存用户资料，不缓存“已经登录”的结论**。Redis 存储会产生相应会话读取开销；同请求、同身份不反复调用 UserStore，主动 refresh 或切换身份除外。
+- 请求结束和异步切换清理框架线程快照；Sa-Token 自身的请求上下文仍由其 starter 管理。不会注销会话，也不会跨线程自动继承用户。
+- SecurityContext.clear() 不是注销：原生会话仍有效时，再次读取可重新恢复。要注销请使用 StpUtil.logout() 或 SecurityUtil.logout()。
+- 自定义 LoginInterceptor Bean 仍优先，框架自动注册，不需要自己编写 WebMvcConfigurer。使用内置 Sa-Token 管理器时，身份来源仍是原生 Sa-Token，不能只设置另一份 SecurityContext 冒充不同账号。
+- 当前自动桥接跟随 StpUtil.getStpLogic() 对应的账号体系；其他独立 StpLogic、多账号体系和临时身份切换 switchTo，不在默认桥接范围内，需要定制管理器。
+- 非 HTTP 场景没有原生请求上下文时，不会凭空恢复用户；显式框架登录/可信快照仍校验服务端会话，调用方负责 finally 清理。普通异步任务应显式传递必要的用户 ID。
+
+内部只增加可选的 `SecurityContextResolver` 协议，SaTokenSecurityManager 实现它；不通过 AOP 包装 StpUtil 静态方法，也不增加第二份登录记录。自定义外部管理器可按[扩展专题](#ai-security-extension-接入外部安全框架)选择是否实现该协议。
 
 ---
 
 下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-security-spring"></a>
+<!-- source: doc/security/spring.md -->
+<a id="ai-security-spring-spring-security-接入"></a>
+## Spring Security 接入
+
+[文档首页](README.md) / [接口安全](security/README.md)
+
+已有 Spring Security 项目保留原来的过滤器链与账号认证配置，统一使用框架用户上下文与权限注解；也可通过 loginByUsername 编写 JSON 登录接口。
+
+<a id="ai-security-spring-本页导航"></a>
+### 本页导航
+
+- [最小接入](#ai-security-spring-最小接入)
+- [当前用户与权限](#ai-security-spring-当前用户与权限)
+- [自定义用户映射](#ai-security-spring-自定义用户映射)
+- [登录与注销](#ai-security-spring-登录与注销)
+- [账号密码登录配置](#ai-security-spring-账号密码登录配置)
+- [设备类型与自定义会话策略](#ai-security-spring-设备类型与自定义会话策略)
+- [查询用户与刷新](#ai-security-spring-查询用户与刷新)
+- [生命周期与能力边界](#ai-security-spring-生命周期与能力边界)
+
+<a id="ai-security-spring-最小接入"></a>
+### 最小接入
+
+在**已配置 Spring Security 的项目**引入：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>security-spring</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+只选一种适配：不要同时引入 `security-jwt`、`security-sa-token`。Spring Security 自己的 JWT Resource Server 属于原有认证体系，不是本项目的 security-jwt，可以继续使用。
+
+该模块依赖公共 security 和 Spring Security core/web API，版本由应用的 Spring Boot BOM 管理。**不创建 SecurityFilterChain、AuthenticationManager、用户表或 Controller**。原有 Spring Security starter/配置继续保留；单独引入本适配器不等于配置好了 Spring 认证。新增账号密码入口默认使用请求属性 + HttpSession 保存上下文，并执行更换 Session ID、轮换 CSRF Token 的会话策略；相应 Spring Bean 可替换，详见下文。
+
+默认无需 UserStore，也无需新增 YAML 开关。内置 SpringLoginInterceptor 不重复解析 Authorization/Cookie，只管理框架快照的请求生命周期。用户自定义 LoginInterceptor Bean 仍然优先。
+
+<a id="ai-security-spring-当前用户与权限"></a>
+### 当前用户与权限
+
+原来的登录成功后，直接使用：
+
+```java
+import com.yulinlin.security.auth.IUserDetails;
+import com.yulinlin.security.auth.SecurityContext;
+import com.yulinlin.security.auth.SecurityUtil;
+
+IUserDetails user = SecurityContext.getUser(); // 未认证或匿名：null
+String userId = SecurityUtil.getUserId();
+boolean loggedIn = SecurityContext.isLogin();
+boolean admin = SecurityUtil.hasRole("ADMIN");
+boolean canEdit = SecurityUtil.hasPermission("video:edit");
+IUserDetails required = SecurityUtil.requireUser(); // 未登录抛 LoginException
+```
+
+默认映射规则：
+
+| Spring 当前身份 | 框架用户 |
+| --- | --- |
+| null、未认证或 AnonymousAuthenticationToken | 未登录；不会因匿名对象 isAuthenticated=true 而放行 |
+| principal 实现本项目 IUserDetails | 复制 userId/username；角色权限仍以 Authentication.authorities 为准 |
+| 其他 principal | userId/username 默认使用 Authentication.getName() |
+| ROLE_ADMIN | roles 包含 ADMIN；大小写不变 |
+| video:edit、SCOPE_video.read 等 authority | permissions 保留完整字符串，不自动去除 SCOPE_ |
+| ROLE_ADMIN 等角色 authority | permissions 同样保留原始 authority 字符串 |
+| password、credentials、Authentication.details | 不复制到用户 DTO |
+
+`Authentication.getName()` 通常是用户名或认证主体名称，**不保证是数据库主键**。需要真实用户 ID 时按下节配置映射。默认返回独立、只读的用户快照，不直接返回带密码的 Spring UserDetails，也不自动复制自定义属性。
+
+已有注解可直接使用：
+
+```java
+@ApiRole("ADMIN")
+@ApiPerm("video:edit")
+public void editVideo() {
+    String operatorId = SecurityContext.getUserId();
+    // 业务操作
+}
+```
+
+这些注解只做框架的精确角色/权限编码校验，不自动解释 Spring 的 RoleHierarchy、SpEL、PermissionEvaluator 或“必须完整认证”等高级规则。需要这些能力继续使用 Spring 原有规则；也可以在 SpringUserMapper 中明确展开权限。`@ApiPublic` 不会绕过 Spring Security 的过滤器授权，原有 CSRF、URL 权限照常生效。
+
+<a id="ai-security-spring-自定义用户映射"></a>
+### 自定义用户映射
+
+提供一个 `SpringUserMapper` Bean，默认映射自动退让。示例的 `MyLoginUser` 是**业务现有的 Spring principal**，不是框架类：
+
+```java
+import com.yulinlin.security.auth.IUserDetails;
+import com.yulinlin.security.spring.DefaultSpringUserMapper;
+import com.yulinlin.security.spring.SpringUserMapper;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+public SpringUserMapper springUserMapper() {
+    DefaultSpringUserMapper defaults = new DefaultSpringUserMapper();
+    return authentication -> {
+        MyLoginUser principal = (MyLoginUser) authentication.getPrincipal();
+        IUserDetails permissions = defaults.map(authentication);
+        return new DefaultSpringUserMapper.UserSnapshot(
+                principal.getUserId(),
+                principal.getUsername(),
+                permissions.getRoles(),
+                permissions.getPermissions()
+        );
+    };
+}
+```
+
+也可返回业务自己的安全 IUserDetails DTO。不要返回含 getPassword() 的 principal、Authentication 或 credentials；不要把用户 ID 从客户端参数里直接拿来当已认证身份。
+
+每次读取当前用户都会从 Spring 当前 Authentication 重新映射，避免切换账号或原地修改权限后复用旧快照。映射结果不再写入框架 ThreadLocal，因此原生登录过滤器在 MVC 前结束请求也不会遗留框架用户快照。默认只处理内存数据、不查库；自定义 mapper 要查库时自行控制缓存。mapper 返回 null 时框架视为无可用用户，但不会擅自撤销 Spring 会话；异常正常抛出且清理旧快照。mapper 内不能再次读取 SecurityContext / SecurityUtil 当前用户，避免递归。
+
+<a id="ai-security-spring-登录与注销"></a>
+### 登录与注销
+
+原生表单、已有 JSON 登录或 OAuth2 可以继续使用，原有登录代码不必修改。需要统一调用时，在 MVC Controller 内使用：
+
+```java
+// 默认设备类型为 "default"
+LoginResult result = SecurityUtil.loginByUsername(username, password);
+
+// 指定本次登录的设备类型；不会自动读取加密模块的 Device-Type 请求头
+LoginResult web = SecurityUtil.loginByUsername(username, password, "web");
+
+// 注入 ISecurityManager 调用相同方法，与静态入口使用同一套实现
+LoginResult mobile = securityManager.loginByUsername(username, password, "android");
+```
+
+以上为三种替代写法，不需要连续登录三次。模块将未认证的账号密码请求交给 **AuthenticationManager Bean**，通过后映射安全用户，执行 SessionAuthenticationStrategy，再用 SecurityContextRepository 保存 Spring 上下文；不是只设置当前线程。默认 Session 模式下 `result.token()` / `expiresAt()` 都为 null，浏览器携带会话 Cookie 恢复身份，不把 Session ID 当 Token 返回。会话过期时间沿用容器/Spring Session 配置。
+
+框架已统一移除 `SecurityUtil.login(userId)` / `login(userId, deviceType)`，只公开 loginByUsername；不是保留旧方法后运行时报错。Spring 使用 AuthenticationManager，JWT/Sa-Token 使用业务 UserAuthenticator，不能互相混用认证组件。
+
+账号密码错误、账号状态不允许登录或会话策略拒绝时抛 LoginException；不透露“账号不存在还是密码错误”。保存身份之前调用认证结果的 CredentialsContainer 清理凭证；自定义 Authentication 清理后 credentials 仍非 null 时拒绝保存，不能把密码带进 Session。认证开始后的映射/存储失败会清理当前身份，并尽力清除已保存的上下文，清理失败保留在异常中，不伪装成功。未配置 AuthenticationManager、没有当前 Servlet 请求/响应、响应已提交会明确报错。不得记录密码或把底层异常堆栈返回前端；业务异常处理器将 LoginException 转为统一失败响应。
+
+原生注销入口继续保留。Spring 清理当前 Authentication 后，下一次 SecurityContext/SecurityUtil 读取立即按匿名处理，不保留旧用户。
+
+MVC 业务中也可使用：
+
+```java
+SecurityUtil.logout();
+```
+
+这里委托**当前 Spring 包装请求的 HttpServletRequest.logout()**，复用当前过滤器链的 LogoutHandler，不另建注销链。需要启用 Spring 的 Servlet API 集成；没有有效 HTTP 请求、未经过对应包装或调用后当前认证仍存在时会明确报错，不能只清理线程就假装已经注销。仍由业务编写响应；它不代替原 `/logout` 入口的 LogoutSuccessHandler 跳转或 OAuth2/OIDC/SAML 的远端退出流程。自定义复杂退出继续使用原生入口。
+
+Session、Remember-Me 的具体清理由 Spring 的注销配置决定；无状态 JWT/外部访问令牌是否撤销也取决于原有体系，不能认为清理当前请求就撤销所有凭证。参见 [Spring Servlet API 集成](https://docs.spring.io/spring-security/reference/6.5/servlet/integrations/servlet-api.html)及[原生注销流程](https://docs.spring.io/spring-security/reference/6.5/servlet/authentication/logout.html)。
+
+<a id="ai-security-spring-账号密码登录配置"></a>
+### 账号密码登录配置
+
+在已有 Spring Security 配置中，**暴露现有 AuthenticationManager Bean**。如果已经有，不要再注册一个：
+
+```java
+@Bean
+public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
+    return configuration.getAuthenticationManager();
+}
+```
+
+类型分别来自 `org.springframework.security.authentication.AuthenticationManager`、`org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration`。继续使用业务已有的 UserDetailsService、PasswordEncoder 或 AuthenticationProvider；框架不自己查用户表，不做明文 equals。仅在某个 HttpSecurity 内部创建的 AuthenticationManager 不会自动成为 Bean；多管理器场景明确提供统一入口使用的唯一/@Primary Bean。
+
+Session 登录建议与目标过滤器链显式共用相同组件，在现有链内合并以下配置，**不要额外复制一条覆盖所有请求的新链**：
+
+```java
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http,
+        AuthenticationManager authenticationManager,
+        SecurityContextRepository repository,
+        SessionAuthenticationStrategy sessionStrategy) throws Exception {
+    http.authenticationManager(authenticationManager)
+        .securityContext(context -> context.securityContextRepository(repository))
+        .sessionManagement(session -> session.sessionAuthenticationStrategy(sessionStrategy))
+        .authorizeHttpRequests(auth -> auth
+            .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+            .anyRequest().authenticated());
+    // 保留原项目的 CSRF、Session、注销和其他认证配置。
+    return http.build();
+}
+```
+
+`SecurityContextRepository` 来自 `org.springframework.security.web.context`，`SessionAuthenticationStrategy` 来自 `org.springframework.security.web.authentication.session`。默认由适配模块提供这两个 Bean；业务提供同类型 Bean 时默认退让。它们不会凭空读取另一条过滤器链的私有配置，多链应用须明确匹配。
+
+Controller 使用项目统一响应包装：
+
+```java
+import com.yulinlin.starter.domain.R;
+import com.yulinlin.security.auth.LoginResult;
+import com.yulinlin.security.auth.SecurityUtil;
+
+@PostMapping("/auth/login")
+public R<LoginResult> login(@RequestBody LoginPo po) {
+    // 有验证码等业务规则，在此先校验。失败不能继续调用登录。
+    return R.newInstance(SecurityUtil.loginByUsername(po.username(), po.password(), po.deviceType()));
+}
+
+public record LoginPo(String username, String password, String deviceType) { }
+```
+
+三参数写法要求 deviceType 非空；不需要区分设备就用两参数重载。使用项目自己的 R 时调整导入。跨域浏览器客户端还需按原项目配置携带 Cookie，后端 CORS 精确允许受信任来源。
+
+`permitAll()` **不会关闭 CSRF**。Session/Cookie 登录须沿用原来的 CSRF Token 获取与请求头机制，登录接口本身也应受保护；不要为此全局关闭 CSRF。若使用 ApiCrypto，MVC 的 @RequestBody 可以走框架解密，但原生 Spring 登录过滤器不会自动解密它。
+
+Spring 的自定义认证需要显式保存上下文，详见[官方账号密码认证](https://docs.spring.io/spring-security/reference/6.5/servlet/authentication/passwords/index.html#publish-authentication-manager-bean)和[会话持久化](https://docs.spring.io/spring-security/reference/6.5/servlet/authentication/session-management.html)。
+
+<a id="ai-security-spring-设备类型与自定义会话策略"></a>
+### 设备类型与自定义会话策略
+
+- `loginByUsername(username, password)` 默认设备 `default`；三参数版本透传指定设备，不把设备信息当作密码或验证码。
+- AuthenticationManager 收到的 `Authentication.details` 为 `com.yulinlin.security.spring.SpringLoginDetails`，通过 `getDeviceType()` 读取；同时保留 WebAuthenticationDetails 的来源地址/会话信息。
+- 常规认证结果保留这份 details；自定义提供者返回自己的 details 时不覆盖。因此需要自定义认证结果承载设备时，由提供者自行保留。它不自动实现“同设备互踢”“多设备隔离”。
+- 默认 SecurityContextRepository 为 DelegatingSecurityContextRepository（请求属性 + HttpSession）；自定义仓库必须同时接入恢复身份的过滤器链。NullSecurityContextRepository 等不持久化实现不会带来跨请求登录，接口不会额外签发 Token。
+- 默认 SessionAuthenticationStrategy 为更换 Session ID + CSRF Token 轮换。CSRF 存储使用业务 CsrfTokenRepository Bean，未提供时使用 HttpSessionCsrfTokenRepository；使用 Cookie 或自定义 CSRF 存储时，将原来的仓库暴露为 Bean 并在过滤器链中配置同一个实例。
+- 业务提供 SessionAuthenticationStrategy Bean 可整体替换默认策略。需要并发会话限制时，使用 Spring 的组合策略，并保留防 Session 固定攻击、会话注册/并发检查和 CSRF 轮换等必要步骤。仅在另一条链里配置 maximumSessions，不代表此 MVC 登录入口自动获得相同限制。
+- 统一入口不自动执行原生登录过滤器的 Remember-Me、成功跳转、自定义成功/失败 Handler 或额外 MFA 步骤。依赖这些流程的项目继续使用原生登录入口，或由业务完整接入对应策略；不能用账号密码入口绕过必须的二次认证。
+- STATELESS、OAuth2 Resource Server 等原本无状态的链，继续使用原来的凭证签发/校验；不要为了调用此 Session 登录方法强行混入 HttpSession。
+
+<a id="ai-security-spring-查询用户与刷新"></a>
+### 查询用户与刷新
+
+| API | Spring 适配行为 |
+| --- | --- |
+| getUserDetails()/requireUser()/hasRole()/hasPermission() | 映射 Spring 当前认证身份，无需 UserStore |
+| getToken() | 返回 null；统一适配不假定认证方式，不把密码、Session ID 或其他 credentials 当 Token |
+| getUserDetails(userId) | 提供 UserStore 时按 ID 加载；未提供时只支持返回当前同 ID 用户，查询其他人明确报错 |
+| refresh() | 清理框架快照并重新映射当前 Authentication，不重新认证、不续期 |
+| refresh(userId) | 当前用户同上；其他用户按 UserStore 加载，不切换当前身份 |
+
+改变密码、账号状态或角色后，仍由 Spring 认证体系更新 principal/authorities、重认证或撤销会话。框架 refresh 不会自动调用 UserDetailsService 或改写 Authentication。这里的 UserStore 仅是“按指定 ID 查询用户”的可选目录，不替换 Spring 的 UserDetailsService。
+
+Spring 的 Session/Basic 等方式可能没有接口 Token，因此 LoginSession 允许 token=null；expiresAt=null 表示适配器不声明到期时间，**不是承诺永久登录**，以 Spring 当前认证状态为准。JWT、Sa-Token 的 Token 校验并未取消。
+
+<a id="ai-security-spring-生命周期与能力边界"></a>
+### 生命周期与能力边界
+
+- 身份来源唯一：Spring SecurityContextHolder → SpringUserMapper → 框架 SecurityContext。两个同名 SecurityContext 类型不是同一个类；业务使用本框架类型时导入 `com.yulinlin.security.auth.SecurityContext`。
+- 原来的 SecurityFilterChain 负责认证、恢复与清理 Spring 上下文；框架 MVC 包装器只清理自己的 ThreadLocal。SecurityContext.clear() 不会注销 Spring，再次读取仍可恢复有效身份。
+- 静态桥接在 Spring 单例初始化完成后生效，跟随选中的 ISecurityManager；自定义 ISecurityManager Bean 会使默认适配退让。
+- 默认不复制身份到其他线程。若使用 Spring 的显式安全上下文传递能力，适配器读取传入线程中的 Spring 身份；调用方仍需正确清理业务线程上下文。
+- 当前适配基于 Servlet/Spring MVC 和线程上下文，不支持 WebFlux 的 Reactor 安全上下文。
+- 加密 Advice、限流和框架权限注解可以继续使用。但 Spring 过滤器先于 MVC Advice，原生登录过滤器不会自动解密 ApiCrypto 密文；登录报文应沿用原认证流程的协议。
+
+本次仅完成源码与文档接入，回归案例位于 admin/src/test；未执行编译、测试或外部认证系统联调。
 
 ---
 
@@ -4979,7 +5372,7 @@ Token 生命周期、设备策略、会话存储由 Sa-Token 负责，配置沿�
 ### 登录上下文与请求生命周期
 
 ```java
-LoginResult result = SecurityUtil.login(userId, "web"); // 前提：业务已验证身份
+LoginResult result = SecurityUtil.loginByUsername(username, password, "web");
 // HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user。
 IUserDetails user = SecurityContext.requireUser();
 String userId = SecurityContext.getUserId();
@@ -4987,26 +5380,32 @@ String token = SecurityContext.getToken();
 boolean loggedIn = SecurityContext.isLogin();
 ```
 
-前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。一个正常请求只解析一次 Token，Controller、Service 和权限 AOP 读取同一用户快照。JWT 和 Sa-Token 实现已提供 resolveSession；自己实现管理器且使用此拦截器时也必须提供该能力。
+JWT 前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。JWT 在正常请求中只验签一次，Controller、Service 和权限 AOP 读取同一用户快照。自己实现管理器且使用此拦截器时也必须提供 resolveSession。
 
-没有 Authorization 时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
+**Sa-Token 接入不同**：自动选择 SaTokenLoginInterceptor，优先沿用 `sa-token.*` 的原生 Token 读取规则，没有原生凭证时兼容 Bearer。SecurityContext 读取时重新核对当前原生身份及会话状态，同一请求复用用户资料；因此直接 StpUtil.login/logout、重新登录另一个账号或踢人后，后续读取不会继续使用旧身份。详见[Sa-Token 接入](#ai-security-sa-token)。
+
+**Spring Security 接入**：请求恢复继续由原有过滤器链负责，security-spring 读取 SecurityContextHolder 的已认证身份并映射为安全用户；匿名和未认证对象不放行。原生登录、注销、切换身份后自动跟随，也支持 loginByUsername 委托 AuthenticationManager 并保存 Session 身份，默认不需要 UserStore。它可以没有 Token，getToken() 返回 null；身份有效期由 Spring 管理。见 [Spring 接入](#ai-security-spring)。
+
+未携带对应实现支持的凭证时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
 
 正常完成、异常完成时通过 afterCompletion 调用 ThreadLocal.remove()；preHandle 自身失败也立即清理。异步 MVC 的 afterConcurrentHandlingStarted 清理原请求线程，后续 MVC redispatch 会重新解析 Token，但 Callable、DeferredResult 或线程池的业务线程不会自动继承身份。不要使用 InheritableThreadLocal。后台任务需要的用户 ID 显式作为参数传递；不能把客户端声明的 userId 直接变成可信身份。
 
 请求结束只清理线程。JWT logout 也只清理当前线程，客户端必须自行删除 Token；随后再次携带该 JWT 仍可通过校验直到过期或用户不允许访问。Sa-Token logout 则注销服务端会话并清理线程。refresh 当前用户时重新验证凭证并加载最新用户，更新当前线程快照，不改变 JWT 的签发时间和有效期；Sa-Token 的活跃超时策略按其自身配置执行。其他请求已加载的快照不会被跨线程强制替换，长请求必要时应主动复核。
 
-非 HTTP 使用后必须显式清理：
+JWT / Sa-Token 非 HTTP 使用后必须显式清理；Spring 账号密码入口要求当前 Servlet 请求/响应。后台任务通常直接传业务 userId，不必额外登录：
 
 ```java
 try {
-    SecurityUtil.login(userId, "job"); // 仅限服务端已验证身份的场景
+    SecurityUtil.loginByUsername(serviceUsername, servicePassword, "job"); // 确实需要登录时也必须认证
     // 当前线程业务
 } finally {
     SecurityContext.clear(); // 清理当前线程，不改变凭证本身或外部会话状态
 }
 ```
 
-SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理使用的入口。LoginSession/LoginResult 的 toString 不打印 Token 和用户资料；仍不得把完整登录响应、请求头或密码写入日志。
+SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理使用的入口。clear 只删除框架快照：使用 Sa-Token 时，只要原生会话仍有效，再次读取可自动恢复，不等于退出登录。原生注销请调用 StpUtil.logout() 或 SecurityUtil.logout()。外部身份桥接不会信任客户端直接提交的用户资料。
+
+LoginSession/LoginResult 的 toString 不打印 Token 和用户资料；仍不得把完整登录响应、请求头或密码写入日志。
 
 ---
 
@@ -5083,7 +5482,7 @@ public class UserApi {
 | 无业务 ISecurityManager Bean | 自动提供 AnonymousSecurityManager，正常启动 |
 | `getUserDetails()`、`getUserDetails(userId)`、`refresh(userId)` | 返回 null，不查库、不生成身份 |
 | `logout()` | 清理本模块当前线程上下文，不操作外部登录会话 |
-| `login(...)` 两个重载 | 抛出 IllegalStateException，提示未配置业务安全管理器 |
+| `loginByUsername(...)` 两个重载 | 默认抛 UnsupportedOperationException；匿名管理器不提供账号密码校验 |
 | 无鉴权注解或允许匿名的方法 | 不读取管理器，不影响加密和限流 |
 | 默认匿名实现访问受保护方法 | 401，不会因为没有业务实现而放行 |
 | 自定义 ISecurityManager Bean | 自动替换默认实现；项目只保留一个安全管理器 |
@@ -5193,6 +5592,8 @@ Admin RBAC 案例已改为公共 ApiLogin、ApiPerm、ApiPublic，移除了本�
 
 JSON、表单、文件、超时设置和 404 检查。
 
+需要替换底层 HTTP 库或统一扩展请求行为，见[HTTP 执行器规范与替换](#ai-tools-http-executor)。
+
 <a id="ai-tools-http-本页导航"></a>
 ### 本页导航
 
@@ -5200,11 +5601,12 @@ JSON、表单、文件、超时设置和 404 检查。
 - [上传与下载](#ai-tools-http-上传与下载)
 - [超时与错误处理](#ai-tools-http-超时与错误处理)
 - [判断是否为 404](#ai-tools-http-判断是否为-404)
+- [自定义客户端与生命周期](#ai-tools-http-自定义客户端与生命周期)
 
 <a id="ai-tools-http-http-请求"></a>
 ### HTTP 请求
 
-公共类型在 `com.yulinlin.data.core.http`：HttpRequestClient、HttpRequest、HttpUtil、HttpResponse、HttpFile、HttpRequestException。底层基于 Spring RestClient，调用同步阻塞。
+公共类型在 `com.yulinlin.data.core.http`：HttpRequestClient、HttpRequest、HttpUtil、HttpResponse、HttpFile、HttpRequestException。上层调用同步阻塞；默认由 RestClientHttpExecutor 使用 Spring RestClient + JDK HttpClient 执行，用户提供 HttpExecutor Bean 即可替换。
 
 下面是完整 Service。复用客户端，每次调用创建新的请求对象；地址是示例，需替换为自己的服务：
 
@@ -5257,15 +5659,18 @@ HttpUtil.post("https://api.example.com/forms")
 
 | 能力 | 入口 |
 | --- | --- |
-| HTTP 方法 | get/post/put/patch/delete；其他方法 request(HttpMethod, url) |
+| HTTP 方法 | get/head/post/put/patch/delete；其他方法 request(HttpMethod, url) |
 | 查询与头 | query(name, value)、header(name, value)、headers(HttpHeaders) |
 | 认证 | basicAuth(user, password)、bearerToken(token) |
 | JSON | json(Object) |
 | 普通表单 | form(name, value)、form(Map<String,Object>) |
 | 其他 body | body(Object, MediaType) |
 | 响应 | getStatus、getStatusCode、getHeaders、getBody、getBodyAsString、bodyAs |
+| 只检查状态 | 请求的 status() 返回状态码，不读取正文；4xx/5xx 也直接返回 |
 
 query 的 null 值会忽略。同一个请求只使用一种 body 类型，不能混合 json 与 form；请求构造器是可变对象，不跨线程共享。
+
+`query(name, value)` 接收**未编码的原始值**，例如 `a+b` 会编码成 `a%2Bb`。不要先手工 URL 编码参数。URL 本身已有的 `%2F`、`%2B`、重复参数顺序和转义大小写会保留，不重复编码或重排签名参数；原始空格和中文会编码。签名 URL 不应再随意追加参数，否则仍可能使签名失效。
 
 <a id="ai-tools-http-上传与下载"></a>
 ### 上传与下载
@@ -5288,9 +5693,11 @@ HttpUtil.get("https://api.example.com/export")
         .downloadTo(Path.of("download/export.zip"));
 ```
 
-HttpFile 支持 of(Path)、of(filename, byte[], MediaType)、of(filename, InputStream, MediaType)。输入流上传不保证可重放，不重复使用已消费的原流。
+HttpFile 支持 of(Path)、of(filename, byte[], MediaType)、of(filename, InputStream, MediaType)。输入流上传使用未知长度，不提前读取流计算大小；服务器需要支持未知长度的上传。输入流不保证可重放，不重复使用已消费的原流。业务提供的流建议使用 try-with-resources，即使请求构造失败也能关闭。
 
-execute 会把响应 body 放入内存，大文件优先 downloadTo。下载会创建父目录并覆盖同名文件，失败可能留下部分文件，不保证原子替换；返回响应 body 为空，内容已写磁盘。业务需校验目标路径，不能直接信任远端路径。
+`execute()` 会把响应 body 放入内存，默认最多 16MB；大文件使用 `downloadTo()` 流式落盘，不受内存响应上限限制。
+
+下载会创建父目录，先写同目录临时文件，读取完成且 Content-Length（若提供）符合后才替换目标文件。优先原子替换；文件系统不支持时退回普通移动，不承诺断电原子性。读取失败会清理临时文件并保留旧文件；清理失败作为 suppressed 异常保留。只接受有正文的完整 2xx 响应，拒绝 3xx、4xx/5xx、HEAD、204/205 和 206/Content-Range，避免把跳转页面或分段文件覆盖成完整文件。返回响应 body 为空，内容已写磁盘。业务需控制磁盘空间并校验目标路径，不能直接信任远端路径。
 
 <a id="ai-tools-http-超时与错误处理"></a>
 ### 超时与错误处理
@@ -5301,13 +5708,25 @@ Spring 注入客户端默认 10 秒，配置如下：
 yulinlin:
   http:
     timeout: 10s
+    max-response-size: 16MB
+    max-error-size: 64KB
 ```
 
-单次 `timeout(Duration)` 覆盖默认值，必须为正数。同一 Duration 同时配置连接和响应读取超时，不提供独立链式 connectTimeout/readTimeout；不是覆盖网络、重定向、写盘等全部阶段的严格总截止时间。
+| 配置 | 默认 | 含义 |
+| --- | --- | --- |
+| timeout | 10s | 默认响应超时；框架自建连接池也用它设置连接超时 |
+| max-response-size | 16MB | execute() 响应正文上限，超过抛出 HttpRequestException，不返回残缺数据 |
+| max-error-size | 64KB | 失败响应正文保留上限，超过截断；isResponseBodyTruncated() 可判断 |
 
-静态 HttpUtil 默认也为 10 秒，但不自动读取 Spring 配置。`HttpUtil.withTimeout(duration)` 返回新客户端；`HttpUtil.setClient(client)` 替换静态默认客户端，应在初始化阶段明确配置，不在请求处理中反复切换。
+单次 `timeout(Duration)` 覆盖**响应等待与读取超时**，至少 1ms，不重建连接池、不修改其他并发请求的超时；连接超时保留客户端创建时的设置。它不是覆盖参数序列化、文件写盘和全部业务处理的严格总截止时间。没有独立的链式 connectTimeout/readTimeout 方法；高级连接配置通过自定义底层 HttpClient 提供。
 
-`new HttpRequestClient(restClient, mapper)` 沿用给定客户端设置，不自动添加默认超时。单次 timeout 目前会新建底层客户端，大量相同超时请求优先复用预配置客户端。
+正文大小配置必须大于 0 且小于 2GB；普通响应即使没有 Content-Length 也会限制实际读取量。错误正文只保留前 N 字节，截断后可能不是完整 JSON。状态检查和截断处理会关闭正文流，不为了复用连接继续消费整个大文件，必要时由底层重建该条连接。业务自定义拦截器如果提前缓冲正文，其自身内存使用不在这个限制内。
+
+Spring 单例初始化完成后，`HttpUtil.getClient()` 与注入的默认 HttpRequestClient 是**同一个实例**，自动使用相同的执行器、ObjectMapper 和上述配置，不必手工 setClient。初始化回调（如 `@PostConstruct`）中的业务请直接注入客户端，不依赖静态绑定完成时机。
+
+`HttpUtil.withTimeout(duration)` 和 `client.withTimeout(duration)` 返回轻量视图，只改变默认响应超时，继续使用同一个执行器，不创建连接池，也不绕过自定义实现。关闭视图不关闭共享执行器。
+
+无 Spring 时才延迟创建内置默认客户端，也可使用 `HttpUtil.setClient(client)` 手工替换。Spring 已绑定时不能用 setClient 改成另一个客户端，防止静态调用和注入分离；请注册 HttpExecutor 或 HttpRequestClient Bean。替换手工客户端不自动关闭旧实例。Spring 关闭后静态入口明确报错，不静默回退到另一套执行器；新的 Spring 上下文重新绑定或显式 setClient 后可继续使用。
 
 <a id="ai-tools-http-判断是否为-404"></a>
 #### 判断是否为 404
@@ -5316,29 +5735,275 @@ yulinlin:
 boolean missing = HttpUtil.isNotFound("https://api.example.com/resource");
 ```
 
-它执行 GET，不是 HEAD；只有明确 HTTP 404 返回 true。超时、网络错误和其他状态返回 false，所以 false 不证明存在或健康。成功响应按普通请求读入内存，不适合检查超大文件。
+优先 HEAD；仅遇到 405/501（不支持 HEAD）回退 GET，两条路径均不读取正文。只有明确 HTTP 404 返回 true。超时、网络错误和其他状态返回 false，所以 false 不证明存在或健康；非法 URL 等调用参数错误仍抛出异常。少数服务的 HEAD/GET 状态不一致，业务可明确使用 GET 的 status() 检查。
 
-带认证的检查或需要区分其他失败时，自己处理异常：
+带认证的检查或需要区分其他失败时，使用 status()：
 
 ```java
-import com.yulinlin.data.core.http.HttpRequestException;
-
-try {
-    HttpUtil.get("https://api.example.com/resource").bearerToken(token).execute();
-} catch (HttpRequestException error) {
-    Integer status = error.getStatusCode(); // 网络错误可能为 null。
-    if (!Integer.valueOf(404).equals(status)) throw error;
-    // 业务处理确实不存在。
+int status = HttpUtil.get("https://api.example.com/resource")
+        .bearerToken(token)
+        .timeout(Duration.ofSeconds(3))
+        .status();
+if (status == 404) {
+    // 明确不存在；网络失败会抛异常，不伪装成 404。
 }
 ```
 
-普通 4xx/5xx、网络调用与部分 JSON 解码失败包装为 HttpRequestException；参数校验和非法 URI 不保证都包装。204 空响应不当作 JSON 解析。不假定自动重试、自动跟随重定向或异步能力存在。
+`execute()` 的普通 4xx/5xx、网络调用与部分 JSON 解码失败包装为 HttpRequestException；status() 则直接返回 4xx/5xx。参数校验和非法 URI 不保证都包装。204 空响应不当作 JSON 解析。不默认自动重试，不默认跟随重定向，调用仍是同步方式。
+
+<a id="ai-tools-http-自定义客户端与生命周期"></a>
+### 自定义客户端与生命周期
+
+默认执行器复用一个 JDK HttpClient 的连接池；每次请求只创建轻量超时适配器，请求体阻塞写入使用虚拟线程。Spring 管理的 HttpExecutor Bean 在销毁时关闭自己创建的连接池，注入它的客户端不重复关闭。手动通过 HttpRequestClient.create/withTimeout(builder, mapper, timeout) 创建的客户端拥有默认执行器，不再使用时调用 close()。
+
+保留简单调用：
+
+```java
+// 使用当前选中的执行器（包括 Spring 自定义实现），只改变默认响应超时。
+try (HttpRequestClient client = HttpUtil.withTimeout(Duration.ofSeconds(10))) {
+    client.get("https://api.example.com/a").timeout(Duration.ofSeconds(2)).execute();
+    client.get("https://api.example.com/b").timeout(Duration.ofSeconds(5)).execute();
+    // 默认实现中两次请求使用同一个连接池；关闭此视图不会关闭共享执行器。
+}
+```
+
+需要自定义代理、客户端证书、SSL 或连接超时，可以声明自己的 HttpExecutor Bean，默认执行器自动退让，静态与注入入口一起生效。示例方法放入业务的 `@Configuration` 类：
+
+```java
+@Bean(destroyMethod = "close")
+public java.net.http.HttpClient remoteTransport() {
+    return java.net.http.HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(3))
+            // .proxy(proxySelector)
+            // .sslContext(sslContext)
+            .build();
+}
+
+@Bean
+public HttpExecutor projectHttpExecutor(
+        RestClient.Builder builder, ObjectMapper mapper,
+        HttpRequestProperties properties,
+        @Qualifier("remoteTransport") java.net.http.HttpClient transport) {
+    return RestClientHttpExecutor.create(builder, mapper, properties, transport);
+}
+```
+
+所需导入：`org.springframework.context.annotation.Bean`、`org.springframework.beans.factory.annotation.Qualifier`、`org.springframework.web.client.RestClient`、`com.fasterxml.jackson.databind.ObjectMapper`、`com.yulinlin.data.core.http.HttpRequestProperties`、`com.yulinlin.data.core.http.HttpExecutor`、`com.yulinlin.data.core.http.RestClientHttpExecutor` 和 Duration。外部提供的 transport 由业务/容器管理，执行器不会关闭它。
+
+`RestClientHttpExecutor.create(...)`、`HttpRequestClient.create(...)` 和静态 `HttpRequestClient.withTimeout(builder, mapper, timeout)` 明确创建默认实现并安装框架 JDK 请求工厂，不查找 Spring 的自定义执行器；保留 builder 的消息转换器、默认请求头、拦截器等，但**不沿用另一种 requestFactory 的网络设置**。日常业务使用注入的客户端或 HttpUtil；不要通过这些工厂绕过已选定的执行器。
+
+已配置好的 Apache/其他 RestClient 可使用 `new RestClientHttpExecutor(restClient, mapper)` 注册为 Bean，或保留旧写法 `new HttpRequestClient(restClient, mapper)`（第三个参数可提供正文大小限制）。它们完整保留原工厂，但超时必须在原客户端配置。再使用请求 `.timeout(...)` 或超时视图会明确报错，不会悄悄替换代理或证书。
+
+默认执行器内部使用 exchange() 统一处理状态和大小限制，不执行 RestClient 的 defaultStatusHandler；需要该扩展语义的业务直接使用原 RestClient，或在取得工具响应/异常后自行处理。完全更换底层实现的协议、示例和资源归属见[HTTP 执行器规范与替换](#ai-tools-http-executor)。
 
 用户提供 URL 时校验协议、目的地址与内网访问策略，防止 SSRF；不要无差别记录 token、cookie、密码及错误响应体。
 
 ---
 
 下一步：返回[常用工具主题目录](tools/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-tools-http-executor"></a>
+<!-- source: doc/tools/http-executor.md -->
+<a id="ai-tools-http-executor-http-执行器规范与替换"></a>
+## HTTP 执行器规范与替换
+
+[文档首页](README.md) / [常用工具](tools/README.md) / [HTTP 基础用法](#ai-tools-http)
+
+统一调用方式，默认使用现有 RestClient 实现；业务方只替换 HttpExecutor，不重写链式工具类。类型均位于 `com.yulinlin.data.core.http`，第一版继续复用 Spring 的 HttpMethod、HttpHeaders、MediaType，不额外增加一套同义类型。
+
+<a id="ai-tools-http-executor-本页导航"></a>
+### 本页导航
+
+- [组件边界](#ai-tools-http-executor-组件边界)
+- [实现协议](#ai-tools-http-executor-实现协议)
+- [Spring 自动替换](#ai-tools-http-executor-spring-自动替换)
+- [请求与响应适配](#ai-tools-http-executor-请求与响应适配)
+- [非 Spring 与生命周期](#ai-tools-http-executor-非-spring-与生命周期)
+- [维护检查清单](#ai-tools-http-executor-维护检查清单)
+
+<a id="ai-tools-http-executor-组件边界"></a>
+### 组件边界
+
+```text
+HttpUtil ──────────┐
+                  ↓
+注入 HttpRequestClient → HttpRequest → HttpRequestData → HttpExecutor
+                                                        ├─ 默认 RestClientHttpExecutor
+                                                        └─ 用户实现
+```
+
+| 组件 | 职责 |
+| --- | --- |
+| HttpRequestClient | 合并默认配置、创建请求、统一 404 策略及响应 ObjectMapper；不直接访问网络 |
+| HttpRequest | 组装 query、header、JSON、form、multipart、timeout；不跨线程共享 |
+| HttpRequestData | 只读请求快照；不依赖 RestClient，也不暴露其请求对象 |
+| HttpExecutor | 真正执行网络请求，负责连接复用、流、超时、大小限制和下载安全 |
+| RestClientHttpExecutor | 默认适配器，承接已有优化；支持直接包装外部 RestClient |
+| HttpAutoConfiguration / HttpClientBinding | 默认 Bean 退让、选择实现、绑定和解除静态入口 |
+
+暂不增加执行器路由、插件注册中心、自动重试或多套 HTTP 客户端配置组。单个应用选择一个默认执行器即可。
+
+<a id="ai-tools-http-executor-实现协议"></a>
+### 实现协议
+
+```java
+public interface HttpExecutor extends AutoCloseable {
+    HttpResponse execute(HttpRequestData request);
+    int status(HttpRequestData request);
+    HttpResponse download(HttpRequestData request, Path destination);
+    default void close() { }
+}
+```
+
+| 方法/行为 | 要求 |
+| --- | --- |
+| execute | 只在正文上限内读入内存；4xx/5xx 抛 HttpRequestException，错误正文按错误上限截断 |
+| status | 返回状态码，包括 4xx/5xx；不读取完整正文；网络失败抛异常，不当作 404 |
+| download | 流式写同目录临时文件，完整成功才替换目标；失败清理临时文件；返回空响应正文 |
+| 超时 | 遵守请求快照中的响应超时，不能影响其他并发请求；不支持时明确报错，不静默忽略 |
+| 资源 | 单例线程安全、复用连接池；关闭响应流，不为了复用连接强制读完大错误正文 |
+| 重试/跳转 | 默认不自动重试、不自动跟随重定向；不要重复提交 POST 或一次性文件流 |
+| close | 只释放实现自己拥有的资源；允许重复关闭，不关闭外部共享客户端 |
+
+`download` 必须拒绝 HEAD、无正文状态、3xx/4xx/5xx、206 或 Content-Range 等非完整文件响应；提供 Content-Length 时校验读取量。优先原子替换，不支持时可退回完整下载后的普通移动，不承诺断电安全。不要把 download/status 默认实现成 execute，否则会把大正文读入内存。
+
+`HttpRequestClient` 会对普通请求返回的错误状态、超大正文做防御性检查，但这不能替代执行器在读取流时限制内存，也不能撤销一个错误执行器已经覆盖的文件。第三方实现需要遵守协议。
+
+404 判断始终在 HttpRequestClient：先 HEAD，405/501 才回退 GET；不要求每个执行器各写一套 isNotFound。具体默认超时和大小配置见[HTTP 基础用法](#ai-tools-http-超时与错误处理)。
+
+<a id="ai-tools-http-executor-spring-自动替换"></a>
+### Spring 自动替换
+
+业务提供一个 Bean 即可，Bean 名字不作要求：
+
+```java
+@Bean
+public HttpExecutor projectHttpExecutor() {
+    return new MyHttpExecutor(); // 业务实现三个执行方法，遵守上面的协议
+}
+```
+
+没有自定义 Bean 时自动注册 RestClientHttpExecutor；有自定义 HttpExecutor 时默认实现不创建。自动创建的 HttpRequestClient 注入这个执行器。存在多个实现时必须指定 `@Primary`，否则启动失败并提示原因。若业务直接提供 HttpRequestClient Bean，则以该客户端为准；多个客户端同样需要 @Primary。
+
+Spring 单例初始化完成后，两种入口保持一致：
+
+```java
+@Service
+public class RemoteService {
+    private final HttpRequestClient client;
+    public RemoteService(HttpRequestClient client) { this.client = client; }
+
+    public void invoke(String url) {
+        client.get(url).timeout(Duration.ofSeconds(3)).execute();
+        HttpUtil.get(url).timeout(Duration.ofSeconds(3)).execute();
+        // client == HttpUtil.getClient()，两次走同一个执行器。
+        HttpUtil.withTimeout(Duration.ofSeconds(5)).get(url).execute();
+        // 仍走同一个执行器，只改变该视图的默认响应超时。
+    }
+}
+```
+
+`@Bean`、`@Service` 分别导入 Spring 的对应注解，Duration 导入 java.time.Duration。业务初始化回调中直接注入客户端，不依赖静态入口的绑定时机。Spring 激活绑定后，setClient 不允许换成另一个实例；应用关闭后静态调用报错，不静默切回默认实现。
+
+如果只是统一请求头、代理或 SSL，无须重新实现协议：
+
+```java
+@Bean
+public HttpExecutor projectHttpExecutor(
+        RestClient.Builder builder, ObjectMapper mapper, HttpRequestProperties properties) {
+    return RestClientHttpExecutor.create(
+            builder.clone().defaultHeader("X-Client", "video-service"), mapper, properties);
+}
+```
+
+所需导入：`org.springframework.web.client.RestClient`、`com.fasterxml.jackson.databind.ObjectMapper` 和本包的 HttpExecutor、RestClientHttpExecutor、HttpRequestProperties。传入自定义 JDK HttpClient 的完整 SSL/代理配置案例见[自定义客户端与生命周期](#ai-tools-http-自定义客户端与生命周期)。
+
+真正更换网络库时实现 HttpExecutor 三个方法即可；无需继承默认实现。需要委托默认实现增强时，可以在自己的执行器中持有 RestClientHttpExecutor，并将 execute/status/download 委托给它；自建的委托实例也要在 close 中关闭。
+
+<a id="ai-tools-http-executor-请求与响应适配"></a>
+### 请求与响应适配
+
+HttpRequestData 通过 getter 读取：
+
+| 信息 | API / 说明 |
+| --- | --- |
+| 方法和 URL | getMethod()、getUri()；URL 已编码，不再转义或重排 query，可能使用客户端的相对地址 |
+| 请求头 | getHeaders()；深复制列表并只读，不允许直接修改快照 |
+| 正文 | getBodyKind()：NONE / JSON / FORM / MULTIPART / RAW；getBody()、getContentType() |
+| 普通表单 | getForm()，保留同名多值 |
+| multipart | getMultipart()，值为 String 或 HttpFile，保留同名多个文件 |
+| 超时 | getTimeout() 是有效 Duration；isTimeoutOverridden() 表示用户显式覆盖（含超时视图） |
+| 大小上限 | getMaxResponseSize()、getMaxErrorSize()，单位均为字节 |
+
+`HttpRequest.toRequestData()` 只生成快照，不执行请求。快照复制头、表单与 multipart 容器；正文对象、字节数组、文件内容和输入流不默认深度克隆。提交期间不要并发修改正文；输入流文件只能消费一次。
+
+HttpFile 提供公开适配入口：
+
+```java
+String filename = file.getFilename();
+MediaType type = file.getContentType(); // 可以为 null
+long length = file.getContentLength(); // 未知为 -1，不会提前消费输入流
+boolean repeatable = file.isRepeatable();
+try (InputStream input = file.openStream()) {
+    // 交给底层网络库发送；不要为计算长度先读完。
+}
+// Spring 适配器也可直接使用 file.getResource()。
+```
+
+自定义执行器创建响应和异常：
+
+```java
+// status、headers、body 来自底层网络库；body 必须已按上限读取。
+return HttpResponse.of(status, headers, body);
+```
+
+```java
+throw new HttpRequestException(
+        request.getMethod().name(), request.getUri().toString(),
+        status, errorBody, truncated, cause);
+// 网络失败的 status 可为 null；不要把网络错误伪装成 HTTP 404。
+```
+
+`HttpResponse.of(...)` 防御性复制外部正文和头；客户端返回响应前关联自己的 ObjectMapper，因此 `bodyAs(Class)` / `bodyAs(TypeReference)` 在静态、注入和自定义执行器路径上使用一致的应用配置。必要时直接调用执行器也可用 `of(status, headers, body, mapper)` 指定 mapper。
+
+直接包装外部 RestClient 时保留其网络配置；默认 timeout 不强制覆盖它，显式 timeout/超时视图会报错，因为框架不能安全修改第三方工厂。其他自定义执行器也不得静默忽略调用方显式提出但不支持的能力。
+
+<a id="ai-tools-http-executor-非-spring-与生命周期"></a>
+### 非 Spring 与生命周期
+
+```java
+HttpExecutor executor = new MyHttpExecutor();
+HttpRequestClient client = new HttpRequestClient(executor);
+HttpUtil.setClient(client);
+// 所有静态请求走 executor；用完后由其所有者关闭 executor。
+```
+
+需要 JSON 定制及全局默认值时使用 `new HttpRequestClient(executor, objectMapper, properties)`。
+
+| 创建方式 | 谁关闭执行器 |
+| --- | --- |
+| HttpExecutor Bean + 自动 HttpRequestClient | Spring 关闭执行器 Bean 一次；客户端不重复关闭 |
+| new HttpRequestClient(executor, ...) | 外部提供者负责；client.close() 不关闭共享执行器 |
+| HttpRequestClient.create / 静态 withTimeout(builder, mapper, duration) | 创建的是默认执行器，client.close() 关闭它；这类显式工厂不查找 Spring Bean |
+| client.withTimeout(duration) / HttpUtil.withTimeout(duration) | 轻量视图不拥有执行器，close 不影响原客户端 |
+| 外部传入的 JDK HttpClient 或 RestClient | 外部所有者负责，默认执行器不会关闭它 |
+
+静态入口适用于单个主应用上下文。第二个上下文不能抢占已有绑定，会明确报错；多上下文隔离应用应在额外上下文排除 HttpAutoConfiguration，自行注册并注入 HttpRequestClient，仅主上下文管理静态入口。关闭一个未取得绑定的上下文不会清除主上下文的绑定。
+
+<a id="ai-tools-http-executor-维护检查清单"></a>
+### 维护检查清单
+
+- 新增底层实现只实现 HttpExecutor；不要让 HttpRequest 再依赖 RestClient 或 SDK 对象。
+- 不在每次请求中创建连接池，也不按无限多超时值缓存客户端。
+- 测试普通请求、错误截断、未知长度上传、状态检查、下载失败保护、并发超时和 close 所有权。
+- 测试自定义 Bean 退让、@Primary、静态/注入一致、关闭后解绑；初始化阶段优先注入。
+- 测试源码放在 admin/src/test。新增测试不代表已执行；遵守用户关于不编译、不运行测试和不运行 YAML 属性绑定测试的要求。
+
+---
+
+下一步：[HTTP 基础用法](#ai-tools-http) / [工具目录](tools/README.md)。
 
 ---
 
@@ -6802,7 +7467,7 @@ Controller 只处理 POST JSON 协议、校验和 DTO，不直接调用 Wrapper 
 
 [文档首页](README.md) / [项目实践](practice/README.md)
 
-两表角色权限模型、业务校验后 userId 登录和无状态语义。
+两表角色权限模型、统一 loginByUsername 与业务账号认证、无状态 JWT 语义。
 
 <a id="ai-practice-rbac-本页导航"></a>
 ### 本页导航
@@ -6819,7 +7484,7 @@ Controller 只处理 POST JSON 协议、校验和 DTO，不直接调用 Wrapper 
 
 源码位于 [admin/rbac](../admin/src/main/java/com/yulinlin/admin/rbac)，请求示例位于 [admin/rbac.http](../admin/rbac.http)。案例只有 `rbac_user`、`rbac_role` 两张业务表，使用 JDK 25、MySQL 和纯无状态 `security-jwt`，不保存登录记录，未引入 Spring Security，也不同时引入 Sa-Token。
 
-> 2026-10-20 已迁移到纯无状态 JWT：业务验证账号密码后用 userId 登录，移除会话存储、撤销及容量配置。注销和重置密码不使已签发 JWT 自动失效。源码和文档已调整，本轮未编译、未执行测试或数据库联调。
+> 2026-10-21：纯无状态 JWT 案例已统一为 loginByUsername；AdminAuthenticationService 一个 Bean 实现 UserAuthenticator 和 UserStore，不再公开按 userId 登录，不保存登录记录或撤销列表。注销和重置密码不使已签发 JWT 自动失效。源码和文档已调整，本轮未编译、未执行测试或数据库联调。
 
 <a id="ai-practice-rbac-启动方式与完整配置"></a>
 #### 启动方式与完整配置
@@ -6918,21 +7583,21 @@ private List<RoleEntity> roles;
 
 | 组件 | 职责 |
 | --- | --- |
-| `AdminAuthenticationService` | 校验用户名、密码、验证码策略与用户状态，返回可信 userId |
-| `AuthController` | 调用业务认证，然后调用注入的 `ISecurityManager.login(userId, deviceType)` |
-| `AdminUserStore` | 实现 `UserStore`；按 userId 查库，拒绝停用/锁定/已删除用户，构建安全 DTO |
+| `AdminAuthenticationService.authenticate` | 实现 UserAuthenticator，按 username 查询并校验密码和状态，调用自身 load 返回安全用户 DTO |
+| `AdminAuthenticationService.load` | 同一 Bean 实现 UserStore；按 userId 查询最新用户及权限，拒绝停用/锁定/已删除用户，不再次校验密码 |
+| `AuthController` | 先处理验证码，然后调用注入的 ISecurityManager.loginByUsername(username, password, deviceType) |
 | 框架 `JwtSecurityManager` / 默认 `JwtTokenCodec` | 签发、验签、有效期检查和公共上下文；无存储、无撤销 |
 | 框架登录拦截器 / 权限 AOP | Bearer Token 恢复当前用户，请求结束清理；检查登录、角色和权限 |
 
 Controller 中的核心代码：
 
 ```java
-String userId = authentication.authenticate(request.username(), request.password(), request.code());
+authentication.validateCode(request.code());
 String deviceType = request.deviceType() == null ? "web" : request.deviceType();
-return R.ok(security.login(userId, deviceType), "登录成功");
+return R.ok(security.loginByUsername(request.username(), request.password(), deviceType), "登录成功");
 ```
 
-也可调用 `SecurityUtil.login(userId, deviceType)`，它与注入管理器等价。不要从前端直接接收 userId 来完成登录。登录 JSON 示例：
+也可调用 `SecurityUtil.loginByUsername(username, password, deviceType)`，它与注入管理器等价。原有按 userId 登录的公开入口已移除；用户 ID 只从认证后的安全用户里获取。登录 JSON 示例：
 
 ```json
 {"username":"admin","password":"你的管理员密码","deviceType":"web"}
@@ -6940,7 +7605,9 @@ return R.ok(security.login(userId, deviceType), "登录成功");
 
 `deviceType` 可不传，admin 接口默认 `web`；显式传值只接受 1～32 位字母、数字、下划线或短横线。它是登录设备分类，不是凭证，也不自动读取加密的 Device-Type 请求头。
 
-响应为 `R<LoginResult>`，`data` 包含 `token`、`expiresAt`、`user`。默认 JWT 使用 HS256，只承载用户 ID 和必要登录元数据，不保存密码或角色权限。`AdminUserStore` 每次请求查最新用户及关联角色，生成不可变 `AdminUserDetails`，不是持久化完整用户快照。角色权限变化在下一次请求生效，同一请求期间读取同一线程快照。
+响应为 `R<LoginResult>`，`data` 包含 `token`、`expiresAt`、`user`。默认 JWT 使用 HS256，只承载用户 ID 和必要登录元数据，不保存密码或角色权限。`AdminAuthenticationService.load(userId)` 每次请求查最新用户及关联角色，生成不可变 `AdminUserDetails`，不是持久化完整用户快照。角色权限变化在下一次请求生效，同一请求期间读取同一线程快照。
+
+账号认证和用户加载共用一个业务 Bean，不需要额外注册第二个 UserStore。登录按用户名查询，后续请求始终按 Token 内的稳定用户 ID 查询；修改用户名不会把旧 Token 错当成另一个用户名。原独立 AdminUserStore 已合并，不再保留重复组件。
 
 前端后续请求携带 `Authorization: Bearer <token>`。JWT 按 `yulinlin.security.jwt.ttl` 到期，查询/刷新资料不续期；同一用户可以持有多个 JWT。注销和请求结束都只清理当前线程，客户端应自行删除 Token；再次提交旧 JWT 仍可通过验证，直到过期或用户不允许访问。签名密钥、issuer 等校验配置不变时，重启无需恢复登录记录，未过期 Token 仍可用。后台线程不继承身份。
 
@@ -6948,7 +7615,7 @@ admin 不声明 `ISecurityManager` Bean，框架自动提供唯一的 JWT 管理
 
 密码使用 JDK `PBKDF2WithHmacSHA256`，每次生成独立 16 字节随机盐、600000 次迭代和 256 位校验值；通过 `MessageDigest.isEqual` 比较。参数参考 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)。数据库只保存版本、迭代数、盐和哈希组成的字符串，用户 VO、`IUserDetails` 以及日志不包含密码哈希。登录查库不加 `@JoinCache`，SQL 参数日志也默认关闭。
 
-用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。业务请求可携带 code，但本例未接入验证码服务，非空 code 会明确拒绝；验证码不传给框架，业务完成验证后才按 userId 登录。
+用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。业务请求可携带 code，但本例未接入验证码服务，非空 code 会明确拒绝；验证码不传给框架，业务先完成验证码检查，再调用 loginByUsername。
 
 案例复用 security 公共鉴权 AOP：三个 Controller 类使用 `@ApiLogin`，登录方法通过 `@ApiPublic` 放行，其他方法默认需要登录；管理方法使用 `@ApiPerm("user:update")` 等权限声明。不再实现 AdminSecurityManager，也不再自建随机 Token、用户权限快照缓存或登录拦截器。
 

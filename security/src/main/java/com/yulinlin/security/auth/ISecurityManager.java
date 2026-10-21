@@ -1,25 +1,25 @@
 package com.yulinlin.security.auth;
 
-/** 登录状态协议；账号、密码、验证码和账号状态由业务验证，禁止直接信任客户端提交的 userId。 */
+/** 登录协议；统一使用账号密码入口，具体实现负责认证，不开放仅凭 userId 建立登录的入口。 */
 public interface ISecurityManager {
 
-    /** 为已经通过业务验证的用户建立登录，未指定设备时使用 default。 */
-    default LoginResult login(String userId) {
-        return login(userId, "default");
+    /** 校验账号密码后建立登录；未指定设备时使用 default。 */
+    default LoginResult loginByUsername(String username, String password) {
+        return loginByUsername(username, password, "default");
     }
 
     /**
-     * 为已经通过业务验证的用户建立登录，不验证密码或验证码。
-     * 使用内置上下文时，登录成功必须设置 SecurityContext，失败不能保留旧身份；
-     * 外部安全框架适配可提供自定义 LoginInterceptor Bean，配合使用其自身的上下文。
+     * 委托具体实现校验账号密码及账号状态，然后建立登录。验证码仍由业务校验。
+     * Spring 适配使用 AuthenticationManager；JWT、Sa-Token 使用业务提供的 UserAuthenticator。
+     * 设备类型仅为登录元数据，不是身份凭证，也不自动代表设备隔离策略。
      *
-     * @param userId 业务验证得到的用户 ID，不是客户端未经验证的身份声明
-     * @param deviceType 设备类型，例如 web、android、ios；设备类型不是认证凭证
-     * @return Token、有效期和不含敏感凭证的用户信息；不可为 null
-     * @throws LoginException 用户不存在或不能建立登录
-     * @throws IllegalStateException when only the default anonymous manager is installed
+     * @return 安全用户与登录凭证；Session 模式的 token、expiresAt 可以为 null
+     * @throws LoginException 账号密码认证被拒绝或无法建立登录
+     * @throws UnsupportedOperationException 当前实现未提供账号密码登录
      */
-    LoginResult login(String userId, String deviceType);
+    default LoginResult loginByUsername(String username, String password, String deviceType) {
+        throw new UnsupportedOperationException("当前安全管理器不支持账号密码登录，请引入登录模块或提供账号认证实现");
+    }
 
     /** 验证 Token 并恢复请求快照；可无状态验签或校验服务端会话，不依赖当前上下文。 */
     default LoginSession resolveSession(String token) { return null; }
@@ -37,7 +37,7 @@ public interface ISecurityManager {
      */
     default IUserDetails getUserDetails() { return SecurityContext.getUser(); }
 
-    /** 当前请求的 Token；外部安全框架适配应按其自身上下文覆盖。 */
+    /** 当前请求的 Token；Session/Basic 等外部认证可在已登录时返回 null，不得把密码或 Session ID 冒充 Token。 */
     default String getToken() { return SecurityContext.getToken(); }
 
     default boolean isLogin() { return getUserDetails() != null; }

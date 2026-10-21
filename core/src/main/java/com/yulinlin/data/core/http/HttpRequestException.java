@@ -9,13 +9,20 @@ public class HttpRequestException extends RuntimeException {
     private final String url;
     private final Integer statusCode;
     private final byte[] responseBody;
+    private final boolean responseBodyTruncated;
 
-    HttpRequestException(String method, String url, Integer statusCode, byte[] responseBody, Throwable cause) {
+    public HttpRequestException(String method, String url, Integer statusCode, byte[] responseBody, Throwable cause) {
+        this(method, url, statusCode, responseBody, false, cause);
+    }
+
+    public HttpRequestException(String method, String url, Integer statusCode, byte[] responseBody,
+                         boolean responseBodyTruncated, Throwable cause) {
         super(buildMessage(method, url, statusCode), cause);
         this.method = method;
         this.url = url;
         this.statusCode = statusCode;
         this.responseBody = responseBody == null ? new byte[0] : responseBody.clone();
+        this.responseBodyTruncated = responseBodyTruncated;
     }
 
     private static String buildMessage(String method, String url, Integer statusCode) {
@@ -38,4 +45,6 @@ public class HttpRequestException extends RuntimeException {
     public byte[] getResponseBody() {
         return responseBody.clone();
     }
+
+    public boolean isResponseBodyTruncated() { return responseBodyTruncated; }
 }

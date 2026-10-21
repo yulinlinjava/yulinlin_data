@@ -4,12 +4,6 @@ package com.yulinlin.security.auth;
 public class AnonymousSecurityManager implements ISecurityManager {
 
     @Override
-    public LoginResult login(String userId, String deviceType) {
-        SecurityContext.clear();
-        throw new IllegalStateException("未配置登录实现，请引入 security-jwt、security-sa-token 或提供 ISecurityManager");
-    }
-
-    @Override
     public void logout() {
         SecurityContext.clear();
     }

@@ -35,6 +35,7 @@ public class LoginContextInterceptor implements LoginInterceptor {
                     || token.chars().anyMatch(Character::isWhitespace)) throw unauthorized();
             LoginSession session = manager.resolveSession(token);
             if (session == null || session.expired() || !token.equals(session.token())) throw unauthorized();
+            onSessionResolved(session);
             SecurityContext.set(session);
             return true;
         } catch (LoginException error) {
@@ -59,6 +60,9 @@ public class LoginContextInterceptor implements LoginInterceptor {
             throw unauthorized();
         return header.substring(7).trim();
     }
+
+    /** 身份验证成功后供适配器同步外部请求上下文；不得在此信任未经验证的 Token。 */
+    protected void onSessionResolved(LoginSession session) { }
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response,

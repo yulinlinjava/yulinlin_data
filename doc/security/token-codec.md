@@ -59,7 +59,7 @@ public record TokenInfo(
 - 兼容旧 Token 未携带 deviceType：解析结果可为 null，不从服务端记录补齐；其他签名、用户、tokenId、有效期校验不放宽。新登录生成的 Token 仍需携带匹配的 deviceType。
 - 提供自定义 Codec 后，无需默认 Codec 的 secret/issuer；签名策略由自定义实现负责。它不负责存储、注销、加载用户或设置线程上下文。
 
-如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码。正常登录调用 `SecurityUtil.login`，由管理器加载用户、核对生成结果并建立当前线程身份。手动签发的 JWT 满足相同验签、时间和用户检查时也可被接受，不需要服务端登记。
+如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码，只能由可信服务端代码使用，不应封装成接收任意 userId 的公开登录接口。正常登录调用 `SecurityUtil.loginByUsername`，由 UserAuthenticator 验证账号密码，管理器核对签发结果并建立当前线程身份。手动签发的 JWT 满足相同验签、时间和用户检查时也可被接受，不需要服务端登记。
 
 ---
 

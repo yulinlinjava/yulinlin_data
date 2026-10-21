@@ -226,6 +226,10 @@
         "file": "security/sa-token.md",
         "title": "有状态 Sa-Token 登录"
       },
+        {
+          "file": "security/spring.md",
+          "title": "Spring Security 接入"
+        },
       {
         "file": "security/context.md",
         "title": "登录上下文生命周期"
@@ -248,6 +252,10 @@
       {
         "file": "tools/http.md",
         "title": "HTTP 请求、上传与下载"
+      },
+      {
+        "file": "tools/http-executor.md",
+        "title": "HTTP 执行器规范与替换"
       },
       {
         "file": "tools/reflection.md",

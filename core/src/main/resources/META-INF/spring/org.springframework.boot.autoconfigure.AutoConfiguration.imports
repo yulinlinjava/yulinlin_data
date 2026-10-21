@@ -1,1 +1,2 @@
 com.yulinlin.data.core.YulinlinCoreAutoConfig
+com.yulinlin.data.core.http.HttpAutoConfiguration

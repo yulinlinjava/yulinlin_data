@@ -9,8 +9,6 @@ import com.yulinlin.data.core.filter.IFilter;
 import com.yulinlin.data.core.filter.IFilterManager;
 import com.yulinlin.data.core.filter.InitFilter;
 import com.yulinlin.data.core.filter.SimpFilterManager;
-import com.yulinlin.data.core.http.HttpRequestClient;
-import com.yulinlin.data.core.http.HttpRequestProperties;
 import com.yulinlin.data.core.loadbalan.LoadBalance;
 import com.yulinlin.data.core.loadbalan.LoadBalanceProperties;
 import com.yulinlin.data.core.loadbalan.RandomLoadBalance;
@@ -26,36 +24,20 @@ import com.yulinlin.data.core.wrapper.IWrapperFactory;
 import com.yulinlin.data.core.wrapper.factory.WrapperFactoryImpl;
 import com.yulinlin.data.core.wrapper.impl.*;
 import com.yulinlin.data.lang.util.ThreadUtil;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.web.client.RestClientAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.web.client.RestClient;
 
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 
 
-@AutoConfiguration(after = {JacksonAutoConfiguration.class, RestClientAutoConfiguration.class})
-@EnableConfigurationProperties({HttpRequestProperties.class, LoadBalanceProperties.class, DataProperties.class})
+@AutoConfiguration
+@EnableConfigurationProperties({LoadBalanceProperties.class, DataProperties.class})
 public class YulinlinCoreAutoConfig {
-
-    @ConditionalOnMissingBean
-    @Bean
-    public HttpRequestClient httpRequestClient(
-            ObjectProvider<RestClient.Builder> restClientBuilder,
-            ObjectProvider<ObjectMapper> objectMapperProvider,
-            HttpRequestProperties httpRequestProperties) {
-        RestClient.Builder builder = restClientBuilder.getIfAvailable(RestClient::builder);
-        ObjectMapper objectMapper = objectMapperProvider.getIfAvailable(ObjectMapper::new);
-        return HttpRequestClient.withTimeout(builder.clone(), objectMapper, httpRequestProperties.getTimeout());
-    }
-
 
     @ConditionalOnMissingBean
     @Bean

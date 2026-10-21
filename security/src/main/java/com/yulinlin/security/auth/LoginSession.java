@@ -3,10 +3,10 @@ package com.yulinlin.security.auth;
 import java.time.Instant;
 import java.util.Objects;
 
-/** 请求内登录快照；user 不得包含密码或密钥。expiresAt 为 null 表示底层配置了永久有效。 */
+/** 请求内身份快照；user 不得包含凭证。外部认证可无 Token；expiresAt=null 表示由底层校验有效期。 */
 public record LoginSession(String token, Instant expiresAt, IUserDetails user) {
     public LoginSession {
-        if (token == null || token.isBlank()) throw new IllegalArgumentException("Token 不能为空");
+        if (token != null && token.isBlank()) throw new IllegalArgumentException("Token 不能是空字符串；无 Token 的外部认证使用 null");
         Objects.requireNonNull(user, "user");
     }
 

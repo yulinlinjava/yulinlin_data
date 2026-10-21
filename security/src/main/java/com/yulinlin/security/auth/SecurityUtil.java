@@ -36,8 +36,19 @@ public final class SecurityUtil implements SmartInitializingSingleton, Disposabl
         return binding.selected;
     }
 
-    public static LoginResult login(String userId) { return manager().login(userId); }
-    public static LoginResult login(String userId, String deviceType) { return manager().login(userId, deviceType); }
+    /** 上下文桥接跟随唯一选定的管理器；JWT/匿名实现不受影响。 */
+    static SecurityContextResolver contextResolver() {
+        SecurityUtil binding = active;
+        return binding != null && binding.selected instanceof SecurityContextResolver resolver
+                ? resolver : null;
+    }
+
+    public static LoginResult loginByUsername(String username, String password) {
+        return manager().loginByUsername(username, password);
+    }
+    public static LoginResult loginByUsername(String username, String password, String deviceType) {
+        return manager().loginByUsername(username, password, deviceType);
+    }
     public static void logout() { manager().logout(); }
     public static IUserDetails getUserDetails() { return manager().getUserDetails(); }
     public static IUserDetails getUserDetails(String userId) { return manager().getUserDetails(userId); }

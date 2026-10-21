@@ -7,6 +7,7 @@ import com.yulinlin.security.auth.LoginResult;
 import com.yulinlin.security.auth.LoginSession;
 import com.yulinlin.security.auth.SecurityContext;
 import com.yulinlin.security.auth.UserStore;
+import com.yulinlin.security.auth.UserAuthenticator;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -18,22 +19,29 @@ import java.util.Objects;
 public final class JwtSecurityManager extends AbstractUserSecurityManager {
     private final JwtTokenCodec tokens;
 
-    /** 手动构造时使用默认 Codec；Spring 自动装配使用下方可注入 Codec 的构造器。 */
+    /** 仅恢复既有 Token；手动发起账号密码登录需使用传入 UserAuthenticator 的构造器。 */
     public JwtSecurityManager(UserStore users, JwtProperties properties) {
         this(users, new DefaultJwtTokenCodec(properties), properties);
     }
 
+    public JwtSecurityManager(UserStore users, JwtProperties properties, UserAuthenticator authenticator) {
+        this(users, new DefaultJwtTokenCodec(properties), properties, authenticator);
+    }
+
     public JwtSecurityManager(UserStore users, JwtTokenCodec tokens, JwtProperties properties) {
-        super(users);
+        this(users, tokens, properties, null);
+    }
+
+    public JwtSecurityManager(UserStore users, JwtTokenCodec tokens, JwtProperties properties,
+                              UserAuthenticator authenticator) {
+        super(users, authenticator);
         properties.validate();
         this.tokens = Objects.requireNonNull(tokens, "JwtTokenCodec 不能为空");
     }
 
     @Override
-    public LoginResult login(String userId, String deviceType) {
-        SecurityContext.clear();
-        requireText(deviceType, "设备类型");
-        IUserDetails user = loadRequiredUser(userId);
+    protected LoginResult createLogin(IUserDetails user, String deviceType) {
+        String userId = user.getUserId();
         String token = tokens.generate(user, deviceType);
         TokenInfo info = verifiedInfo(token);
         // 回读生成结果，不能允许自定义生成器改写本次登录的用户或设备。

@@ -1,7 +1,6 @@
 package com.yulinlin.regression.security;
 
 import com.yulinlin.admin.rbac.auth.AdminAuthenticationService;
-import com.yulinlin.admin.rbac.auth.AdminUserStore;
 import com.yulinlin.admin.rbac.auth.PasswordHash;
 import com.yulinlin.admin.rbac.domain.UserEntity;
 import com.yulinlin.admin.rbac.domain.UserStatus;
@@ -45,7 +44,7 @@ class LoginContextTest {
             assertNull(SecurityContext.getToken());
         }
         verify(manager, times(3)).resolveSession("token");
-        verify(manager, never()).login(anyString(), anyString());
+        verify(manager, never()).loginByUsername(anyString(), anyString(), anyString());
         assertThrows(LoginException.class, SecurityContext::requireUser);
     }
 
@@ -108,8 +107,8 @@ class LoginContextTest {
         AdminAuthenticationService authentication = new AdminAuthenticationService(users, passwords);
         JwtProperties properties = new JwtProperties();
         properties.setSecret(java.util.Base64.getEncoder().encodeToString(new byte[32]));
-        JwtSecurityManager manager = new JwtSecurityManager(new AdminUserStore(users), properties);
-        LoginResult result = manager.login(authentication.authenticate("alice", "correct", null), "web");
+        JwtSecurityManager manager = new JwtSecurityManager(authentication, properties, authentication);
+        LoginResult result = manager.loginByUsername("alice", "correct", "web");
         assertEquals(3, result.token().split("\\.").length);
         assertSame(result.user(), manager.getUserDetails());
         assertEquals(result.token(), SecurityContext.getToken());
@@ -124,21 +123,21 @@ class LoginContextTest {
         manager.logout();
         assertNull(SecurityContext.getUser());
         assertNotNull(manager.resolveSession(result.token())); // 注销不会撤销已签发的 JWT
-        JwtSecurityManager restarted = new JwtSecurityManager(new AdminUserStore(users), properties);
+        JwtSecurityManager restarted = new JwtSecurityManager(new AdminAuthenticationService(users, passwords), properties);
         assertNotNull(restarted.resolveSession(result.token())); // 无需恢复任何登录记录
         assertEquals(result.expiresAt(), restarted.resolveSession(result.token()).expiresAt());
         JwtProperties otherProperties = new JwtProperties();
         byte[] otherKey = new byte[32];
         java.util.Arrays.fill(otherKey, (byte) 1);
         otherProperties.setSecret(java.util.Base64.getEncoder().encodeToString(otherKey));
-        assertNull(new JwtSecurityManager(new AdminUserStore(users), otherProperties)
+        assertNull(new JwtSecurityManager(authentication, otherProperties)
                 .resolveSession(result.token())); // 无状态不代表放宽验签
         SecurityContext.set(session("old"));
-        assertThrows(LoginException.class, () -> authentication.authenticate("alice", "wrong", null));
+        assertThrows(LoginException.class, () -> manager.loginByUsername("alice", "wrong", "web"));
         assertNull(SecurityContext.getUser());
 
-        LoginResult first = manager.login("u1", "web");
-        LoginResult second = manager.login("u1", "android");
+        LoginResult first = manager.loginByUsername("alice", "correct", "web");
+        LoginResult second = manager.loginByUsername("alice", "correct", "android");
         user.setNickname("新昵称");
         assertEquals("新昵称", manager.resolveSession(first.token()).user().getAttribute("nickname"));
         RoleEntity role = new RoleEntity();
@@ -156,8 +155,8 @@ class LoginContextTest {
         assertNull(manager.resolveSession(first.token()));
         assertNull(manager.refresh()); // 刷新时重新检查当前用户状态
         assertNull(SecurityContext.getUser());
-        assertThrows(LoginException.class, () -> authentication.authenticate("alice", "correct", null));
-        assertThrows(LoginException.class, () -> manager.login("u1", "web"));
+        assertThrows(LoginException.class, () -> authentication.authenticate("alice", "correct"));
+        assertThrows(LoginException.class, () -> manager.loginByUsername("alice", "correct", "web"));
         user.setStatus(UserStatus.ENABLED);
         assertNotNull(manager.resolveSession(first.token())); // 恢复账号后未过期的 Token 仍可用
         when(users.findSnapshotById("u1")).thenReturn(null);

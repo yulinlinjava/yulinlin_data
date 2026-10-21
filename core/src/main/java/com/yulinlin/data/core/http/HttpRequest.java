@@ -1,39 +1,20 @@
 package com.yulinlin.data.core.http;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.core.io.Resource;
-import org.springframework.http.HttpEntity;
+import com.yulinlin.data.core.http.HttpRequestData.BodyKind;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestClientResponseException;
-import org.springframework.web.util.UriComponentsBuilder;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URI;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * Mutable request builder supporting JSON, URL encoded forms, multipart uploads and downloads.
- */
+/** 可变链式请求构造器，不跨线程共享；执行时生成请求快照，底层由 HttpExecutor 决定。 */
 public final class HttpRequest {
-
-    private enum BodyKind { NONE, JSON, FORM, MULTIPART, RAW }
-
-    private final RestClient restClient;
-    private final ObjectMapper objectMapper;
+    private final HttpRequestClient client;
     private final HttpMethod method;
     private final String url;
     private final HttpHeaders headers = new HttpHeaders();
@@ -46,17 +27,14 @@ public final class HttpRequest {
     private MediaType rawContentType;
     private Duration timeout;
 
-    HttpRequest(RestClient restClient, ObjectMapper objectMapper, HttpMethod method, String url) {
-        this.restClient = Objects.requireNonNull(restClient, "restClient must not be null");
-        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
+    HttpRequest(HttpRequestClient client, HttpMethod method, String url) {
+        this.client = Objects.requireNonNull(client, "client must not be null");
         this.method = Objects.requireNonNull(method, "method must not be null");
         this.url = Objects.requireNonNull(url, "url must not be null");
     }
 
     public HttpRequest query(String name, Object value) {
-        if (value != null) {
-            query.add(name, String.valueOf(value));
-        }
+        if (value != null) query.add(Objects.requireNonNull(name, "query name must not be null"), String.valueOf(value));
         return this;
     }
 
@@ -86,9 +64,6 @@ public final class HttpRequest {
         return this;
     }
 
-    /**
-     * Sends a body with an explicit content type, for example text, XML or byte arrays.
-     */
     public HttpRequest body(Object value, MediaType contentType) {
         switchBodyKind(BodyKind.RAW);
         body = Objects.requireNonNull(value, "body must not be null");
@@ -98,112 +73,55 @@ public final class HttpRequest {
 
     public HttpRequest form(String name, Object value) {
         switchBodyKind(BodyKind.FORM);
-        form.add(name, value == null ? "" : String.valueOf(value));
+        form.add(Objects.requireNonNull(name, "form name must not be null"), value == null ? "" : String.valueOf(value));
         return this;
     }
 
-    public HttpRequest form(Map<String,Object> data) {
-        for (Map.Entry<String, Object> entry : data.entrySet()) {
-            form(entry.getKey(),entry.getValue());
-        }
+    public HttpRequest form(Map<String, Object> data) {
+        Objects.requireNonNull(data, "form must not be null").forEach(this::form);
         return this;
     }
 
     public HttpRequest multipart(String name, Object value) {
         switchBodyKind(BodyKind.MULTIPART);
-        multipart.add(name, value == null ? "" : String.valueOf(value));
+        multipart.add(Objects.requireNonNull(name, "part name must not be null"), value == null ? "" : String.valueOf(value));
         return this;
     }
 
     public HttpRequest file(String name, HttpFile file) {
         switchBodyKind(BodyKind.MULTIPART);
-        HttpFile value = Objects.requireNonNull(file, "file must not be null");
-        if (value.contentType() == null) {
-            multipart.add(name, value.resource());
-            return this;
-        }
-        HttpHeaders partHeaders = new HttpHeaders();
-        partHeaders.setContentType(value.contentType());
-        multipart.add(name, new HttpEntity<Resource>(value.resource(), partHeaders));
+        multipart.add(Objects.requireNonNull(name, "part name must not be null"),
+                Objects.requireNonNull(file, "file must not be null"));
         return this;
     }
 
-    /**
-     * Sets the maximum time for this request to receive and read its response.
-     */
+    /** 设置本次响应等待与读取超时，不修改客户端默认值。 */
     public HttpRequest timeout(Duration timeout) {
-        this.timeout = HttpRequestFactory.requirePositiveTimeout(timeout);
+        this.timeout = HttpRequestData.requirePositiveTimeout(timeout);
         return this;
     }
 
-    public HttpResponse execute() {
-        URI requestUri = requestUri();
-        try {
-            org.springframework.http.ResponseEntity<byte[]> response = requestSpec(requestUri)
-                    .retrieve()
-                    .toEntity(byte[].class);
-            return new HttpResponse(response.getStatusCode(), response.getHeaders(), response.getBody(), objectMapper);
-        } catch (RestClientResponseException exception) {
-            throw new HttpRequestException(method.name(), requestUri.toString(), exception.getStatusCode().value(),
-                    exception.getResponseBodyAsByteArray(), exception);
-        } catch (RestClientException exception) {
-            throw new HttpRequestException(method.name(), requestUri.toString(), null, null, exception);
-        }
-    }
+    public HttpResponse execute() { return client.execute(toRequestData()); }
+
+    /** 包括 4xx/5xx；网络错误仍抛出异常，不读取完整正文。 */
+    public int status() { return client.status(toRequestData()); }
 
     public HttpResponse downloadTo(Path destination) {
-        URI requestUri = requestUri();
         Path target = Objects.requireNonNull(destination, "destination must not be null").toAbsolutePath().normalize();
-        try {
-            return requestSpec(requestUri).exchange((request, response) -> download(response, target, requestUri));
-        } catch (RestClientResponseException exception) {
-            throw new HttpRequestException(method.name(), requestUri.toString(), exception.getStatusCode().value(),
-                    exception.getResponseBodyAsByteArray(), exception);
-        } catch (RestClientException exception) {
-            throw new HttpRequestException(method.name(), requestUri.toString(), null, null, exception);
-        }
+        return client.download(toRequestData(), target);
     }
 
-    private HttpResponse download(ClientHttpResponse response, Path target, URI requestUri) throws IOException {
-        HttpStatusCode statusCode = response.getStatusCode();
-        if (statusCode.isError()) {
-            byte[] errorBody = response.getBody().readAllBytes();
-            throw new HttpRequestException(method.name(), requestUri.toString(), statusCode.value(), errorBody, null);
-        }
-        Path parent = target.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        try (InputStream input = response.getBody()) {
-            Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
-        }
-        return new HttpResponse(statusCode, response.getHeaders(), new byte[0], objectMapper);
-    }
-
-    private RestClient.RequestHeadersSpec<?> requestSpec(URI requestUri) {
-        RestClient.RequestBodySpec spec = activeRestClient().method(method)
-                .uri(requestUri)
-                .headers(requestHeaders -> requestHeaders.addAll(headers));
-        return switch (bodyKind) {
-            case NONE -> spec;
-            case JSON -> spec.contentType(MediaType.APPLICATION_JSON).body(body);
-            case FORM -> spec.contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form);
-            case MULTIPART -> spec.contentType(MediaType.MULTIPART_FORM_DATA).body(multipart);
-            case RAW -> spec.contentType(rawContentType).body(body);
+    /** 只创建快照，不发请求。正文对象及文件流不深度复制。 */
+    public HttpRequestData toRequestData() {
+        MediaType contentType = switch (bodyKind) {
+            case NONE -> null;
+            case JSON -> MediaType.APPLICATION_JSON;
+            case FORM -> MediaType.APPLICATION_FORM_URLENCODED;
+            case MULTIPART -> MediaType.MULTIPART_FORM_DATA;
+            case RAW -> rawContentType;
         };
-    }
-
-    private RestClient activeRestClient() {
-        if (timeout == null) {
-            return restClient;
-        }
-        return HttpRequestFactory.withTimeout(restClient, timeout);
-    }
-
-    private URI requestUri() {
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(url);
-        query.forEach((name, values) -> values.forEach(value -> builder.queryParam(name, value)));
-        return builder.build().encode().toUri();
+        return client.snapshot(method, HttpRequestUri.create(url, query), headers, bodyKind, body,
+                contentType, form, multipart, timeout);
     }
 
     private void switchBodyKind(BodyKind requestedBodyKind) {
@@ -212,7 +130,4 @@ public final class HttpRequest {
         }
         bodyKind = requestedBodyKind;
     }
-
-
-
 }

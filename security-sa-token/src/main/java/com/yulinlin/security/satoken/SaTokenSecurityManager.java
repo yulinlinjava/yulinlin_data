@@ -1,6 +1,7 @@
 package com.yulinlin.security.satoken;
 
 import cn.dev33.satoken.dao.SaTokenDao;
+import cn.dev33.satoken.context.SaHolder;
 import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.stp.StpLogic;
 import cn.dev33.satoken.strategy.SaStrategy;
@@ -10,7 +11,9 @@ import com.yulinlin.security.auth.LoginException;
 import com.yulinlin.security.auth.LoginResult;
 import com.yulinlin.security.auth.LoginSession;
 import com.yulinlin.security.auth.SecurityContext;
+import com.yulinlin.security.auth.SecurityContextResolver;
 import com.yulinlin.security.auth.UserStore;
+import com.yulinlin.security.auth.UserAuthenticator;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -18,14 +21,17 @@ import java.util.function.Supplier;
 
 /**
  * 会话、设备隔离、踢人和存储均委托 Sa-Token，配置沿用 sa-token.*。
- * 统一入口通过 Authorization: Bearer 恢复 SecurityContext，不另建 Token 缓存。
- * 本适配器不读 Cookie、不写响应 Cookie；若使用原生 StpUtil HTTP 入口，需另行配置其 Token 读取规则。
+ * 原生 StpUtil.login/logout 与统一入口共用身份；用户资料仅在请求内缓存，不另建登录记录。
  */
-public final class SaTokenSecurityManager extends AbstractUserSecurityManager {
+public final class SaTokenSecurityManager extends AbstractUserSecurityManager implements SecurityContextResolver {
     private final Supplier<StpLogic> logicSupplier;
 
     public SaTokenSecurityManager(UserStore users, Supplier<StpLogic> logicSupplier) {
-        super(users);
+        this(users, logicSupplier, null);
+    }
+
+    public SaTokenSecurityManager(UserStore users, Supplier<StpLogic> logicSupplier, UserAuthenticator authenticator) {
+        super(users, authenticator);
         this.logicSupplier = Objects.requireNonNull(logicSupplier, "StpLogic 提供者不能为空");
     }
 
@@ -35,10 +41,8 @@ public final class SaTokenSecurityManager extends AbstractUserSecurityManager {
     }
 
     @Override
-    public LoginResult login(String userId, String deviceType) {
-        SecurityContext.clear();
-        requireText(deviceType, "设备类型");
-        IUserDetails user = loadRequiredUser(userId);
+    protected LoginResult createLogin(IUserDetails user, String deviceType) {
+        String userId = user.getUserId();
         StpLogic logic = stpLogic();
         String token = logic.createLoginSession(userId,
                 logic.createSaLoginParameter().setDeviceType(deviceType));
@@ -49,6 +53,8 @@ public final class SaTokenSecurityManager extends AbstractUserSecurityManager {
                 throw new LoginException("登录会话未生效，请检查 Sa-Token 的有效期和存储配置");
             }
             LoginSession session = snapshot(token, checkedAt, timeout, user);
+            // 统一 API 登录后，原生 StpUtil 也应立即看到同一 Token；不额外写 Cookie/响应头。
+            if (SaHolder.getContext().isValid()) logic.setTokenValueToStorage(token);
             SecurityContext.set(session);
             return LoginResult.of(session);
         } catch (RuntimeException | Error error) {
@@ -60,6 +66,24 @@ public final class SaTokenSecurityManager extends AbstractUserSecurityManager {
 
     @Override
     public LoginSession resolveSession(String token) {
+        return resolveSession(token, null);
+    }
+
+    @Override
+    public LoginSession resolveContext(LoginSession cached) {
+        if (!SaHolder.getContext().isValid()) {
+            // 非 HTTP 场景仍可通过账号密码登录或设置可信快照，不跨线程恢复身份。
+            return cached == null ? null : resolveSession(cached.token(), cached);
+        }
+        try {
+            // 即使已有快照也检查原生 Token：注销、重新登录、踢人后不能复用旧身份。
+            return resolveSession(stpLogic().getTokenValue(true), cached);
+        } catch (NotLoginException error) {
+            return null;
+        }
+    }
+
+    private LoginSession resolveSession(String token, LoginSession cached) {
         if (token == null || token.isBlank() || token.length() > 8192) return null;
         StpLogic logic = stpLogic();
         Instant checkedAt = Instant.now();
@@ -73,6 +97,10 @@ public final class SaTokenSecurityManager extends AbstractUserSecurityManager {
             if (timeout != SaTokenDao.NEVER_EXPIRE && timeout <= 0) return null;
         } catch (NotLoginException error) {
             return null;
+        }
+        if (cached != null && !cached.expired() && token.equals(cached.token())
+                && String.valueOf(loginId).equals(cached.user().getUserId())) {
+            return cached;
         }
         IUserDetails user = getUserDetails(String.valueOf(loginId));
         if (user == null) {
@@ -91,8 +119,12 @@ public final class SaTokenSecurityManager extends AbstractUserSecurityManager {
     @Override
     public void logout() {
         try {
-            String token = SecurityContext.getToken();
-            if (token != null) stpLogic().logoutByTokenValue(token);
+            if (SaHolder.getContext().isValid()) {
+                stpLogic().logout();
+            } else {
+                String token = SecurityContext.getToken();
+                if (token != null) stpLogic().logoutByTokenValue(token);
+            }
         } finally {
             SecurityContext.clear();
         }

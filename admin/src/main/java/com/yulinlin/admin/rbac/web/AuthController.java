@@ -31,9 +31,9 @@ public class AuthController {
     @ApiLimit(count = 10, interval = "1m")
     @PostMapping("/login")
     public R<LoginResult> login(@Valid @RequestBody RbacRequests.Login request) {
-        String userId = authentication.authenticate(request.username(), request.password(), request.code());
+        authentication.validateCode(request.code());
         String deviceType = request.deviceType() == null ? "web" : request.deviceType();
-        return R.ok(security.login(userId, deviceType), "登录成功");
+        return R.ok(security.loginByUsername(request.username(), request.password(), deviceType), "登录成功");
     }
 
     @PostMapping("/logout")

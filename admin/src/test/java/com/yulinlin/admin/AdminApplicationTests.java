@@ -22,7 +22,12 @@ import java.util.Map;
 
 //
 @Slf4j
-@SpringBootTest
+// admin 示例使用 JWT；其他适配器和 Spring Security API 仅供独立回归，不改变示例的运行策略。
+@SpringBootTest(properties = "spring.autoconfigure.exclude="
+        + "com.yulinlin.security.satoken.SaTokenAutoConfiguration,"
+        + "com.yulinlin.security.spring.SpringSecurityAdapterAutoConfiguration,"
+        + "org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration,"
+        + "org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration")
 public class AdminApplicationTests {
 
     @Autowired

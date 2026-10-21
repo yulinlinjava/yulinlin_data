@@ -46,6 +46,8 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 | EntityCounterManager / CounterUpdate / CounterInsert（common） | 链式或模型按主键聚合更新，或按非数字维度聚合插入；提交快照、数字求和、定时刷新与失败批次保留 | 分布式统计、严格分钟窗口、exactly-once；不能绕过 RouteSession |
 | cache-core | 缓存 SPI、CacheRegistry 注册/默认选择、CacheClient 命名路由、Key/TTL 与 namespace/partition 模型 | 解析 INode、Wrapper 或数据库表注解；自动串联多个 Provider |
 | core/cache | ORM 查询 Key 构造、表依赖解析和写后失效决策 | 实现 Caffeine、Ehcache 或 Redis 存储 |
+| core/http：HttpRequestClient / HttpRequest / HttpRequestData | 统一调用入口、请求快照、默认配置和 404 策略；HttpUtil 绑定 Spring 选定的客户端 | 直接实现网络调用、绕过用户 HttpExecutor Bean |
+| HttpExecutor / RestClientHttpExecutor | 可替换的 HTTP 执行协议及默认适配；连接复用、流式 I/O、超时和资源释放；规范见[HTTP 执行器](../tools/http-executor.md) | ORM 事务、Session 路由；默认开启重试 |
 | SchemaEntityScanner | 包扫描和结构拥有者校验 | 生成各数据库 DDL、在每次 CRUD 前建表 |
 | SchemaManager / SchemaColumnAlter（jdbc） | 数据库元数据与 DDL；显式开启 alter-column-type 且 CREATE 时受限改类型/扩容，执行委托所属 Session | 自动确认业务数据可转换、删约束促成转换、跨表原子迁移或数据补偿 |
 | SchemaErrors（jdbc） | 统一中文结构诊断、原因和处理建议；包装失败 DDL，保留驱动异常链及错误码 | 决定兼容性、执行 SQL、自动修复结构或吞掉异常 |
@@ -53,10 +55,13 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 | DataSyncClient / JdbcFullSyncJob（data-sync） | MySQL/PostgreSQL 单表主键分页复制、目标本地检查点续传、中文进度 | 普通业务 CRUD、在线快照、目标额外行删除、可靠增量交付 |
 | SessionExecution/SessionExecutionListener | 单次数据源执行结果、可选监控扩展点 | 判断事务提交成功、实现监控页面或反向修改请求 |
 | AOP/YulinlinCoreAutoConfig | 注解入口与组件装配 | 实现订单、权限等业务规则 |
-| ISecurityManager / SecurityUtil / SecurityContext（security） | 唯一登录管理器、静态委托入口与线程身份；业务校验后 login(userId, deviceType) 返回 LoginResult，resolveSession 恢复 LoginSession | 校验账号密码/验证码、强制账号表结构、多实现同时登录、跨线程继承身份 |
-| UserStore（security） | 业务 Bean 按 userId 加载安全用户、角色和权限，缺失/禁用时拒绝登录 | 生成 Token、维护登录记录、把凭证带入用户 DTO |
+| ISecurityManager / SecurityUtil / SecurityContext（security） | 唯一登录管理器、静态委托入口与线程身份；统一 loginByUsername(username, password, deviceType)，resolveSession 恢复 LoginSession；公开 login(userId) 已移除 | 仅凭用户 ID 建立登录、公共层自行比较密码/验证码、强制账号表结构、多实现同时登录、跨线程继承身份 |
+| UserAuthenticator / AbstractUserSecurityManager（security） | 业务 Bean 校验账号密码及状态，返回安全 IUserDetails；JWT/Sa-Token 共用认证模板，通过 protected createLogin 使用真实 userId 建立登录 | UserStore 代替密码校验、公开 createLogin、将 username 当 ID、认证实现递归调用登录 API、保存密码到上下文 |
+| UserStore（security） | 业务 Bean 按已验证 Token/会话内的稳定 userId 加载安全用户、角色权限，缺失/禁用时拒绝访问；可与 UserAuthenticator 共用同一 Bean（admin 即此方式） | 把 userId 当 username 查询、重新验证登录密码、生成 Token、维护登录记录、把凭证带入用户 DTO |
 | JwtSecurityManager / JwtTokenCodec（security-jwt） | 无状态签发、验签、时间检查，再按 userId 调用 UserStore；logout 仅清理线程，Codec 可由业务 Bean 替换 | 保存登录记录、Token 黑名单、主动撤销、把客户端删除 Token 当成服务端失效 |
-| SaTokenSecurityManager（security-sa-token） | 有状态：委托 Sa-Token 登录记录、注销和存储，复用 UserStore 与公共上下文；原生能力从 stpLogic 获取 | 自动监听业务改密、把默认内存当成持久化存储、混用两套登录管理器 |
+| SecurityContextResolver（security） | 可选的外部身份桥接；仅启用选定管理器的协议，读取时校验身份，失败清理旧快照；cacheContext 控制是否保留线程快照（Spring 不保留，Sa-Token 默认保留） | 新建登录记录、信任请求中的用户 ID、解析时递归读取 SecurityContext |
+| SaTokenSecurityManager / SaTokenLoginInterceptor（security-sa-token） | 委托 Sa-Token 会话与原生 Token 规则；桥接 StpUtil.login/logout，读取时检查当前身份、同请求复用 UserStore 资料，兼容既有 Bearer 调用 | 自动监听业务改密、把默认内存当成持久化存储、混用两套登录管理器；默认不桥接其他独立 StpLogic/switchTo |
+| SpringSecurityManager / SpringUserMapper / SpringLoginInterceptor（security-spring） | 桥接 Authentication；loginByUsername 委托 AuthenticationManager Bean，SpringLoginDetails 传设备，SessionAuthenticationStrategy + SecurityContextRepository 保存 Session 身份；logout 委托当前 Spring Servlet 包装请求 | 另建用户表/FilterChain/Token、默认支持按 ID 登录、把 credentials/Session ID 当 Token、自动复制链内私有策略/MFA/Remember-Me；原生过滤器链负责恢复和清理 Spring 上下文 |
 | LoginInterceptor / LoginContextInterceptor / ApiAuthAspect（security） | 自定义 LoginInterceptor Bean 优先，否则自动提供默认实现，无启用开关；MVC 包装器清理 SecurityContext，AOP 通过 ISecurityManager 校验登录/角色/权限 | 替自定义拦截器验证凭证、清理外部框架上下文、替代会话存储；外部身份生命周期由适配实现负责 |
 | core/http | 独立 HTTP 客户端工具 | 参与 ORM 路由、事务或数据库监听链 |
 

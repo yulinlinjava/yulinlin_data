@@ -18,7 +18,7 @@
 - **可选缓存**：Caffeine、Ehcache、Redis 可共存；统一 CacheMode、TTL、多数据源 Key 与条件分区失效。
 - **高频写入**：受控多连接批量、`.queue()` 延迟执行、EntityCounter 聚合自增和按维度聚合插入。
 - **搜索与结构初始化**：显式自动建表/索引，PostgreSQL 与 ES 的 `match()`、`highlight()`。
-- **配套能力**：轻量数据同步、慢操作监控、接口加密限流、无状态 JWT 或有状态 Sa-Token 登录。
+- **配套能力**：轻量数据同步、慢操作监控、接口加密限流、无状态 JWT、有状态 Sa-Token 或现有 Spring Security 接入；统一 loginByUsername 账号密码登录，业务认证可替换。
 
 技术选型看[功能、开发成本与评分说明](doc/start/comparison.md)。比较的是交付同一业务能力需要的工作量，不是运行性能或通用排名。
 
@@ -34,7 +34,7 @@
 | [关联与事务](doc/relations/README.md) | [关联查询](doc/relations/query.md)、[懒加载](doc/relations/lazy.md)、[自动更新](doc/relations/auto-update.md)、[事务](doc/relations/transactions.md) |
 | [批量与同步](doc/write-sync/README.md) | [批量](doc/write-sync/batch.md)、[延迟队列](doc/write-sync/queue.md)、[EntityCounter](doc/write-sync/counter.md)、增量/全量同步 |
 | [缓存](doc/cache/README.md) | [ORM 缓存](doc/cache/query.md)、[失效规则](doc/cache/invalidation.md)、Caffeine/Ehcache/Redis、[CacheClient](doc/cache/client.md) |
-| [接口安全](doc/security/README.md) | [JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md) |
+| [接口安全](doc/security/README.md) | [JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[Spring Security](doc/security/spring.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md) |
 | [常用工具](doc/tools/README.md) | [HTTP](doc/tools/http.md)、[反射与克隆](doc/tools/reflection.md)、JSON、日期、线程与调度 |
 | [项目实践](doc/practice/README.md) | [公共模型](doc/practice/models.md)、[通用 Service](doc/practice/service.md)、[完整 CRUD](doc/practice/crud-example.md)、[RBAC 登录](doc/practice/rbac.md) |
 | [监控与排障](doc/operations/README.md) | [监控页面](doc/operations/monitor.md)、[SQL/事务日志](doc/operations/sql-log.md)、[SQLite/H2 性能报告](doc/operations/local-benchmark.md) |

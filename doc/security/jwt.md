@@ -12,7 +12,7 @@
 
 ## JWT 最小接入
 
-引入 `com.yulinlin:security-jwt:3.0`，注册上述 `UserStore`，再配置：
+引入 `com.yulinlin:security-jwt:3.0`，注册 [UserStore 与 UserAuthenticator](user.md)；前者恢复用户，后者校验账号密码。统一调用 `SecurityUtil.loginByUsername(username, password[, deviceType])`，再配置：
 
 ```yaml
 yulinlin:

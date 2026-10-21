@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /** Immutable device-to-key registry created once during application startup. */
-public final class DeviceCryptoManager {
+public final class DeviceCryptoManager implements CryptoCodec {
 
     private static final Pattern DEVICE_NAME = Pattern.compile("[a-z0-9_-]{1,32}");
     private static final String UNKNOWN_DEVICE = "unknown";
@@ -59,6 +59,31 @@ public final class DeviceCryptoManager {
 
     public AesCrypto getRequired(String device) {
         return devices.get(resolveDevice(device));
+    }
+
+    @Override
+    public String encrypt(String deviceType, byte[] plaintext) {
+        return getRequired(deviceType).encryptBase64(plaintext);
+    }
+
+    @Override
+    public byte[] decrypt(String deviceType, String ciphertext) {
+        return getRequired(deviceType).decryptBase64(normalizeCiphertext(ciphertext));
+    }
+
+    /** 默认 AES 的传输兼容规则，不应用于业务自定义密文协议。 */
+    private static String normalizeCiphertext(String content) {
+        String trimmed = content.strip();
+        String ciphertext = content;
+        if (trimmed.length() >= 2 && trimmed.charAt(0) == '"'
+                && trimmed.charAt(trimmed.length() - 1) == '"') {
+            ciphertext = trimmed.substring(1, trimmed.length() - 1);
+            // 标准 Base64 无需 JSON 转义，不猜测其他 JSON 字符串的含义。
+            if (ciphertext.indexOf('\\') >= 0 || ciphertext.indexOf('"') >= 0) {
+                throw new CryptoException("密文 JSON 字符串不能包含转义字符");
+            }
+        }
+        return ciphertext.replace("\r", "").replace("\n", "").replace("\t", "").replace(' ', '+');
     }
 
     private static AesCrypto createCrypto(

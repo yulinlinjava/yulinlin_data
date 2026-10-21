@@ -2,10 +2,8 @@ package com.yulinlin.security.web;
 
 import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.annotation.ApiCrypto;
-import com.yulinlin.security.crypto.AesCrypto;
-import com.yulinlin.security.crypto.DeviceCryptoManager;
-import com.yulinlin.security.crypto.CryptoConfiguredCondition;
-import org.springframework.context.annotation.Conditional;
+import com.yulinlin.security.crypto.CryptoCodec;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpInputMessage;
@@ -21,12 +19,13 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 
 @ControllerAdvice
-@Conditional(CryptoConfiguredCondition.class)
+@ConditionalOnBean(CryptoCodec.class)
 public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
 
-    private final DeviceCryptoManager cryptoManager;
+    private final CryptoCodec cryptoCodec;
     private final DeviceTypeResolver deviceTypeResolver;
     private final CryptoPathExclusions pathExclusions;
     private final boolean configured;
@@ -34,22 +33,26 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
     private final long maxRequestBytes;
 
     public CryptoRequestBodyAdvice(
-            DeviceCryptoManager cryptoManager,
+            CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
             SecurityCryptoProperties properties) {
-        this(cryptoManager, deviceTypeResolver, properties,
-                properties.hasDeviceKeys() ? new CryptoPathExclusions(properties) : null);
+        this(cryptoCodec, deviceTypeResolver, properties,
+                cryptoCodec != null ? new CryptoPathExclusions(properties) : null);
     }
 
     public CryptoRequestBodyAdvice(
-            DeviceCryptoManager cryptoManager,
+            CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
             SecurityCryptoProperties properties,
             CryptoPathExclusions pathExclusions) {
-        this.cryptoManager = cryptoManager;
+        this.cryptoCodec = cryptoCodec;
         this.deviceTypeResolver = deviceTypeResolver;
         this.pathExclusions = pathExclusions;
-        this.configured = properties.hasDeviceKeys();
+        this.configured = cryptoCodec != null;
+        if (configured) {
+            Objects.requireNonNull(deviceTypeResolver, "deviceTypeResolver");
+            Objects.requireNonNull(pathExclusions, "pathExclusions");
+        }
         this.enabled = properties.isEnabled();
         if (configured && (properties.getMaxRequestSize() == null || properties.getMaxRequestSize().toBytes() < 0)) {
             throw new IllegalArgumentException("yulinlin.security.crypto.max-request-size must not be negative");
@@ -90,10 +93,9 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         }
 
         try {
-            String ciphertext = normalizeCiphertext(content);
-            String device = deviceTypeResolver.resolve(inputMessage.getHeaders());
-            AesCrypto crypto = cryptoManager.getRequired(device);
-            byte[] plaintext = crypto.decryptBase64(ciphertext);
+            String device = HeaderDeviceTypeResolver.normalize(deviceTypeResolver.resolve(inputMessage.getHeaders()));
+            byte[] plaintext = Objects.requireNonNull(cryptoCodec.decrypt(device, content),
+                    "CryptoCodec.decrypt 不能返回 null");
             checkSize(plaintext.length);
             return bodyMessage(inputMessage.getHeaders(), plaintext, true);
         } catch (ResponseStatusException error) {
@@ -101,30 +103,6 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         } catch (Exception error) {
             throw invalidEncryptedRequest(error);
         }
-    }
-
-    /**
-     * Accepts raw Base64, Axios JSON-string Base64, and form-decoded Base64 where '+' became a space.
-     * Only the transport-specific ASCII space is repaired; every other invalid character is rejected
-     * later by the strict Base64 decoder.
-     */
-    private String normalizeCiphertext(String content) {
-        String trimmed = content.strip();
-        String ciphertext = content;
-        if (trimmed.length() >= 2 && trimmed.charAt(0) == '"'
-                && trimmed.charAt(trimmed.length() - 1) == '"') {
-            ciphertext = trimmed.substring(1, trimmed.length() - 1);
-            // Standard Base64 never needs JSON escaping. Reject other JSON strings instead of guessing.
-            if (ciphertext.indexOf('\\') >= 0 || ciphertext.indexOf('"') >= 0) {
-                throw new IllegalArgumentException("Encrypted JSON string contains escapes");
-            }
-        }
-        // application/x-www-form-urlencoded decoders commonly turn Base64 '+' into an ASCII space.
-        return ciphertext
-                .replace("\r", "")
-                .replace("\n", "")
-                .replace("\t", "")
-                .replace(' ', '+');
     }
 
     private ResponseStatusException invalidEncryptedRequest(Throwable cause) {

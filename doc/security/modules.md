@@ -2,7 +2,7 @@
 
 [文档首页](../README.md) / [接口安全](README.md)
 
-仅需加密限流用 security；登录选择 JWT、Sa-Token 或已有 Spring Security 适配。
+按业务需要选择模块，登录和鉴权统一使用框架公开 API。
 
 ## 本页导航
 
@@ -11,17 +11,17 @@
 
 ## 引入模块
 
-一个项目只选一种登录实现/适配，不混用 `security-jwt`、`security-sa-token`、`security-spring`。它们均依赖公共 `security`，无需重复声明公共模块：
+一个项目只选一种登录实现，不混用 `security-jwt`、`security-sa-token`、`security-spring`。这些模块已经包含公共 `security` 的能力。
 
-| 业务需要 | 引入的制品 | 业务需要提供 |
+| 业务需要 | 引入的制品 | 接入要求 |
 | --- | --- | --- |
-| 仅加密、限流或公共权限协议 | `security` | 不需要登录实现；默认匿名管理器可启动 |
-| 无状态 JWT 登录 | `security-jwt` | UserStore、JWT 签名配置；按 LoginRequest 类型提供 LoginAuthenticator；不存登录记录，不提供 Token 撤销 |
-| Sa-Token 登录 | `security-sa-token` | UserStore、LoginAuthenticator；会话策略和存储使用 Sa-Token 自身配置 |
-| 已有 Spring Security 登录 | `security-spring` | 保留原有认证配置；可选 SpringUserMapper 映射业务用户 ID，无需默认提供 UserStore |
-| 已有其他安全框架 | `security` | 适配该框架的 `ISecurityManager` Bean |
+| 仅加密、限流或权限注解 | `security` | 不要求实现登录；未登录用户不能访问受保护方法 |
+| 无状态 Token 登录 | `security-jwt` | 配置签名密钥，提供 UserStore 和所需 LoginAuthenticator |
+| 有状态 Token 登录 | `security-sa-token` | 提供 UserStore 和所需 LoginAuthenticator |
+| 复用已有 Spring Security 登录 | `security-spring` | 项目已有可用认证配置；统一登录需完成项目认证适配 |
+| 完全自定义登录实现 | `security` | 提供 ISecurityManager，按需提供 LoginInterceptor |
 
-下面为仅引入公共模块的示例；需要登录时，将 `artifactId` 换成上表选定的实现即可。
+仅使用公共能力时：
 
 ```xml
 <dependency>
@@ -31,33 +31,34 @@
 </dependency>
 ```
 
-公共 security 不依赖 Spring Security，也不要求引入 ORM 或数据库驱动；只有 security-spring 适配模块依赖 Spring Security API。未配置任何设备密钥时，不注册接口加解密组件，由业务自行处理；登录、权限、限流仍按各自规则工作。配置了任意设备密钥后才注册设备密钥管理器、请求解密 Advice 和响应加密 Advice；此时缺少 `unknown`、其他已声明设备的密钥或 CBC IV 会启动失败，不生成临时密钥。启停和兼容模式见[加密接入](crypto.md#是否接管接口加解密)。
+需要登录时，将 artifactId 换成对应模块即可。公共安全能力不要求引入 ORM 或数据库驱动。
 
-鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用所选登录模块的默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
+公开使用规则：
 
-已有 Spring Security 项目看 [Spring 接入](spring.md)，不必换成下表两种实现。security-spring 不重新签发 Token，也不替业务创建 AuthenticationManager；可保留原登录流程，或将 LoginAuthenticatorAuthenticationProvider 加入现有 Manager，再通过 `SecurityUtil.login(LoginRequest)` 登录并保存 Session 身份。所有登录方式都走 LoginAuthenticator，认证来源记录为其 name。
+- 登录统一调用 `SecurityUtil.login(LoginRequest)`，也可注入 `ISecurityManager`。
+- 密码、密钥、自定义认证分别提供 `LoginAuthenticator<T>` Bean；`UserStore` 按用户 ID 加载用户。
+- 可信业务按 ID 登录使用 `UserIdLogin`，不能直接接受客户端任意用户 ID。
+- 自定义 `LoginInterceptor` Bean 会自动替换默认拦截器，不需要额外启用开关或重复注册。
+- 没有自定义 CryptoCodec 且不配置设备密钥时，不处理接口加解密；登录、权限和限流仍可单独使用。自定义实现不要求 AES 密钥，详见[加密扩展](crypto-codec.md)。
 
-账号密码、密钥、自定义认证由业务提供对应认证器；有 UserStore 时自动支持 UserIdLogin，只供上游已验证身份的服务端代码使用，不向客户端开放任意 ID 登录。旧 UserAuthenticator、ApiKeyAuthenticator 和 loginByUsername 入口已移除，统一使用新架构，不保留双轨认证。
-
-### JWT 与 Sa-Token 如何选择
-
-下面比较的是本仓库两种适配器的当前行为，而不是 Sa-Token 的全部可选模式。一个项目只选一个登录模块。
+## JWT 与 Sa-Token 如何选择
 
 | 能力 | security-jwt | security-sa-token |
 | --- | --- | --- |
-| 登录状态 | 纯无状态，不保存 Token 记录 | 有状态，依赖 Sa-Token 登录记录 |
-| 请求认证 | 验签、时间检查，再按 userId 加载用户 | 检查 Sa-Token 登录及有效期状态，再加载用户 |
-| 默认存储 | 无登录存储 | Sa-Token 默认内存；可用其原生共享存储扩展 |
-| 注销 | 只清理线程，客户端删除 Token；不能使旧 JWT 失效 | 服务端注销当前 Token，并清理线程 |
-| 踢人、在线会话管理 | 不提供 | 使用底层 StpLogic 原生能力；不是公共 ISecurityManager 的方法 |
-| 应用重启 | 密钥、issuer 等校验配置不变且用户仍有效时，未过期 JWT 可继续使用 | 内存记录丢失则需重登；共享持久化存储需保证记录仍在且未过期 |
-| 修改密码 | 默认不撤销旧 JWT | 仅修改密码也不会自动踢人；业务需在提交后调用原生注销/踢人能力 |
-| 停用/删除账号 | UserStore 拒绝加载，阻止后续访问；不等于永久撤销 JWT | UserStore 拒绝加载；适配器处理不存在/不允许登录的用户 |
-| 自动续期 | 不提供，refresh 只刷新用户资料 | 活跃超时/续期规则取决于原生 Sa-Token 配置 |
-| 业务登录调用 | login(PasswordLogin / ApiKeyLogin / UserIdLogin / 自定义参数) | 同左；原生 StpUtil 登录需同时保存可信 authType，注销无需改变 |
+| 登录状态 | 无状态，不保存登录记录 | 有状态，保存登录记录 |
+| 登录调用 | `login(PasswordLogin / ApiKeyLogin / UserIdLogin / 自定义参数)` | 相同 |
+| 登录结果 | Token、有效期、用户信息、authType | 相同；不设置固定到期时间时 expiresAt 可为空 |
+| 注销 | 清理当前身份，客户端删除 Token；旧 Token 本身不会因此失效 | 注销当前 Token，后续不能继续使用该 Token |
+| 应用重启 | 密钥和校验配置不变、用户有效且 Token 未过期时仍可用 | 默认内存登录记录不跨重启保留；重启恢复需要持久化方案 |
+| 停用或删除用户 | UserStore 拒绝加载后阻止后续访问 | 相同 |
+| 修改密码或业务密钥 | 不自动撤销已签发 Token | 不自动注销既有登录 |
+| 刷新资料 | `refresh()`，不重新签发 Token | `refresh()`，不等于重新登录 |
+| 多实例部署 | 各实例使用一致的签名配置和用户数据 | 各实例需要共享有效的登录状态 |
 
-简单无状态认证选 JWT；需要服务端强制失效、设备会话管理选 Sa-Token。JWT 的服务端 logout 不足以防止已经泄漏的 Token 再次使用；重新启用账号后，其仍未过期的旧 JWT 可能再次被接受。删除账号后不要复用旧 userId，否则该身份的旧 JWT 在有效期内也可能被新账号接受。高要求业务应使用有状态方案或自定义凭证版本等校验。
+只需要简单 Token 登录可选 JWT；需要注销后使当前 Token 失效可选有状态登录。统一 API 不承诺批量踢人、查询在线用户或自动续期。
+
+JWT 用户重新启用后，其尚未过期的旧 Token 可能继续使用。删除用户后不要复用旧 userId。需要更严格的凭证撤销规则，使用有状态方案或[自定义管理器](extension.md#自定义有状态登录)。
 
 ---
 
-下一步：返回[接口安全主题目录](README.md)按需选择相关专题。
+下一步：[用户模型与登录接口](user.md)。

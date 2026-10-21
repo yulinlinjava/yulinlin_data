@@ -2,53 +2,76 @@
 
 [文档首页](../README.md) / [接口安全](README.md)
 
-线程身份恢复、请求结束清理与异步边界。
+业务只读取当前用户、Token 和认证来源；请求结束由框架清理上下文。
 
 ## 本页导航
 
 - [登录上下文与请求生命周期](#登录上下文与请求生命周期)
+- [刷新与注销](#刷新与注销)
+- [异步与后台任务](#异步与后台任务)
 
 ## 登录上下文与请求生命周期
 
 ```java
+import com.yulinlin.security.auth.*;
+
 LoginResult result = SecurityUtil.login(new PasswordLogin(username, password, "web"));
-// HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user、authType。
+// HTTP 登录接口可返回 R<LoginResult>，包含 token、expiresAt、user、authType。
+
 IUserDetails user = SecurityContext.requireUser();
 String userId = SecurityContext.getUserId();
 String token = SecurityContext.getToken();
-String authType = SecurityContext.getAuthType(); // 成功认证器的 name()
+String authType = SecurityContext.getAuthType();
 boolean loggedIn = SecurityContext.isLogin();
 ```
 
-JWT 前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。JWT 在正常请求中只验签一次，Controller、Service 和权限 AOP 读取同一用户快照。自己实现管理器且使用此拦截器时也必须提供 resolveSession。
+也可全部使用 SecurityUtil，或者注入 ISecurityManager。未登录时 getUser/getUserDetails、getUserId、getToken、getAuthType 返回 null，requireUser 抛 LoginException。会话型登录可能没有可返回的 Token，判断登录状态使用 isLogin，而不是判断 token 是否为空。
 
-**Sa-Token 接入不同**：自动选择 SaTokenLoginInterceptor，优先沿用 `sa-token.*` 的原生 Token 读取规则，没有原生凭证时兼容 Bearer。SecurityContext 读取时重新核对当前原生身份、会话状态和 Token 专属 authType，同一请求复用用户资料。原生登录需要由可信代码写入认证来源，缺少来源的旧 Token 拒绝恢复；注销、切换账号、踢人后不继续复用旧身份。详见[Sa-Token 接入](sa-token.md)。
+JWT 客户端在后续请求携带 `Authorization: Bearer <token>`，其他登录模块按对应专题的客户端约定携带凭证。
 
-**Spring Security 接入**：请求恢复继续由原有过滤器链负责，security-spring 读取 SecurityContextHolder 的已认证身份并映射为安全用户；匿名和未认证对象不放行。原生登录、注销、切换身份后自动跟随，也支持 login(LoginRequest) 委托 AuthenticationManager 并保存 Session 身份，默认不需要 UserStore。它可以没有 Token，getToken() 返回 null；身份有效期由 Spring 管理。见 [Spring 接入](spring.md)。
+请求行为：
 
-PasswordLogin、ApiKeyLogin、自定义 LoginRequest 由对应 LoginAuthenticator 验证；UserIdLogin 仅供已完成身份验证的可信业务代码使用。成功后使用同一套 Token/Session 恢复与清理，保留 authType；不在每次请求重新校验原业务 API Key，也不把原密码/密钥保存在 LoginSession 中。Spring 原生认证没有提供可信来源时 authType 为 null，不猜测认证类型。
+- 有有效凭证：恢复当前用户及可信 authType。
+- 没有凭证：按匿名访问，由权限注解决定是否允许。
+- 凭证格式错误、过期或无效：默认 Token 接入返回 401，即使目标是公开接口；重新登录前移除失效旧凭证。
+- 正常返回、异常、拒绝请求和异步请求切换时，自动清理本模块当前上下文。
+- OPTIONS 不解析登录 Token。仅使用公共 security 的匿名模式不接管其他认证格式。
 
-未携带对应实现支持的凭证时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
+自定义拦截器和外部登录体系需要遵守同样的身份隔离要求，见[扩展接口](extension.md)。
 
-正常完成、异常完成时通过 afterCompletion 调用 ThreadLocal.remove()；preHandle 自身失败也立即清理。异步 MVC 的 afterConcurrentHandlingStarted 清理原请求线程，后续 MVC redispatch 会重新解析 Token，但 Callable、DeferredResult 或线程池的业务线程不会自动继承身份。不要使用 InheritableThreadLocal。后台任务需要的用户 ID 显式作为参数传递；不能把客户端声明的 userId 直接变成可信身份。
+## 刷新与注销
 
-请求结束只清理线程。JWT logout 也只清理当前线程，客户端必须自行删除 Token；随后再次携带该 JWT 仍可通过校验直到过期或用户不允许访问。Sa-Token logout 则注销服务端会话并清理线程。refresh 当前用户时重新验证凭证并加载最新用户，更新当前线程快照，不改变 JWT 的签发时间和有效期；Sa-Token 的活跃超时策略按其自身配置执行。其他请求已加载的快照不会被跨线程强制替换，长请求必要时应主动复核。
+```java
+SecurityUtil.refresh();                 // 刷新当前用户资料
+SecurityUtil.getUserDetails(otherId);   // 查询其他用户，不切换登录
+SecurityUtil.logout();                  // 按选定登录模块执行注销
+```
 
-JWT / Sa-Token 非 HTTP 使用后必须显式清理；Spring 登录入口要求当前 Servlet 请求/响应。后台任务通常直接传业务 userId，不必额外登录：
+- JWT：logout 不撤销已签发 Token，客户端必须自行删除；refresh 不改变 Token 有效期。
+- 有状态登录：logout 注销当前 Token；请求结束不等于注销。
+- 已有认证体系：注销和刷新遵循其已接入的公开能力，没有可信 authType 时可返回 null。
+
+`SecurityContext.clear()` 只清理当前上下文，不使 Token 或其他登录状态失效。有有效凭证的下一次请求仍可恢复身份。
+
+用户资料或角色变化不会强制改写所有正在处理的请求，业务需要时应主动复核；自定义 UserStore 缓存的刷新和失效仍由业务负责。
+
+## 异步与后台任务
+
+普通新线程、线程池任务不会自动继承当前登录身份。通常把所需的 userId 等业务参数显式传入，不在后台重新登录。
+
+确实需要非 HTTP 登录的 JWT 场景：
 
 ```java
 try {
-    SecurityUtil.login(new PasswordLogin(serviceUsername, servicePassword, "job")); // 确实需要登录时也必须认证
-    // 当前线程业务
+    SecurityUtil.login(new PasswordLogin(serviceUsername, servicePassword, "job"));
+    // 执行当前线程业务
 } finally {
-    SecurityContext.clear(); // 清理当前线程，不改变凭证本身或外部会话状态
+    SecurityContext.clear();
 }
 ```
 
-SecurityContext.set/clear 是供可信服务端认证实现和生命周期管理使用的入口。clear 只删除框架快照：使用 Sa-Token 时，只要原生会话仍有效，再次读取可自动恢复，不等于退出登录。原生注销请调用 StpUtil.logout() 或 SecurityUtil.logout()。外部身份桥接不会信任客户端直接提交的用户资料。
-
-LoginSession/LoginResult 的 toString 不打印 Token 和用户资料；仍不得把完整登录响应、请求头或密码写入日志。
+SecurityContext.set/clear 是供可信服务端扩展使用的公开方法，不能将客户端直接提交的用户对象设置为登录身份。不要记录完整 Token、密码、API Key 或登录响应。
 
 ---
 
-下一步：返回[接口安全主题目录](README.md)按需选择相关专题。
+下一步：[权限注解](authorization.md)、[自定义实现](extension.md)。

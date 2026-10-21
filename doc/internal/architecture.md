@@ -56,17 +56,19 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 | SessionExecution/SessionExecutionListener | 单次数据源执行结果、可选监控扩展点 | 判断事务提交成功、实现监控页面或反向修改请求 |
 | AOP/YulinlinCoreAutoConfig | 注解入口与组件装配 | 实现订单、权限等业务规则 |
 | ISecurityManager / SecurityUtil / SecurityContext（security） | 唯一管理器、静态委托与线程身份；统一 login(LoginRequest)，resolveSession 恢复含 authType 的 LoginSession | 公开任意客户端 userId 登录、公共层自行比较密码/验证码、多实现同时登录、跨线程继承身份 |
-| LoginAuthenticator / LoginAuthenticatorRegistry / AbstractUserSecurityManager（security） | 业务 Bean 按参数认证，返回安全用户；启动时按精确类型注册并检查类型/name 冲突，冻结 name 作为 authType；JWT/Sa-Token 共用模板调用 protected createLogin(user, deviceType, authType) | 客户端指定 authType、未知类型降级、保留旧认证 SPI 双轨分发、公开 createLogin、认证器递归调用登录 API、保存凭证 |
-| UserIdLogin / UserIdLoginAuthenticator（security） | 已完成上游验证的可信业务按 ID 登录；有 UserStore 且无同类型自定义认证器时自动注册，默认 name=user-id | 将 ID 当密码、公开接收任意 ID 签发 Token、替代上游凭证验证 |
+| LoginAuthenticator / LoginRequest（security） | 按请求类型验证凭证，返回安全用户；精确类型和 name 不得重复，name 作为 authType | 客户端指定 authType、未知类型降级、认证器递归调用登录 API、保存凭证 |
+| UserIdLogin（security） | 已完成上游验证的可信业务按 ID 登录；有 UserStore 且无同类型自定义认证器时默认支持，authType 为 user-id | 将 ID 当密码、公开接收任意 ID 签发 Token、替代上游凭证验证 |
 | UserStore（security） | 按稳定 userId 加载安全用户及权限，缺失/禁用时拒绝；可与 LoginAuthenticator 共用业务 Bean，支持 ID 登录的可用性检查 | 把 ID 当 username 查询、代替密码验证、生成 Token、维护登录记录、把凭证带入 DTO |
-| JwtSecurityManager / JwtTokenCodec（security-jwt） | 无状态签发与验签，校验时间、userId/deviceType/authType 一致；来源受签名保护，再按 ID 加载用户；logout 仅清理线程 | 登录存储/撤销、猜测补齐旧 Token 来源、把客户端删 Token 当服务端失效 |
-| SecurityContextResolver（security） | 可选的外部身份桥接；仅启用选定管理器的协议，读取时校验身份，失败清理旧快照；cacheContext 控制是否保留线程快照（Spring 不保留，Sa-Token 默认保留） | 新建登录记录、信任请求中的用户 ID、解析时递归读取 SecurityContext |
-| SaTokenSecurityManager / SaTokenLoginInterceptor（security-sa-token） | 委托原生会话/Token 规则；统一登录禁用共享，authType 存 Token 会话；原生登录需保存可信来源，恢复时核对，同请求复用用户资料 | 猜测旧 Token 来源、使用用户共享会话覆盖认证类型、把内存当持久存储；默认不桥接其他 StpLogic/switchTo |
-| SpringSecurityManager / LoginAuthenticatorAuthenticationProvider / SpringUserMapper（security-spring） | 统一参数包装为 LoginRequestAuthenticationToken，由业务 Manager 内的桥接 Provider 调认证器；SpringLoginDetails 保存设备与来源，原生策略/Repository 持久化；外部原生身份无来源时为 null | 自动改造现有 Manager/FilterChain、伪造原生身份来源、把 credentials 当 Token、自动复制私有策略/MFA/Remember-Me；原生过滤器链负责恢复清理 |
-| LoginInterceptor / LoginContextInterceptor / ApiAuthAspect（security） | 自定义 LoginInterceptor Bean 优先，否则自动提供默认实现，无启用开关；MVC 包装器清理 SecurityContext，AOP 通过 ISecurityManager 校验登录/角色/权限 | 替自定义拦截器验证凭证、清理外部框架上下文、替代会话存储；外部身份生命周期由适配实现负责 |
+| JwtTokenCodec（security-jwt） | 可替换的 Token 生成和解析协议；必须验证真实性、时间和登录信息；JWT 注销不撤销旧凭证 | 代替业务认证、保存登录记录、猜测补齐旧 Token 来源 |
+| CryptoCodec（security） | 可替换的接口文本加解密协议；业务 Bean 优先，默认支持多设备 AES；保持请求解密与响应加密协议一致 | JSON 序列化、R 包装、登录验证；对自定义密文强制执行 Base64 修正 |
+| security-sa-token | 有状态登录；统一 API 获取用户、刷新及注销当前登录 | 将内存状态当持久存储、保证多实例未配置共享状态时也一致 |
+| security-spring | 使已有认证体系使用统一用户、权限及登录 API；统一登录需项目先完成接入，外部身份无可信来源时 authType 为 null | 自动创建完整业务认证方案、编造来源、把密码或会话标识当返回 Token |
+| LoginInterceptor / 权限注解（security） | 自定义 LoginInterceptor Bean 自动替换并注册；请求结束清理 SecurityContext；权限以 ISecurityManager 提供的当前用户为准 | 替自定义拦截器验证凭证、自动清理业务另行维护的上下文、替代登录状态管理 |
 | core/http | 独立 HTTP 客户端工具 | 参与 ORM 路由、事务或数据库监听链 |
 
 业务 CRUD 必须经过 RouteSession，Model Wrapper、Request 便利方法和事务切面均接入这一入口。具体 Session 是执行器和资源参与者，不作为独立业务事务入口；建表 SQL 预览、启动 Schema 初始化和解析器专项用例仍可以直接使用其底层能力。
+
+安全模块在文档中只说明公开协议和使用边界，不展开内部实现及第三方框架细节；业务与扩展示例统一见[接口安全](../security/README.md)。
 
 启动 Schema 的 `alter-column-type` 默认关闭，放在 JdbcSessionProperties，由各数据库配置前缀独立绑定。MySQL/PostgreSQL/H2 在初始化时读取实际元数据、检查主键/生成列/外键等限制，再生成改列 SQL；Session 负责连接、DDL 日志和异常传播。VALIDATE 永远不修改，SQLite 不提供自动改类型。默认值和索引无法由数据库安全保留时停止启动，不自动删除重建；多条 DDL 不保证整体回滚，具体限制与人工备份要求见[改列说明](../datasources/schema.md#显式允许修改列类型)。
 

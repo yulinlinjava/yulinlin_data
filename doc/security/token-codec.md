@@ -54,13 +54,13 @@ public record TokenInfo(
 ) {}
 ```
 
-- 每次新登录生成唯一 tokenId；保留传入的 userId、deviceType 和 authType，不能更换身份或认证来源。authType 来自成功认证的 LoginAuthenticator.name()，必须受签名保护。管理器会回读解析结果核对并设置线程快照，不保存记录，也不查重 tokenId。
+- 每次新登录生成唯一 tokenId；解析结果必须与生成时的 userId、deviceType 和 authType 一致，不能更换身份或认证来源。authType 来自成功认证的 LoginAuthenticator.name()，必须受签名保护。唯一标识不代表框架会保存登录记录或提供撤销功能。
 - parse 必须完成验签等真实性校验；无效 Token 返回 null 或抛 `LoginException`。外部依赖故障应正常抛出，不能绕过验证。
 - 签发时间不能在未来，过期时间必须晚于签发时间且未过期。自定义 Codec 以返回的 expiresAt 决定会话到期，不自动再套一层配置 ttl。
 - 不兼容旧 Token：deviceType、authType 必须存在且有效；缺少时拒绝，不默认补成 password 或 user-id。authType 为 1～64 位字母、数字、点、下划线、冒号或短横线，且以字母或数字开头。
 - 提供自定义 Codec 后，无需默认 Codec 的 secret/issuer；签名策略由自定义实现负责。它不负责存储、注销、加载用户或设置线程上下文。
 
-如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置线程上下文，也不验证账号密码或业务密钥，只能由可信服务端代码使用，不应封装成接收任意 userId 的公开登录接口。正常登录调用 `SecurityUtil.login(LoginRequest)`，由对应的 LoginAuthenticator 认证，管理器记录其 name、核对签发结果并建立当前线程身份。业务已完成外部验证时可使用 `UserIdLogin`，见[可信 ID 登录](user.md#根据用户-id-登录)。手动签发的 JWT 满足相同验签、时间、认证信息和用户检查时也可被接受，不需要服务端登记。
+如果只想手动生成/解析，可注入 `JwtTokenCodec` 调用上述方法；它不设置请求上下文，也不验证账号密码或业务密钥，只能由可信服务端代码使用，不应封装成接收任意 userId 的公开登录接口。正常登录调用 `SecurityUtil.login(LoginRequest)`，通过对应认证器验证后获得登录结果和当前身份。业务已完成外部验证时可使用 `UserIdLogin`，见[可信 ID 登录](user.md#根据用户-id-登录)。手动签发的 JWT 满足相同验签、时间、认证信息和用户检查时也可被接受，不需要服务端登记。
 
 ---
 

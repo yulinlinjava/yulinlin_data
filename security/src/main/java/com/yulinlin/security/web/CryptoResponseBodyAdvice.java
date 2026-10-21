@@ -5,11 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.data.lang.security.CryptoDataResponse;
 import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.annotation.ApiCrypto;
-import com.yulinlin.security.crypto.AesCrypto;
+import com.yulinlin.security.crypto.CryptoCodec;
 import com.yulinlin.security.crypto.CryptoException;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
-import com.yulinlin.security.crypto.CryptoConfiguredCondition;
-import org.springframework.context.annotation.Conditional;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -23,14 +22,15 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 
 @ControllerAdvice
-@Conditional(CryptoConfiguredCondition.class)
+@ConditionalOnBean(CryptoCodec.class)
 public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object> {
 
     public static final String CRYPTO_HEADER = "X-Yulinlin-Crypto";
 
-    private final DeviceCryptoManager cryptoManager;
+    private final CryptoCodec cryptoCodec;
     private final DeviceTypeResolver deviceTypeResolver;
     private final ObjectMapper objectMapper;
     private final CryptoPathExclusions pathExclusions;
@@ -39,25 +39,30 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
     private final String deviceHeader;
 
     public CryptoResponseBodyAdvice(
-            DeviceCryptoManager cryptoManager,
+            CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
             ObjectMapper objectMapper,
             SecurityCryptoProperties properties) {
-        this(cryptoManager, deviceTypeResolver, objectMapper, properties,
-                properties.hasDeviceKeys() ? new CryptoPathExclusions(properties) : null);
+        this(cryptoCodec, deviceTypeResolver, objectMapper, properties,
+                cryptoCodec != null ? new CryptoPathExclusions(properties) : null);
     }
 
     public CryptoResponseBodyAdvice(
-            DeviceCryptoManager cryptoManager,
+            CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
             ObjectMapper objectMapper,
             SecurityCryptoProperties properties,
             CryptoPathExclusions pathExclusions) {
-        this.cryptoManager = cryptoManager;
+        this.cryptoCodec = cryptoCodec;
         this.deviceTypeResolver = deviceTypeResolver;
         this.objectMapper = objectMapper;
         this.pathExclusions = pathExclusions;
-        this.configured = properties.hasDeviceKeys();
+        this.configured = cryptoCodec != null;
+        if (configured) {
+            Objects.requireNonNull(deviceTypeResolver, "deviceTypeResolver");
+            Objects.requireNonNull(objectMapper, "objectMapper");
+            Objects.requireNonNull(pathExclusions, "pathExclusions");
+        }
         this.enabled = properties.isEnabled();
         if (configured && (properties.getDeviceHeader() == null || properties.getDeviceHeader().isBlank())) {
             throw new IllegalArgumentException("yulinlin.security.crypto.device-header must not be blank");
@@ -92,32 +97,49 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             return body;
         }
         String device;
-        AesCrypto crypto;
+        String algorithm = null;
         try {
-            device = cryptoManager.resolveDevice(deviceTypeResolver.resolve(request.getHeaders()));
-            crypto = cryptoManager.getRequired(device);
+            device = HeaderDeviceTypeResolver.normalize(deviceTypeResolver.resolve(request.getHeaders()));
+            // 保留默认 AES 的设备回退及算法响应头；不为自定义协议猜测算法。
+            if (cryptoCodec instanceof DeviceCryptoManager defaults) {
+                device = defaults.resolveDevice(device);
+                algorithm = defaults.getRequired(device).algorithm();
+            }
         } catch (IllegalArgumentException error) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid crypto device");
         }
         try {
             Object result;
             if (body instanceof CryptoDataResponse dataResponse) {
-                String ciphertext = crypto.encryptBase64(plaintext(dataResponse.getData()));
+                String ciphertext = encrypt(device, dataResponse.getData());
                 dataResponse.onCryptAfter(ciphertext);
                 result = body;
             } else {
-                String ciphertext = crypto.encryptBase64(plaintext(body));
+                String ciphertext = encrypt(device, body);
                 result = stringResponse ? objectMapper.writeValueAsString(ciphertext) : ciphertext;
             }
             HttpHeaders headers = response.getHeaders();
             headers.remove(HttpHeaders.CONTENT_LENGTH);
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set(CRYPTO_HEADER, crypto.algorithm());
+            if (algorithm != null) headers.set(CRYPTO_HEADER, algorithm);
+            else headers.remove(CRYPTO_HEADER);
             headers.set(deviceHeader, device);
             return result;
         } catch (JsonProcessingException error) {
             throw new CryptoException("Cannot encrypt response", error);
         }
+    }
+
+    private String encrypt(String device, Object value) throws JsonProcessingException {
+        String ciphertext = cryptoCodec.encrypt(device, plaintext(value));
+        if (ciphertext == null || ciphertext.isBlank()) {
+            throw new CryptoException("CryptoCodec.encrypt 必须返回非空密文");
+        }
+        String inspected = ciphertext.stripLeading();
+        if (inspected.startsWith("{") || inspected.startsWith("[")) {
+            throw new CryptoException("接口密文不能以 { 或 [ 开头，请返回文本密文而非 JSON 对象或数组");
+        }
+        return ciphertext;
     }
 
     private byte[] plaintext(Object value) throws JsonProcessingException {

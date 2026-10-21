@@ -2,6 +2,7 @@ package com.yulinlin.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
+import com.yulinlin.security.crypto.CryptoCodec;
 import com.yulinlin.security.crypto.CryptoConfiguredCondition;
 import com.yulinlin.security.limit.ApiLimitInterceptor;
 import com.yulinlin.security.limit.ApiLimitWebMvcConfigurer;
@@ -13,6 +14,7 @@ import com.yulinlin.security.web.DeviceTypeResolver;
 import com.yulinlin.security.web.HeaderDeviceTypeResolver;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -30,7 +32,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdvice;
 public class SecurityAutoConfiguration {
 
     @Bean
-    @ConditionalOnMissingBean
+    @ConditionalOnMissingBean(CryptoCodec.class)
     @Conditional(CryptoConfiguredCondition.class)
     public DeviceCryptoManager deviceCryptoManager(SecurityCryptoProperties properties) {
         return new DeviceCryptoManager(properties);
@@ -38,40 +40,40 @@ public class SecurityAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @Conditional(CryptoConfiguredCondition.class)
+    @ConditionalOnBean(CryptoCodec.class)
     public DeviceTypeResolver deviceTypeResolver(SecurityCryptoProperties properties) {
         return new HeaderDeviceTypeResolver(properties);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @Conditional(CryptoConfiguredCondition.class)
+    @ConditionalOnBean(CryptoCodec.class)
     public CryptoPathExclusions cryptoPathExclusions(SecurityCryptoProperties properties) {
         return new CryptoPathExclusions(properties);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @Conditional(CryptoConfiguredCondition.class)
+    @ConditionalOnBean(CryptoCodec.class)
     public CryptoRequestBodyAdvice cryptoRequestBodyAdvice(
-            DeviceCryptoManager cryptoManager,
+            CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
             SecurityCryptoProperties properties,
             CryptoPathExclusions pathExclusions) {
-        return new CryptoRequestBodyAdvice(cryptoManager, deviceTypeResolver, properties, pathExclusions);
+        return new CryptoRequestBodyAdvice(cryptoCodec, deviceTypeResolver, properties, pathExclusions);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @Conditional(CryptoConfiguredCondition.class)
+    @ConditionalOnBean(CryptoCodec.class)
     public CryptoResponseBodyAdvice cryptoResponseBodyAdvice(
-            DeviceCryptoManager cryptoManager,
+            CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
             ObjectMapper objectMapper,
             SecurityCryptoProperties properties,
             CryptoPathExclusions pathExclusions) {
         return new CryptoResponseBodyAdvice(
-                cryptoManager, deviceTypeResolver, objectMapper, properties, pathExclusions);
+                cryptoCodec, deviceTypeResolver, objectMapper, properties, pathExclusions);
     }
 
     @Bean

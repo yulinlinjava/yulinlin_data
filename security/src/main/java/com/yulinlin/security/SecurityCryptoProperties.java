@@ -26,7 +26,7 @@ public class SecurityCryptoProperties {
     /** Server-controlled paths that must bypass both request decryption and response encryption. */
     private List<String> excludePaths = new ArrayList<>(List.of("/monitor/**"));
 
-    /** 未配置任何非空设备密钥时，框架不接管接口加解密。 */
+    /** 是否配置默认 AES 密钥；自定义 CryptoCodec 不依赖此配置。 */
     public boolean hasDeviceKeys() {
         return devices != null && devices.values().stream()
                 .anyMatch(device -> device != null && device.getKey() != null && !device.getKey().isBlank());

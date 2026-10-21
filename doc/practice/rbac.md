@@ -58,7 +58,7 @@ yulinlin:
       secret: ${ADMIN_JWT_SECRET}
       issuer: yulinlin-admin
       ttl: 2h
-    # 不配置 crypto.devices 密钥，框架不接管接口加解密。
+    # 不提供 CryptoCodec，也不配置 crypto.devices，框架不接管接口加解密。
     limit:
       enabled: true
       ip-header: X-Real-IP
@@ -69,7 +69,7 @@ yulinlin:
 
 RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](../datasources/routing.md)和 [Schema](../datasources/schema.md) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
-Admin 默认不配置任何设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 在无密钥时也不会触发正文处理，可以直接发送普通 JSON。业务可自行提供加解密处理。要接入框架加密，按[接口加密](../security/crypto.md)配置双方一致的设备密钥（含 `unknown`）和 CBC IV，启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`。有密钥但 `enabled=false` 时仍会兼容解密，不能把它当作完全关闭。报文加密不替代 HTTPS。
+Admin 默认不提供 CryptoCodec，也不配置设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 此时不会触发正文处理，可以直接发送普通 JSON。要接入框架加密，按[接口加密](../security/crypto.md)配置设备密钥（含 `unknown`）和 CBC IV，或提供[自定义 CryptoCodec](../security/crypto-codec.md)，启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`。存在 Codec 且 `enabled=false` 时仍会兼容解密，不能把它当作完全关闭。报文加密不替代 HTTPS。
 
 登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
 
@@ -116,7 +116,7 @@ private List<RoleEntity> roles;
 | `AdminAuthenticationService.authenticate` | 实现 LoginAuthenticator<PasswordLogin>，name 返回 password，requestType 返回 PasswordLogin.class；按 username 校验密码和状态，返回安全用户 DTO |
 | `AdminAuthenticationService.load` | 同一 Bean 实现 UserStore；按 userId 查询最新用户及权限，拒绝停用/锁定/已删除用户，不再次校验密码 |
 | `AuthController` | 先处理验证码，然后调用 ISecurityManager.login(new PasswordLogin(username, password, deviceType)) |
-| 框架 `JwtSecurityManager` / 默认 `JwtTokenCodec` | 签发、验签、有效期检查和公共上下文；无存储、无撤销 |
+| `security-jwt` / 公开扩展接口 `JwtTokenCodec` | 提供无状态 Token 登录；需要定制生成与解析时替换 JwtTokenCodec，注销不撤销旧凭证 |
 | 框架登录拦截器 / 权限 AOP | Bearer Token 恢复当前用户，请求结束清理；检查登录、角色和权限 |
 
 Controller 中的核心代码（PasswordLogin 从 com.yulinlin.security.auth 导入）：

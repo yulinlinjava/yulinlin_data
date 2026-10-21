@@ -202,6 +202,10 @@
         "file": "security/crypto.md",
         "title": "接口加密与前端对接"
       },
+        {
+          "file": "security/crypto-codec.md",
+          "title": "自定义接口加解密"
+        },
       {
         "file": "security/rate-limit.md",
         "title": "限流与 IP 黑名单"

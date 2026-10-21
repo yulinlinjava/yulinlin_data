@@ -2,161 +2,131 @@
 
 [文档首页](../README.md) / [接口安全](README.md)
 
-有 LoginInterceptor Bean 就使用用户实现，否则自动提供默认实现。
+按需要替换公开接口，不需要了解默认实现的内部类或第三方调用链。
 
 ## 本页导航
 
+- [选择扩展点](#选择扩展点)
 - [自定义有状态登录](#自定义有状态登录)
 - [自定义登录拦截器](#自定义登录拦截器)
 - [接入外部安全框架](#接入外部安全框架)
 
+## 选择扩展点
+
+| 需求 | 公开扩展点 | 注册方式 |
+| --- | --- | --- |
+| 账号密码、业务密钥或其他认证方式 | LoginRequest + LoginAuthenticator<T> | 为每种请求类型提供认证器 Bean，name 记录为 authType |
+| 加载用户资料、角色与权限 | UserStore | 提供按 userId 加载安全用户的 Bean |
+| 替换 JWT 生成和解析 | JwtTokenCodec | 提供一个 Bean，生成和解析成对替换 |
+| 替换接口请求解密和响应加密 | CryptoCodec | 提供一个 Bean，无需框架 AES 密钥，见[接口加解密扩展](crypto-codec.md) |
+| 自定义凭证读取与请求身份恢复 | LoginInterceptor | 提供一个 Bean，自动替换并注册 |
+| 完整自定义登录或接入已有认证体系 | ISecurityManager | 提供一个 Bean，按需要配套 LoginInterceptor |
+
+认证示例见[用户模型](user.md)，Token 协议见[自定义 Token](token-codec.md)。只需要修改一项能力时，不必替换整个安全管理器。
+
 ## 自定义有状态登录
 
-`security-jwt` 不再提供登录存储或撤销 SPI。旧的 `JwtSessionStore`、`JwtSession`、`CaffeineJwtSessionStore`、`getByUserId/removeByUserId` 及 `jwt.maximum-size` 已移除，不能继续复制旧 Redis Store 示例。
+需要注销后立即失效等服务端登录状态时，可以选择 [security-sa-token](sa-token.md)，或实现自己的 ISecurityManager。security-jwt 是无状态实现，不能通过增加缓存配置自动变成有状态登录。
 
-需要在线会话、注销后立即失效、踢人或多设备管理时，优先选择 `security-sa-token`；需要自己的规则时，提供唯一的 `ISecurityManager` Bean（见[自定义与外部框架接入](#接入外部安全框架)），不要给无状态 JWT 默认链路偷偷增加存储。
+自定义有状态实现需要明确以下约定：
 
-业务自定义有状态实现至少负责：
+- 登录成功前保存可靠的登录记录，明确每个 Token 与登录记录的对应关系。
+- 请求时验证凭证、有效期、登录记录和用户状态；存储故障不能当作验证成功。
+- 注销时撤销对应登录记录，并清理当前请求身份。按用户撤销、重置密码失效等能力由业务自行定义。
+- 多实例使用共享状态；需要跨重启恢复时还要配置持久化。丢失登录记录不能自动降级为无状态放行。
+- 明确请求身份恢复和清理的责任，避免上一次请求的身份影响下一次请求。
 
-- 登录成功前可靠写入服务端记录；明确是一条 Token 对应一个登录，还是按设备复用。
-- 请求时验证凭证及记录有效性，再加载允许登录的用户；存储故障不能当作验证成功。
-- 注销时同步撤销记录；按用户撤销、重置密码失效等由业务定义，不属于公共接口的默认能力。
-- 多实例使用共享存储；若用 Redis，需考虑 TTL、持久化、故障及副本读一致性。登录记录丢失应拒绝登录，不能自动退回纯 JWT 放行。
-- 明确请求上下文的恢复与清理归属，不让旧线程身份泄漏到下一请求。
-
-如果自定义逻辑只是签名算法、密钥来源或 Token 格式，仍使用 `JwtTokenCodec`，无需实现整套管理器。若引入了撤销表或登录存储，就已经是有状态方案，文档和调用方都应明确这一点。
+如果只改变签名算法、密钥来源或 Token 格式，替换 JwtTokenCodec 即可；它不负责登录记录或注销撤销。
 
 ## 自定义登录拦截器
 
-JWT 或自定义管理器仅需改变 Token 请求头时，继承默认实现，保留它的验证与上下文处理。Sa-Token 应优先修改其 `sa-token.token-name/token-prefix` 等原生配置，内置适配器会自动使用，无需另写拦截器。
+业务提供 LoginInterceptor Bean，框架就使用它；没有自定义 Bean 时使用默认实现。无需手动重复注册。Bean 返回类型应声明为 LoginInterceptor 或其具体实现；通常只提供一个，存在多个时用 @Primary 明确选择。
+
+下面示例用于 security-jwt，或完全使用 SecurityContext 管理请求身份的自定义安全实现：客户端通过 X-Token 发送原始凭证，调用公开的 resolveSession 验证后恢复上下文。
 
 ```java
-import com.yulinlin.security.auth.ISecurityManager;
-import com.yulinlin.security.web.LoginContextInterceptor;
+import com.yulinlin.security.auth.*;
 import com.yulinlin.security.web.LoginInterceptor;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 
 @Bean
 public LoginInterceptor loginInterceptor(ISecurityManager manager) {
-    return new LoginContextInterceptor(() -> manager) {
-        @Override
-        protected String resolveToken(HttpServletRequest request) {
-            return request.getHeader("X-Token"); // 示例：直接携带 Token，不带 Bearer 前缀
-        }
-    };
-}
-```
-
-框架发现业务 `LoginInterceptor` Bean 后使用它，否则使用默认实现；框架负责 MVC 注册和清理包装，无需手动 `addInterceptors`，避免重复执行。Bean 返回类型应声明为 `LoginInterceptor` 或具体实现，不要只暴露为普通 `HandlerInterceptor`。通常只提供一个；若确需多个 Bean，必须用 `@Primary` 明确选择。
-
-旧的 `yulinlin.security.auth.enabled` 已移除，配置为 false 也不会阻止自动注册，请删除该配置。以前通过它接入外部框架的项目，应改为提供自定义 `LoginInterceptor` Bean。
-
-完全定制时也可直接实现 `LoginInterceptor`，必须自己完成可信身份恢复：使用框架上下文时设置 `SecurityContext`；使用外部上下文时配合自定义 `ISecurityManager` 读取身份。不能只从请求里读出 userId 就认为已登录。框架包装器负责请求开始、拒绝请求、异常、完成及异步切换时清理 **SecurityContext**，不替自定义实现补做验签或清理外部框架的上下文。Token 算法变化优先替换 `JwtTokenCodec`，不必改拦截器。
-
-## 接入外部安全框架
-
-自定义实现不必同时引入两个登录模块，也不必改公共权限 AOP。分三种情况：
-
-| 定制范围 | 实现/配置 | 请求身份由谁维护 |
-| --- | --- | --- |
-| 只改变 JWT 算法、密钥、声明格式 | security-jwt + 一个 JwtTokenCodec Bean | 框架默认拦截器和管理器 |
-| 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean | 你的 resolveSession 校验凭证，默认拦截器设置/清理 SecurityContext |
-| 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean + 一个 LoginInterceptor Bean | 自定义拦截器接入外部身份生命周期，管理器读取其当前用户 |
-
-框架不要求自定义实现一定使用 UserStore；JWT/Sa-Token 用它恢复用户，统一使用 LoginAuthenticator 验证对应 LoginRequest。Spring 的统一入口通过桥接 Provider 调用同一套认证器；UserStore 用于可选的 ID 登录和查询其他用户。自定义管理器可继承 `AbstractUserSecurityManager`，构造器传入 UserStore、LoginAuthenticatorRegistry，复用分发、加载和刷新；实现 `protected createLogin(IUserDetails user, String deviceType, String authType)`、logout、resolveSession。createLogin 只供内部认证后调用，不应扩大为 public；必须保存并恢复传入的 authType，不接受客户端覆盖。模板不替你实现存储、签名或撤销规则。
-
-继续使用框架上下文时，各方法的要求是：
-
-| 方法 | 实现要求 |
-| --- | --- |
-| login(LoginRequest) | 可选覆盖：通过 LoginAuthenticatorRegistry 按具体类型认证，成功后记录注册名称 authType；支持 PasswordLogin / ApiKeyLogin / 可信 UserIdLogin / 自定义类型；未覆盖时抛 UnsupportedOperationException |
-| resolveSession(token) | 不依赖当前线程身份，从可信凭证恢复 LoginSession；检查签名/会话、有效期和用户状态，不能只解码或信任客户端 userId |
-| logout() | 无状态仅清理上下文；有状态先执行自己的撤销，finally 清理上下文；不要声称 JWT 清理等于撤销 |
-| getUserDetails(userId) | 读取指定用户，不切换当前身份 |
-| refresh(userId) | 重载用户；为当前用户时重新校验凭证并更新快照，不把其他用户切换成当前用户，不隐式续期 |
-
-resolveSession 校验失败返回 null 或抛 LoginException；login 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码或 API Key 等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#自定义有状态登录)。
-
-模型构造器为 `new LoginSession(token, expiresAt, user, authType)` 和 `new LoginResult(token, expiresAt, user, authType)`。登录结果可使用 `LoginResult.of(session)` 构造。authType 来自实际成功认证器的 name；外部原生身份确实没有可信来源元数据时允许 null，但不要捏造 password 等值。默认 JWT/Sa-Token 要求来源有效，旧 Token 不兼容。
-
-已经提供的 [Sa-Token](sa-token.md) 或 [Spring Security](spring.md) 适配按对应专题接入，不必自己重写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean；再提供一个 `LoginInterceptor` Bean，接入该框架请求身份的恢复与清理。不支持的统一 API 必须明确报错，不能凭 userId 绕过外部认证或只清理线程冒充注销。
-
-如果还希望业务直接读取 `SecurityContext`，可让 **同一个 ISecurityManager 实现类**额外实现 `SecurityContextResolver`：实现 `resolveContext(LoginSession cached)`，每次按外部当前身份校验，身份未变可复用 cached.user()，已注销返回 null，基础设施故障正常抛出。Spring 选中的管理器自动接入，无需额外注册 Resolver Bean；解析过程和 UserStore 不得递归读取 SecurityContext。内置 Sa-Token 使用这个桥接，原生登录需额外保存 Token 专属 authType，详见 [Sa-Token 原生接入](sa-token.md#保留原来的登录代码)。
-
-不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken()、getAuthType() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；登录入口按需覆盖 login(LoginRequest)。旧认证接口和便捷入口已移除；可信 ID 登录统一写成 `login(new UserIdLogin(verifiedUserId, deviceType))`，不能直接信任客户端提供的 ID。
-
-下面是注册形式，放在业务 `@Configuration` 中。`ExternalAuth` 代表**业务自己封装的外部框架服务，不是本项目提供的类**；其中方法需按上表的安全和生命周期约定实现：
-
-```java
-import com.yulinlin.security.auth.ISecurityManager;
-import com.yulinlin.security.auth.IUserDetails;
-import com.yulinlin.security.auth.LoginResult;
-import com.yulinlin.security.auth.LoginRequest;
-import org.springframework.context.annotation.Bean;
-
-@Bean
-public ISecurityManager securityManager(ExternalAuth auth) {
-    return new ISecurityManager() {
-        @Override public LoginResult login(LoginRequest request) {
-            return auth.login(request); // 业务按类型认证；不支持的类型明确拒绝
-        }
-        @Override public void logout() { auth.logout(); }
-        @Override public IUserDetails getUserDetails() { return auth.currentUser(); }
-        @Override public String getToken() { return auth.currentToken(); }
-        @Override public String getAuthType() { return auth.currentAuthType(); }
-        @Override public IUserDetails getUserDetails(String userId) {
-            return auth.loadUser(userId);
-        }
-        @Override public IUserDetails refresh(String userId) {
-            return auth.refreshUser(userId); // 当前用户时更新外部框架快照，不切换身份
-        }
-    };
-}
-```
-
-配套的拦截器示例（同样放在业务配置类中；`restoreRequest`、`clearRequest` 是业务封装的方法）：
-
-```java
-import com.yulinlin.security.web.LoginInterceptor;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-
-@Bean
-public LoginInterceptor externalLoginInterceptor(ExternalAuth auth) {
     return new LoginInterceptor() {
         @Override
         public boolean preHandle(HttpServletRequest request,
                                  HttpServletResponse response, Object handler) throws Exception {
-            boolean accepted = false;
-            try {
-                // 校验凭证并恢复外部框架身份；拒绝时写入响应并返回 false。
-                accepted = auth.restoreRequest(request, response);
-                return accepted;
-            } finally {
-                // preHandle 返回 false 或抛异常时，不会收到自己的 afterCompletion。
-                if (!accepted) auth.clearRequest();
+            if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
+            String token = request.getHeader("X-Token");
+            if (token == null) return true; // 匿名请求，是否允许访问由权限声明决定
+            if (token.isBlank() || token.length() > 8192
+                    || token.chars().anyMatch(Character::isWhitespace)) {
+                response.sendError(401, "登录凭证无效");
+                return false;
             }
-        }
-
-        @Override
-        public void afterCompletion(HttpServletRequest request,
-                                    HttpServletResponse response, Object handler, Exception ex) {
-            auth.clearRequest();
-        }
-
-        @Override
-        public void afterConcurrentHandlingStarted(HttpServletRequest request,
-                                                  HttpServletResponse response, Object handler) {
-            auth.clearRequest();
+            LoginSession session;
+            try {
+                session = manager.resolveSession(token);
+            } catch (LoginException error) {
+                response.sendError(401, "登录已失效，请重新登录");
+                return false;
+            }
+            if (session == null || session.expired() || !token.equals(session.token())) {
+                response.sendError(401, "登录已失效，请重新登录");
+                return false;
+            }
+            SecurityContext.set(session);
+            return true;
         }
     };
 }
 ```
 
-外部身份恢复必须验证真实凭证，不得信任客户端直接传入的用户 ID。若外部框架已有 Filter 完整管理请求身份，Filter 应先于 MVC 执行并在 finally 清理；自定义 LoginInterceptor 对接其已验证上下文即可，不要重复解析或重复注册同一拦截器。异步业务线程的身份传递需遵循外部框架自己的规则。
+这是替换整个请求身份恢复行为，不只是新增一个请求头。manager.resolveSession 必须完成真实凭证验证；此示例不能直接替换 Sa-Token、Spring 或其他同时维护外部身份的请求处理。它们应保留模块默认凭证约定，或通过完整自定义接入统一管理两侧身份。不要将客户端传入的 userId 直接写入上下文。
 
-ApiLogin/ApiRole/ApiPerm 的 AOP 仍调用你的 ISecurityManager，加密和限流不受影响。框架包装器只兜底清理 SecurityContext，外部上下文仍由上述适配或外部 Filter 负责。若不提供自定义 LoginInterceptor，则启用默认实现，此时管理器必须实现 resolveSession，不能沿用上面省略该方法的示例。
+框架负责自动注册和清理 SecurityContext，包括拒绝请求、异常、请求完成及异步切换。自定义实现若还维护其他请求状态，必须自行清理；基础设施异常正常传播，不能伪装成验证成功。
+
+不需要启用开关，也不要重复注册同一个拦截器。只替换 Token 算法时，应使用 JwtTokenCodec，不必修改拦截器。
+
+## 接入外部安全框架
+
+已有 [Sa-Token](sa-token.md) 或 [Spring Security](spring.md) 项目可选择对应模块。其他认证体系只需引入公共 security，提供 ISecurityManager；如果已有请求身份恢复机制，再提供 LoginInterceptor 对接已验证身份。不要同时引入多个登录模块。
+
+业务侧继续使用 SecurityUtil、ISecurityManager 和 ApiLogin/ApiRole/ApiPerm，不依赖具体登录实现。需要实现的公开行为如下：
+
+| 方法 | 接入约定 |
+| --- | --- |
+| login(LoginRequest) | 按对应认证方式验证凭证，返回 LoginResult；未支持的方式明确拒绝，不降级为 ID 登录 |
+| resolveSession(token) | 使用默认 Token 拦截器时必须实现：验证凭证并恢复 LoginSession，不依赖当前请求身份 |
+| getUserDetails() | 返回当前已验证用户，匿名返回 null |
+| getToken() / getAuthType() | 返回当前 Token 和可信认证来源；不适用或来源未知时为 null，不编造 |
+| logout() | 按自身登录协议注销，并清理请求身份；无状态 JWT 不能宣称已撤销旧 Token |
+| getUserDetails(userId) | 查询指定用户，不切换当前身份 |
+| refresh() / refresh(userId) | 刷新用户资料，当前用户时更新当前请求身份；不切换用户，不隐式续期 |
+
+注册形式如下，BusinessSecurityManager、BusinessIdentityService 均为业务自己实现的类，不是框架提供的类：
+
+```java
+@Bean
+public ISecurityManager securityManager(BusinessIdentityService identities) {
+    return new BusinessSecurityManager(identities);
+}
+```
+
+使用框架上下文时，公开模型为：
+
+```java
+LoginSession session = new LoginSession(token, expiresAt, safeUser, authType);
+SecurityContext.set(session);
+LoginResult result = LoginResult.of(session);
+```
+
+以上代码只用于已经完成认证的实现内部，不能包装成接收任意 userId 的公开登录接口。safeUser 不得携带密码、API Key 等凭证。authType 来自成功认证器的 name；已有外部身份没有可信来源时可以为 null，不猜测为 password。JWT/Sa-Token 凭证要求有效的认证来源，不能随意省略。
+
+resolveSession 验证失败可返回 null 或抛 LoginException；login 失败应抛异常，不返回 null 冒充成功。使用默认 Token 拦截器时，恢复结果中的 Token 必须与请求 Token 一致。
+
+已有外部上下文时，可由管理器直接读取其当前已验证身份；若业务还要读取 SecurityContext，自定义 LoginInterceptor 应同步设置它。自定义请求状态由业务负责在成功、拒绝、异常及异步切换时清理。不要仅清理 SecurityContext 就宣称已退出外部登录。
 
 ---
 

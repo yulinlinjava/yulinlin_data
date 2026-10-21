@@ -33,7 +33,7 @@ public interface IUserDetails {
 
 角色/权限使用 Set，执行精确且区分大小写的判断，不解释通配符；集合或检查参数为 null 时返回 false。未知 attribute 返回 null。用户模型不得包含密码、密码哈希、API Key、Token 等凭证；`authType` 属于某次登录，不放进用户模型。
 
-> [Admin RBAC 案例](../practice/rbac.md)已按本 SPI 更新：同一业务 Bean 实现 LoginAuthenticator<PasswordLogin> 与 UserStore，Controller 使用 login(new PasswordLogin(...))。旧认证接口已移除；源码和相关用例已迁移，但本轮未编译、未执行测试。
+完整项目案例见 [Admin RBAC](../practice/rbac.md)：同一业务 Bean 实现 LoginAuthenticator<PasswordLogin> 与 UserStore，Controller 使用 login(new PasswordLogin(...))。
 
 ## 安全管理器
 
@@ -64,9 +64,9 @@ SecurityUtil.getUserDetails(otherUserId); // 只查询用户，不切换身份
 SecurityUtil.logout();
 ```
 
-JWT 将 authType 放入签名声明；Sa-Token 存在对应 Token-Session；Spring 统一登录保存到认证详情。后续请求恢复该字段。JWT/Sa-Token 缺少 authType 的旧凭证直接拒绝，需要重新登录；不伪造默认认证方式。原生外部 Spring 身份未提供这项信息时返回 null，不代表通过了 password 认证。
+authType 在后续请求中保持为本次登录的认证来源。JWT/Sa-Token 缺少 authType 的凭证会被拒绝，需要重新登录；不推测默认认证方式。已有外部登录没有提供可信来源时返回 null，不代表通过了 password 认证。
 
-框架静态入口只委托 Spring 选定的管理器，单例初始化完成后可用，不在 Bean 构造器中调用。只选择一个登录模块，不叠加 JWT/Sa-Token/Spring。匿名管理器不支持登录。
+静态调用与注入 ISecurityManager 使用同一个安全实现；应用初始化完成后再调用，不在 Bean 构造器中调用。只选择一个登录模块，不叠加 JWT/Sa-Token/Spring。仅引入公共 security 时默认匿名，不提供登录能力。
 
 ## 业务账号认证
 
@@ -156,11 +156,11 @@ public class AuthController {
 }
 ```
 
-示例使用项目 starter 的 R，业务将 LoginException 统一转为 HTTP 401；Spring 原生 URL 放行/CSRF 以及启用的报文加密规则仍需遵守。密钥接口 JSON 为 `{"apiKey":"业务密钥","deviceType":"server"}`，后续使用返回的 Token。登录前移除失效旧 Token，默认拦截器对公开接口携带无效凭证也会拒绝。
+示例使用项目 starter 的 R，业务将 LoginException 统一转为 HTTP 401；项目已有的访问控制、防跨站请求校验及报文加密规则仍需遵守。密钥接口 JSON 为 `{"apiKey":"业务密钥","deviceType":"server"}`，后续使用返回的 Token。登录前移除失效旧 Token，公开接口携带无效凭证也会被拒绝。
 
 ## 根据用户 ID 登录
 
-存在唯一/Primary UserStore 且业务没有注册 UserIdLogin 认证器时，自动提供默认 `UserIdLoginAuthenticator`，name 为 `user-id`，按 ID 加载用户并检查返回 ID 一致；UserStore 应拒绝禁用/删除用户。自定义 LoginAuthenticator<UserIdLogin> Bean 可替换默认行为，不需要重复注册默认类。
+存在唯一/Primary UserStore 且业务没有注册 UserIdLogin 认证器时，默认支持 ID 登录，authType 为 `user-id`，按 ID 加载用户并检查返回 ID 一致；UserStore 应拒绝禁用/删除用户。自定义 LoginAuthenticator<UserIdLogin> Bean 可替换该行为。
 
 ```java
 // verifiedUserId 必须来自服务端已经验证的授权结果，不能直接来自客户端参数。
@@ -201,7 +201,7 @@ String type = SecurityContext.getAuthType(); // sms
 
 ## 一个业务组件实现两个接口
 
-可以让业务类同时实现 `LoginAuthenticator<PasswordLogin>` 和 `UserStore`，分别实现 name、requestType、authenticate(PasswordLogin)、load(userId)。不再使用旧 UserAuthenticator / ApiKeyAuthenticator，也不再调用 loginByUsername。
+可以让业务类同时实现 `LoginAuthenticator<PasswordLogin>` 和 `UserStore`，分别实现 name、requestType、authenticate(PasswordLogin)、load(userId)。
 
 认证时根据凭证验证用户，后续请求按稳定 userId 恢复，不把用户名当 ID。一个类不能同时实现同一个泛型接口的两个不同类型实例；多种登录方式分别提供认证器 Bean，可以复用同一个 AccountService。
 
@@ -214,10 +214,9 @@ String type = SecurityContext.getAuthType(); // sms
 | 用户资料与权限 | UserStore | 按稳定用户 ID 加载；可缓存但业务负责失效 |
 | JWT 生成/验签 | JwtTokenCodec | generate(user, deviceType, authType) 与 parse 成对替换 |
 | Token 读取 | LoginInterceptor | Bean 自动替换并注册，默认生命周期清理仍在 |
-| Spring 认证链 | LoginAuthenticatorAuthenticationProvider | 将桥接 Provider 加入业务 AuthenticationManager，详见 [Spring 接入](spring.md) |
 | 整体安全实现 | ISecurityManager | 实现 login(LoginRequest)、恢复、注销等；可适配外部上下文 |
 
-包名前缀为 com.yulinlin.security，公共协议位于 auth；JWT/Sa-Token/Spring 扩展分别在 jwt/satoken/spring。认证名称来自验证流程，不因 HTTP URL、类名或 Bean 名变化而变化。authType 不代替角色权限，也不自动实现 MFA。
+登录公共协议位于 com.yulinlin.security.auth，JwtTokenCodec 位于 com.yulinlin.security.jwt，LoginInterceptor 位于 com.yulinlin.security.web。认证名称来自验证流程，不因 HTTP URL、类名或 Bean 名变化而变化。authType 不代替角色权限，也不自动实现多因素认证。
 
 ## 加载用户信息
 
@@ -230,7 +229,7 @@ public UserStore userStore(AccountService accounts) {
 
 UserStore.load 不验证密码、不签发 Token，不递归读取 SecurityContext。不存在/禁用用户返回 null 或抛 LoginException；基础设施错误正常抛出，不能返回默认用户，返回 ID 必须与查询 ID 相同。
 
-JWT/Sa-Token 认证器返回的安全用户直接用于当前登录，下一次请求才按 ID 重新加载；请求内复用快照。业务缓存需要自行处理角色/状态变更，refresh 不会替业务清理缓存。Spring 默认映射原生 Authentication，不自动按 UserStore 重新查库。
+JWT/Sa-Token 认证器返回的安全用户直接用于当前登录，下一次请求才按 ID 重新加载；请求内复用快照。业务缓存需要自行处理角色/状态变更，refresh 不会替业务清理缓存。已有 Spring 登录体系采用其用户资料加载规则，不承诺自动重查业务数据库。
 
 ---
 

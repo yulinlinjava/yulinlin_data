@@ -37,7 +37,7 @@ public class VideoController {
 }
 ```
 
-支持 `500ms`、`10s`、`1m`、`1h` 等 Spring Duration 写法。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。超出限制时返回 HTTP `429`、`Retry-After` 响应头和未加密的统一 JSON：
+interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。超出限制时返回 HTTP `429`、`Retry-After` 响应头和未加密的统一 JSON：
 
 ```json
 {
@@ -50,11 +50,11 @@ public class VideoController {
 }
 ```
 
-每条计数记录的 Key 是 `Controller 方法 + 限流维度 + IP/设备 ID`。Caffeine 根据该接口的 `interval` 淘汰不活跃记录，并用 `maximum-size` 防止大量随机 IP 或设备 ID 持续占用内存；未开启统计功能。达到容量上限而被提前淘汰的客户端再次访问时会重新计数。
+各接口按 IP 或设备 ID 独立计数，不活跃记录随 interval 到期淘汰。maximum-size 限制本机保留的计数器数量；达到容量上限而被提前淘汰的客户端再次访问时会重新计数。多实例各自计数，不提供全局统一额度。
 
 ### IP 黑名单
 
-IP 黑名单由业务实现 `IpBlacklist` 接口，框架不规定数据来自内存、Caffeine、Redis 还是数据库。接口只接收已经完成可信代理检查并规范化的真实客户端 IP：
+IP 黑名单由业务实现 `IpBlacklist` 接口，自行选择数据存储。接口只接收已经完成可信代理检查并规范化的真实客户端 IP：
 
 ```java
 import com.yulinlin.security.limit.IpBlacklist;
@@ -99,7 +99,7 @@ public class IpBlacklistService {
 
 没有业务 Bean 时，框架注册默认空实现并放行所有 IP。命中黑名单时不进入 Controller，直接返回 HTTP `403` 和未加密的统一 JSON，`msg` 为 `当前 IP 已被禁止访问`。黑名单检查对所有 Controller 生效，不要求存在 `@ApiLimit`。
 
-`isBlocked` 会在每次业务请求进入 Controller 前执行，不要在里面直接进行慢 SQL 查询。推荐使用内存集合、Caffeine、Redis Set，或者把数据库数据加载到本地后定时刷新。拉黑、解除、过期时间、CIDR 规则和管理接口都属于业务实现；框架只负责可靠传入真实 IP。实现抛出的异常不会被静默当作放行，避免安全检查在故障时无声失效。
+`isBlocked` 会在每次业务请求进入 Controller 前执行，应使用快速查询，避免同步慢 SQL。可使用业务缓存，或将数据库黑名单定时加载到本地。拉黑、解除、过期时间、CIDR 规则和管理接口都属于业务实现；框架只负责可靠传入真实 IP。实现抛出的异常不会被静默当作放行，避免安全检查在故障时无声失效。
 
 ### Nginx 真实 IP
 

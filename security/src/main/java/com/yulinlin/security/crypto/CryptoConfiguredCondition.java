@@ -10,7 +10,7 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 
 import java.util.Map;
 
-/** 仅在存在设备密钥时启用框架加解密；具体密钥、IV、unknown 配置仍由管理器校验。 */
+/** 默认 AES 实现的配置条件；自定义 CryptoCodec 不依赖设备密钥。 */
 public final class CryptoConfiguredCondition extends SpringBootCondition {
     @Override
     public ConditionOutcome getMatchOutcome(ConditionContext context, AnnotatedTypeMetadata metadata) {
@@ -21,7 +21,7 @@ public final class CryptoConfiguredCondition extends SpringBootCondition {
         SecurityCryptoProperties properties = new SecurityCryptoProperties();
         properties.setDevices(devices);
         return properties.hasDeviceKeys()
-                ? ConditionOutcome.match("已配置设备密钥，启用接口加解密")
-                : ConditionOutcome.noMatch("未配置设备密钥，不接管接口加解密");
+                ? ConditionOutcome.match("已配置设备密钥，可以创建默认 AES 实现")
+                : ConditionOutcome.noMatch("未配置设备密钥，不创建默认 AES 实现");
     }
 }

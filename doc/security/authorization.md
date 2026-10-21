@@ -61,7 +61,7 @@ public class UserApi {
 | 无业务 ISecurityManager Bean | 自动提供 AnonymousSecurityManager，正常启动 |
 | `getUserDetails()`、`getUserDetails(userId)`、`refresh(userId)` | 返回 null，不查库、不生成身份 |
 | `logout()` | 清理本模块当前线程上下文，不操作外部登录会话 |
-| `loginByUsername(...)` 两个重载 | 默认抛 UnsupportedOperationException；匿名管理器不提供账号密码校验 |
+| `login(LoginRequest)` | 默认抛 UnsupportedOperationException；匿名管理器不提供账号密码、密钥或 ID 登录 |
 | 无鉴权注解或允许匿名的方法 | 不读取管理器，不影响加密和限流 |
 | 默认匿名实现访问受保护方法 | 401，不会因为没有业务实现而放行 |
 | 自定义 ISecurityManager Bean | 自动替换默认实现；项目只保留一个安全管理器 |

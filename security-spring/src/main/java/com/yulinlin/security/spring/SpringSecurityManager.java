@@ -1,6 +1,8 @@
 package com.yulinlin.security.spring;
 
 import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.LoginAuthenticatorRegistry;
+import com.yulinlin.security.auth.LoginRequest;
 import com.yulinlin.security.auth.IUserDetails;
 import com.yulinlin.security.auth.LoginException;
 import com.yulinlin.security.auth.LoginResult;
@@ -16,7 +18,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationTrustResolverImpl;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.CredentialsContainer;
@@ -30,26 +31,29 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.util.Objects;
 import java.util.function.Supplier;
 
-/** 适配 Spring 身份；账号密码认证委托 AuthenticationManager，会话策略和身份持久化复用 Spring 协议。 */
+/** 适配 Spring 身份；账号密码、密钥都委托 AuthenticationManager，会话策略和身份持久化复用 Spring 协议。 */
 public final class SpringSecurityManager implements ISecurityManager, SecurityContextResolver {
     private final SpringUserMapper mapper;
     private final Supplier<UserStore> users;
     private final Supplier<AuthenticationManager> authenticationManagers;
     private final Supplier<SecurityContextRepository> repositories;
     private final Supplier<SessionAuthenticationStrategy> sessionStrategies;
+    private final LoginAuthenticatorRegistry authenticators;
     private final AuthenticationTrustResolverImpl trust = new AuthenticationTrustResolverImpl();
 
     /** 仅桥接已有身份；手动调用账号密码登录时使用带认证、存储和会话策略的构造器。 */
     public SpringSecurityManager(SpringUserMapper mapper, Supplier<UserStore> users) {
-        this(mapper, users, () -> null, () -> null, () -> null);
+        this(mapper, users, new LoginAuthenticatorRegistry(java.util.List.of(), null), () -> null, () -> null, () -> null);
     }
 
     public SpringSecurityManager(SpringUserMapper mapper, Supplier<UserStore> users,
+                                 LoginAuthenticatorRegistry authenticators,
                                  Supplier<AuthenticationManager> authenticationManagers,
                                  Supplier<SecurityContextRepository> repositories,
                                  Supplier<SessionAuthenticationStrategy> sessionStrategies) {
         this.mapper = Objects.requireNonNull(mapper, "用户映射器不能为空");
         this.users = Objects.requireNonNull(users, "用户加载器提供者不能为空");
+        this.authenticators = Objects.requireNonNull(authenticators, "认证器注册表不能为空");
         this.authenticationManagers = Objects.requireNonNull(authenticationManagers, "认证管理器提供者不能为空");
         this.repositories = Objects.requireNonNull(repositories, "安全上下文存储提供者不能为空");
         this.sessionStrategies = Objects.requireNonNull(sessionStrategies, "会话认证策略提供者不能为空");
@@ -69,46 +73,51 @@ public final class SpringSecurityManager implements ISecurityManager, SecurityCo
         if (user == null) return null;
         requireUserId(user.getUserId());
         // Session、Basic、OAuth2 都不保证存在可返回的 Token；绝不能把 credentials 当作 Token。
-        return new LoginSession(null, null, user);
+        String authType = authentication.getDetails() instanceof SpringLoginDetails details ? details.getAuthType() : null;
+        return new LoginSession(null, null, user, authType);
     }
 
     @Override
-    public LoginResult loginByUsername(String username, String password, String deviceType) {
+    public LoginResult login(LoginRequest login) {
         if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)
                 || attributes.getResponse() == null) {
-            throw new IllegalStateException("Spring 账号密码登录需要当前 Servlet 请求和响应，请在 MVC 接口中调用");
+            throw new IllegalStateException("Spring 登录需要当前 Servlet 请求和响应，请在 MVC 接口中调用");
         }
         HttpServletRequest request = attributes.getRequest();
         HttpServletResponse response = attributes.getResponse();
         if (response.isCommitted()) throw new IllegalStateException("响应已提交，无法保存登录状态，请在输出响应之前登录");
         AuthenticationManager manager = authenticationManagers.get();
-        if (manager == null) throw new IllegalStateException("请将现有 Spring AuthenticationManager 注册为 Bean 后使用 loginByUsername");
+        if (manager == null) throw new IllegalStateException("请将现有 Spring AuthenticationManager 注册为 Bean 后使用 login(LoginRequest)");
         SecurityContextRepository repository = repositories.get();
         SessionAuthenticationStrategy strategy = sessionStrategies.get();
         if (repository == null || strategy == null) {
             throw new IllegalStateException("Spring 登录需要 SecurityContextRepository 和 SessionAuthenticationStrategy");
         }
 
-        var credentials = UsernamePasswordAuthenticationToken.unauthenticated(username, password);
+        AbstractAuthenticationToken credentials = null;
         SecurityContext.clear();
         SecurityContextHolder.clearContext();
         try {
-            if (username == null || username.isBlank() || password == null || password.isEmpty()) {
-                throw new LoginException("账号或密码错误");
-            }
-            // 密码不 trim；认证请求携带设备信息，认证提供者可以按需读取，但不能把设备当作认证凭证。
-            credentials.setDetails(new SpringLoginDetails(request, deviceType));
+            var registered = authenticators.required(login);
+            String authType = registered.name();
+            String deviceType = login.deviceType();
+            credentials = new LoginRequestAuthenticationToken(login, authType);
+            // 不修改原始凭证；设备只是元数据，不能作为认证凭证。
+            credentials.setDetails(new SpringLoginDetails(request, deviceType, authType));
             Authentication authenticated = manager.authenticate(credentials);
             if (authenticated instanceof CredentialsContainer sensitive) sensitive.eraseCredentials();
             if (authenticated == null || !authenticated.isAuthenticated() || trust.isAnonymous(authenticated)) {
-                throw new LoginException("账号或密码错误");
+                throw new LoginException("登录凭证无效或认证未通过");
             }
             if (authenticated.getCredentials() != null) {
-                throw new IllegalStateException("认证结果仍含凭证，请让 AuthenticationManager 返回可清除凭证的 Authentication，不能将密码保存到会话");
+                throw new IllegalStateException("认证结果仍含凭证，请让 AuthenticationManager 返回可清除凭证的 Authentication，不能将密码或密钥保存到会话");
             }
-            if (authenticated instanceof AbstractAuthenticationToken token && token.getDetails() == null) {
-                token.setDetails(credentials.getDetails());
+            if (!(authenticated instanceof AbstractAuthenticationToken token)) {
+                throw new IllegalStateException("统一登录的认证结果必须支持保存认证详情，请返回 AbstractAuthenticationToken 实现");
             }
+            Object providerDetails = token.getDetails();
+            if (providerDetails instanceof SpringLoginDetails details) providerDetails = details.getProviderDetails();
+            token.setDetails(new SpringLoginDetails(request, deviceType, authType, providerDetails));
             IUserDetails user = mapper.map(authenticated);
             if (user == null) throw new LoginException("当前账号不能登录");
             requireUserId(user.getUserId());
@@ -118,15 +127,15 @@ public final class SpringSecurityManager implements ISecurityManager, SecurityCo
             SecurityContextHolder.setContext(context);
             // 仅 setContext 不能保证下个请求仍已登录，必须交给同一套 Spring 存储协议。
             repository.saveContext(context, request, response);
-            return new LoginResult(null, null, user);
+            return new LoginResult(null, null, user, authType);
         } catch (AuthenticationException error) {
             clearFailedLogin(repository, request, response, error);
-            throw new LoginException("账号认证或会话校验未通过，请检查账号密码与登录限制", error);
+            throw new LoginException("登录认证或会话校验未通过，请检查凭证、认证提供者与登录限制", error);
         } catch (RuntimeException | Error error) {
             clearFailedLogin(repository, request, response, error);
             throw error;
         } finally {
-            credentials.eraseCredentials();
+            if (credentials != null) credentials.eraseCredentials();
         }
     }
 

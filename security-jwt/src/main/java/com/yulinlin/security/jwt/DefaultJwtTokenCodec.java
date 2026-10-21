@@ -37,15 +37,15 @@ public final class DefaultJwtTokenCodec implements JwtTokenCodec {
     }
 
     @Override
-    public String generate(IUserDetails user, String deviceType) {
+    public String generate(IUserDetails user, String deviceType, String authType) {
         Objects.requireNonNull(user, "登录用户不能为空");
-        // 兼容旧 Token 缺少设备声明，但新签发的 Token 仍必须明确携带设备类型。
         if (deviceType == null || deviceType.isBlank()) throw new IllegalArgumentException("deviceType 不能为空");
         Instant issuedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-        TokenInfo info = new TokenInfo(user.getUserId(), deviceType, UUID.randomUUID().toString(),
+        TokenInfo info = new TokenInfo(user.getUserId(), deviceType, authType, UUID.randomUUID().toString(),
                 issuedAt, issuedAt.plus(ttl).truncatedTo(ChronoUnit.SECONDS));
         return Jwts.builder().issuer(issuer).subject(info.userId()).id(info.tokenId())
                 .claim("deviceType", info.deviceType())
+                .claim("authType", info.authType())
                 .issuedAt(Date.from(info.issuedAt())).expiration(Date.from(info.expiresAt()))
                 .signWith(key, Jwts.SIG.HS256).compact();
     }
@@ -59,7 +59,7 @@ public final class DefaultJwtTokenCodec implements JwtTokenCodec {
             Date expiresAt = claims.getExpiration();
             if (issuedAt == null || expiresAt == null) return null;
             TokenInfo result = new TokenInfo(claims.getSubject(), claims.get("deviceType", String.class),
-                    claims.getId(), issuedAt.toInstant(), expiresAt.toInstant());
+                    claims.get("authType", String.class), claims.getId(), issuedAt.toInstant(), expiresAt.toInstant());
             return result.validAt(Instant.now()) ? result : null;
         } catch (JwtException | IllegalArgumentException error) {
             return null;

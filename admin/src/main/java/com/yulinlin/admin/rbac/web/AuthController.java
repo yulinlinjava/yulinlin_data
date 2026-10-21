@@ -6,6 +6,7 @@ import com.yulinlin.security.annotation.ApiLimit;
 import com.yulinlin.security.annotation.ApiLogin;
 import com.yulinlin.security.annotation.ApiPublic;
 import com.yulinlin.security.auth.LoginResult;
+import com.yulinlin.security.auth.PasswordLogin;
 import com.yulinlin.security.auth.ISecurityManager;
 import com.yulinlin.security.auth.IUserDetails;
 import com.yulinlin.starter.domain.R;
@@ -33,7 +34,7 @@ public class AuthController {
     public R<LoginResult> login(@Valid @RequestBody RbacRequests.Login request) {
         authentication.validateCode(request.code());
         String deviceType = request.deviceType() == null ? "web" : request.deviceType();
-        return R.ok(security.loginByUsername(request.username(), request.password(), deviceType), "登录成功");
+        return R.ok(security.login(new PasswordLogin(request.username(), request.password(), deviceType)), "登录成功");
     }
 
     @PostMapping("/logout")

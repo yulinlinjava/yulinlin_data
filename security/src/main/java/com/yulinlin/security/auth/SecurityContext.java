@@ -66,6 +66,11 @@ public final class SecurityContext {
         return user == null ? null : user.getUserId();
     }
 
+    public static String getAuthType() {
+        LoginSession session = getSession();
+        return session == null ? null : session.authType();
+    }
+
     public static boolean isLogin() { return getUser() != null; }
     /** 只清理本线程快照，不注销外部会话；再次读取可由外部可信身份重新恢复。 */
     public static void clear() { CURRENT.remove(); }

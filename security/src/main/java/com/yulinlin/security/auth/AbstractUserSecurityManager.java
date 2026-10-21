@@ -2,44 +2,33 @@ package com.yulinlin.security.auth;
 
 import java.util.Objects;
 
-/** JWT / Sa-Token 共用业务账号认证、用户加载与请求快照刷新，具体实现负责签发或存储。 */
+/** JWT / Sa-Token 共用凭证分发、业务认证、用户加载与请求快照刷新，具体实现负责签发或存储。 */
 public abstract class AbstractUserSecurityManager implements ISecurityManager {
     private final UserStore users;
-    private final UserAuthenticator authenticator;
+    private final LoginAuthenticatorRegistry authenticators;
 
-    protected AbstractUserSecurityManager(UserStore users) {
-        this(users, null);
-    }
-
-    protected AbstractUserSecurityManager(UserStore users, UserAuthenticator authenticator) {
+    protected AbstractUserSecurityManager(UserStore users, LoginAuthenticatorRegistry authenticators) {
         this.users = Objects.requireNonNull(users, "UserStore 不能为空");
-        this.authenticator = authenticator;
+        this.authenticators = Objects.requireNonNull(authenticators, "认证器注册表不能为空");
     }
 
     @Override
-    public final LoginResult loginByUsername(String username, String password, String deviceType) {
+    public final LoginResult login(LoginRequest request) {
         SecurityContext.clear();
         try {
-            requireText(deviceType, "设备类型");
-            if (username == null || username.isBlank() || password == null || password.isEmpty()) {
-                throw new LoginException("用户名或密码错误");
-            }
-            if (authenticator == null) {
-                throw new IllegalStateException("账号密码登录需要提供 UserAuthenticator Bean；UserStore 只加载用户，不校验密码");
-            }
-            // 保留原始密码，不 trim；不能把用户名当作用户 ID，也不能在缺少认证组件时直接签发。
-            IUserDetails user = authenticator.authenticate(username, password);
-            if (user == null) throw new LoginException("用户名或密码错误");
-            requireText(user.getUserId(), "认证用户 ID");
-            return createLogin(user, deviceType);
+            var authenticator = authenticators.required(request);
+            String deviceType = request.deviceType();
+            // 名称取自启动时注册的服务端认证器，不接受客户端声称的 authType。
+            IUserDetails user = authenticator.authenticate(request);
+            return createLogin(user, deviceType, authenticator.name());
         } catch (RuntimeException | Error failure) {
             SecurityContext.clear();
             throw failure;
         }
     }
 
-    /** 仅供已通过账号认证的内部流程调用，不暴露为业务登录 API。 */
-    protected abstract LoginResult createLogin(IUserDetails user, String deviceType);
+    /** 仅供已验证凭证的内部流程调用，不暴露为业务登录 API。 */
+    protected abstract LoginResult createLogin(IUserDetails user, String deviceType, String authType);
 
     @Override
     public IUserDetails getUserDetails(String userId) {

@@ -23,7 +23,9 @@ public final class RbacRequests {
             @NotBlank @Size(max = 64) String username,
             @NotBlank @Size(max = 128) String password,
             @Size(max = 32) String code,
-            @Pattern(regexp = "[a-zA-Z0-9_-]{1,32}") String deviceType) { }
+            @Pattern(regexp = "[a-zA-Z0-9_-]{1,32}") String deviceType) {
+        @Override public String toString() { return "Login[凭证已隐藏]"; }
+    }
 
     public record Id(@NotBlank @Size(max = 128) String id) { }
 

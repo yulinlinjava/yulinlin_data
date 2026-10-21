@@ -1,5 +1,5 @@
 ### 设置 ADMIN_JWT_SECRET（至少32字节随机密钥的Base64）、ADMIN_RBAC_PASSWORD 后启动 AdminApplication。
-### 仅使用 security-jwt。业务校验账号密码后，以 userId 登录；不要在请求中自行传 userId。
+### 仅使用 security-jwt。PasswordLogin 交给 AdminAuthenticationService 认证，authType=password；不开放客户端传 userId 登录。
 @baseUrl = http://localhost:8083
 @adminPassword = replace-with-your-admin-password
 

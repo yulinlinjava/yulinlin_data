@@ -11,19 +11,22 @@
 ## 登录上下文与请求生命周期
 
 ```java
-LoginResult result = SecurityUtil.loginByUsername(username, password, "web");
-// HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user。
+LoginResult result = SecurityUtil.login(new PasswordLogin(username, password, "web"));
+// HTTP 登录接口可返回 R.ok(result)，JSON 字段为 token、expiresAt、user、authType。
 IUserDetails user = SecurityContext.requireUser();
 String userId = SecurityContext.getUserId();
 String token = SecurityContext.getToken();
+String authType = SecurityContext.getAuthType(); // 成功认证器的 name()
 boolean loggedIn = SecurityContext.isLogin();
 ```
 
 JWT 前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginContextInterceptor 在限流和 Controller 之前清理旧身份，再调用 `ISecurityManager.resolveSession(token)`，验证有效期和返回 Token 一致性，然后设置 ThreadLocal。JWT 在正常请求中只验签一次，Controller、Service 和权限 AOP 读取同一用户快照。自己实现管理器且使用此拦截器时也必须提供 resolveSession。
 
-**Sa-Token 接入不同**：自动选择 SaTokenLoginInterceptor，优先沿用 `sa-token.*` 的原生 Token 读取规则，没有原生凭证时兼容 Bearer。SecurityContext 读取时重新核对当前原生身份及会话状态，同一请求复用用户资料；因此直接 StpUtil.login/logout、重新登录另一个账号或踢人后，后续读取不会继续使用旧身份。详见[Sa-Token 接入](sa-token.md)。
+**Sa-Token 接入不同**：自动选择 SaTokenLoginInterceptor，优先沿用 `sa-token.*` 的原生 Token 读取规则，没有原生凭证时兼容 Bearer。SecurityContext 读取时重新核对当前原生身份、会话状态和 Token 专属 authType，同一请求复用用户资料。原生登录需要由可信代码写入认证来源，缺少来源的旧 Token 拒绝恢复；注销、切换账号、踢人后不继续复用旧身份。详见[Sa-Token 接入](sa-token.md)。
 
-**Spring Security 接入**：请求恢复继续由原有过滤器链负责，security-spring 读取 SecurityContextHolder 的已认证身份并映射为安全用户；匿名和未认证对象不放行。原生登录、注销、切换身份后自动跟随，也支持 loginByUsername 委托 AuthenticationManager 并保存 Session 身份，默认不需要 UserStore。它可以没有 Token，getToken() 返回 null；身份有效期由 Spring 管理。见 [Spring 接入](spring.md)。
+**Spring Security 接入**：请求恢复继续由原有过滤器链负责，security-spring 读取 SecurityContextHolder 的已认证身份并映射为安全用户；匿名和未认证对象不放行。原生登录、注销、切换身份后自动跟随，也支持 login(LoginRequest) 委托 AuthenticationManager 并保存 Session 身份，默认不需要 UserStore。它可以没有 Token，getToken() 返回 null；身份有效期由 Spring 管理。见 [Spring 接入](spring.md)。
+
+PasswordLogin、ApiKeyLogin、自定义 LoginRequest 由对应 LoginAuthenticator 验证；UserIdLogin 仅供已完成身份验证的可信业务代码使用。成功后使用同一套 Token/Session 恢复与清理，保留 authType；不在每次请求重新校验原业务 API Key，也不把原密码/密钥保存在 LoginSession 中。Spring 原生认证没有提供可信来源时 authType 为 null，不猜测认证类型。
 
 未携带对应实现支持的凭证时按匿名处理，是否允许访问由原有权限注解决定；有非法格式、过期或无效 Token 时返回 401（包括公开接口），重新登录时客户端应移除旧 Token。OPTIONS 不解析 Token。只使用默认匿名管理器的项目不接管其他 Authorization 格式。
 
@@ -31,11 +34,11 @@ JWT 前端后续请求携带 `Authorization: Bearer <token>`。内置 LoginConte
 
 请求结束只清理线程。JWT logout 也只清理当前线程，客户端必须自行删除 Token；随后再次携带该 JWT 仍可通过校验直到过期或用户不允许访问。Sa-Token logout 则注销服务端会话并清理线程。refresh 当前用户时重新验证凭证并加载最新用户，更新当前线程快照，不改变 JWT 的签发时间和有效期；Sa-Token 的活跃超时策略按其自身配置执行。其他请求已加载的快照不会被跨线程强制替换，长请求必要时应主动复核。
 
-JWT / Sa-Token 非 HTTP 使用后必须显式清理；Spring 账号密码入口要求当前 Servlet 请求/响应。后台任务通常直接传业务 userId，不必额外登录：
+JWT / Sa-Token 非 HTTP 使用后必须显式清理；Spring 登录入口要求当前 Servlet 请求/响应。后台任务通常直接传业务 userId，不必额外登录：
 
 ```java
 try {
-    SecurityUtil.loginByUsername(serviceUsername, servicePassword, "job"); // 确实需要登录时也必须认证
+    SecurityUtil.login(new PasswordLogin(serviceUsername, servicePassword, "job")); // 确实需要登录时也必须认证
     // 当前线程业务
 } finally {
     SecurityContext.clear(); // 清理当前线程，不改变凭证本身或外部会话状态

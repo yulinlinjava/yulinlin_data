@@ -2,9 +2,8 @@ package com.yulinlin.security.jwt;
 
 import com.yulinlin.security.SecurityAuthAutoConfiguration;
 import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.LoginAuthenticatorRegistry;
 import com.yulinlin.security.auth.UserStore;
-import com.yulinlin.security.auth.UserAuthenticator;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -27,7 +26,7 @@ public class JwtAutoConfiguration {
 
     @Bean
     public JwtSecurityManager jwtSecurityManager(UserStore users, JwtTokenCodec tokens, JwtProperties properties,
-                                                 ObjectProvider<UserAuthenticator> authenticators) {
-        return new JwtSecurityManager(users, tokens, properties, authenticators.getIfAvailable());
+                                                 LoginAuthenticatorRegistry authenticators) {
+        return new JwtSecurityManager(users, tokens, properties, authenticators);
     }
 }

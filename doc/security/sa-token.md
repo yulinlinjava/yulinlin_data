@@ -2,7 +2,7 @@
 
 [文档首页](../README.md) / [接口安全](README.md)
 
-保留原生 StpUtil 登录/注销，自动接入用户上下文与框架权限注解。
+统一登录后由 Sa-Token 管理会话；原生登录接入时需保存可信认证来源。
 
 前置阅读：[安全模块选型](modules.md)、[用户模型与 UserStore](user.md)。请求恢复与清理见[登录上下文](context.md)，自定义接入见[扩展专题](extension.md)。
 
@@ -15,7 +15,9 @@
 
 ## Sa-Token 接入
 
-选择 `com.yulinlin:security-sa-token:3.0`，不引入 `security-jwt`；仍提供相同的 `UserStore`。可以保留原来的 `StpUtil.login/logout`，也可以提供 [UserAuthenticator](user.md#业务账号认证)，使用 `SecurityUtil.loginByUsername(username, password, deviceType)`、`logout()` 和 `getUserDetails()`，两种入口共用 Sa-Token 登录记录，权限注解不用改。框架不再公开 login(userId)，原生 StpUtil API 不受此调整影响。
+选择 `com.yulinlin:security-sa-token:3.0`，不引入其他登录模块；提供相同的 `UserStore`。统一使用 `SecurityUtil.login(LoginRequest)`，PasswordLogin、ApiKeyLogin 和自定义参数各自注册 [LoginAuthenticator](user.md)。业务已完成外部身份验证时使用 UserIdLogin，默认通过 UserStore 检查用户可用性。认证成功后共用 Sa-Token 登录记录、logout()、getUserDetails() 和权限注解。
+
+authType 取成功认证器的 name，保存在 **Token 专属会话**，不放在用户共享会话。统一入口每次登录生成独立 Token（不复用旧 Token），避免同一用户、设备使用不同认证方式时覆盖来源。`LoginResult.authType()`、`SecurityContext.getAuthType()` 可读取；缺少 authType 的旧 Token 不兼容。
 
 `UserStore.load(userId)` 用来加载安全用户资料、角色和权限，不负责再次登录。不能返回含密码的用户对象；不存在或不允许继续登录时返回 null。实现里按传入的 userId 查询，**不要再调用 SecurityContext.getUser() / SecurityUtil.getUserDetails() 获取当前用户**，否则形成循环，框架会明确报错。
 
@@ -25,17 +27,22 @@ Token 生命周期、设备策略、会话存储由 Sa-Token 负责，配置沿�
 
 ## 保留原来的登录代码
 
-业务先验证账号、密码、验证码和账号状态，再执行原来的登录即可。以下代码在 HTTP 请求内运行：
+原生 StpUtil 仍能使用，但新版要求可信认证来源：业务验证身份后，创建独立 Token 并写入其 Token 会话。只调用原生 login 而不记录 authType，框架上下文不会认可该登录。优先使用统一入口，以下是保留原生调用的 HTTP 请求示意：
 
 ```java
 import cn.dev33.satoken.stp.StpUtil;
+import com.yulinlin.security.satoken.SaTokenSecurityManager;
 import com.yulinlin.security.auth.IUserDetails;
 import com.yulinlin.security.auth.SecurityContext;
 import com.yulinlin.security.auth.SecurityUtil;
 
 // userId 来自业务已经验证的账号，不能直接信任客户端提交的 userId。
-StpUtil.login(userId); // 原生入口由业务先验证身份，不必手动 set 框架上下文
+// verifiedAuthType 取完成认证的服务类 name()，不能从客户端参数直接取得。
+StpUtil.login(userId, StpUtil.getStpLogic().createSaLoginParameter()
+        .setDeviceType("web").setIsShare(false));
 String token = StpUtil.getTokenValue();
+StpUtil.getStpLogic().getTokenSessionByToken(token)
+        .set(SaTokenSecurityManager.AUTH_TYPE_KEY, verifiedAuthType);
 
 // 首次读取时按 Sa-Token 当前身份加载 UserStore；同一请求复用用户资料。
 IUserDetails user = SecurityContext.requireUser();
@@ -47,17 +54,31 @@ boolean loggedIn = SecurityContext.isLogin(); // false
 IUserDetails anonymous = SecurityContext.getUser(); // null
 ```
 
-原生 `StpUtil.login(userId, "web")` 设备登录也可使用。同一请求重新登录另一个账号后，下一次读取上下文会加载新账号，不返回上一个账号的资料。踢人、注销、Token 失效也会在后续读取时重新检查，不仅依赖请求开始时的一次校验。
+原生会话记录与 authType 都准备好后，同一请求重新登录另一个账号，下一次读取上下文会加载新账号。踢人、注销、Token 失效也会在后续读取时重新检查。authType 必须遵守 [认证名称规则](user.md#自定义认证方式)；保存失败时业务应撤销刚创建的 Token，不返回不完整的登录结果。
 
 统一入口仍然可用：
 
 ```java
-LoginResult result = SecurityUtil.loginByUsername(username, password, "web");
+import com.yulinlin.security.auth.PasswordLogin;
+import com.yulinlin.security.auth.ApiKeyLogin;
+import com.yulinlin.security.auth.UserIdLogin;
+import com.yulinlin.security.auth.LoginResult;
+
+LoginResult result = SecurityUtil.login(new PasswordLogin(username, password, "web"));
 String token = StpUtil.getTokenValue(); // 与 result.token() 一致
 StpUtil.logout();                      // 能注销这次登录
+
+// 密钥认证 Bean 已配置时，另一种登录方式（不必和密码登录连续调用）
+LoginResult partner = SecurityUtil.login(new ApiKeyLogin(apiKey, "server"));
+
+// 另一种独立场景：上游已验证身份，只用可信 userId 建立登录。
+LoginResult trusted = SecurityUtil.login(new UserIdLogin(verifiedUserId, "web"));
+String authType = trusted.authType(); // 默认 user-id
 ```
 
-原生 login 按 Sa-Token 配置写 Cookie/响应头；SecurityUtil.loginByUsername 返回 LoginResult，只同步原生请求存储，不额外写登录 Cookie/响应头。客户端按所选入口接收并保存 Token。
+原生 login 按 Sa-Token 配置写 Cookie/响应头；SecurityUtil.login 返回 LoginResult，只同步原生请求存储，不额外写登录 Cookie/响应头。客户端按所选入口接收并保存 Token。
+
+账号密码和密钥是两种换取 Token 的方式，不是每次请求直接传业务密钥；后续仍按原生 Token 规则验证，按 UserStore.load(userId) 加载权限。密钥应绑定专用服务账号，停用业务密钥不会自动注销已换取的 Token，需要立即失效时由业务调用原生撤销能力。完整认证 Bean 和 Controller 示例见[业务密钥认证](user.md#业务密钥认证)。
 
 ## 请求头与 Cookie
 
@@ -83,7 +104,7 @@ sa-token:
 ## 上下文与扩展边界
 
 - 自动桥接在 Spring 初始化完成后生效，跟随 SecurityUtil 选定的 ISecurityManager；JWT 和默认匿名实现不启用此桥接。
-- SecurityContext 读取时校验 Sa-Token 当前 Token 及会话状态，**只缓存用户资料，不缓存“已经登录”的结论**。Redis 存储会产生相应会话读取开销；同请求、同身份不反复调用 UserStore，主动 refresh 或切换身份除外。
+- SecurityContext 读取时校验 Sa-Token 当前 Token、会话状态及 authType，**只缓存用户资料，不缓存“已经登录”的结论**。Redis 存储会产生相应会话读取开销；同请求、同身份不反复调用 UserStore，主动 refresh 或切换身份除外。
 - 请求结束和异步切换清理框架线程快照；Sa-Token 自身的请求上下文仍由其 starter 管理。不会注销会话，也不会跨线程自动继承用户。
 - SecurityContext.clear() 不是注销：原生会话仍有效时，再次读取可重新恢复。要注销请使用 StpUtil.logout() 或 SecurityUtil.logout()。
 - 自定义 LoginInterceptor Bean 仍优先，框架自动注册，不需要自己编写 WebMvcConfigurer。使用内置 Sa-Token 管理器时，身份来源仍是原生 Sa-Token，不能只设置另一份 SecurityContext 冒充不同账号。

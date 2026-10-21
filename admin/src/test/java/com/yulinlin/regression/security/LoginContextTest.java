@@ -44,7 +44,7 @@ class LoginContextTest {
             assertNull(SecurityContext.getToken());
         }
         verify(manager, times(3)).resolveSession("token");
-        verify(manager, never()).loginByUsername(anyString(), anyString(), anyString());
+        verify(manager, never()).login(any(LoginRequest.class));
         assertThrows(LoginException.class, SecurityContext::requireUser);
     }
 
@@ -63,7 +63,7 @@ class LoginContextTest {
             assertNull(SecurityContext.getUser());
         }
         when(manager.resolveSession("expired")).thenReturn(
-                new LoginSession("expired", Instant.now().minusSeconds(1), session("x").user()));
+                new LoginSession("expired", Instant.now().minusSeconds(1), session("x").user(), "password"));
         assertThrows(ResponseStatusException.class,
                 () -> interceptor.preHandle(request("Bearer expired"), response, this));
         when(manager.resolveSession("bad")).thenAnswer(call -> {
@@ -87,7 +87,7 @@ class LoginContextTest {
         assertNull(found.get());
         assertTrue(SecurityContext.isLogin());
         assertThrows(LoginException.class, () -> SecurityContext.set(
-                new LoginSession("expired", Instant.now().minusSeconds(1), session("x").user())));
+                new LoginSession("expired", Instant.now().minusSeconds(1), session("x").user(), "password")));
         assertFalse(SecurityContext.isLogin());
     }
 
@@ -107,10 +107,13 @@ class LoginContextTest {
         AdminAuthenticationService authentication = new AdminAuthenticationService(users, passwords);
         JwtProperties properties = new JwtProperties();
         properties.setSecret(java.util.Base64.getEncoder().encodeToString(new byte[32]));
-        JwtSecurityManager manager = new JwtSecurityManager(authentication, properties, authentication);
-        LoginResult result = manager.loginByUsername("alice", "correct", "web");
+        JwtSecurityManager manager = new JwtSecurityManager(authentication, properties,
+                new LoginAuthenticatorRegistry(java.util.List.of(authentication), authentication));
+        LoginResult result = manager.login(new PasswordLogin("alice", "correct", "web"));
         assertEquals(3, result.token().split("\\.").length);
         assertSame(result.user(), manager.getUserDetails());
+        assertEquals("password", result.authType());
+        assertEquals("password", SecurityContext.getAuthType());
         assertEquals(result.token(), SecurityContext.getToken());
         assertFalse(result.toString().contains(result.token()));
         SecurityContext.clear(); // 请求结束仅清理线程，JWT 不保存在服务端
@@ -123,21 +126,25 @@ class LoginContextTest {
         manager.logout();
         assertNull(SecurityContext.getUser());
         assertNotNull(manager.resolveSession(result.token())); // 注销不会撤销已签发的 JWT
-        JwtSecurityManager restarted = new JwtSecurityManager(new AdminAuthenticationService(users, passwords), properties);
+        AdminAuthenticationService reloaded = new AdminAuthenticationService(users, passwords);
+        JwtSecurityManager restarted = new JwtSecurityManager(reloaded, properties,
+                new LoginAuthenticatorRegistry(java.util.List.of(reloaded), reloaded));
         assertNotNull(restarted.resolveSession(result.token())); // 无需恢复任何登录记录
         assertEquals(result.expiresAt(), restarted.resolveSession(result.token()).expiresAt());
+        assertEquals("password", restarted.resolveSession(result.token()).authType());
         JwtProperties otherProperties = new JwtProperties();
         byte[] otherKey = new byte[32];
         java.util.Arrays.fill(otherKey, (byte) 1);
         otherProperties.setSecret(java.util.Base64.getEncoder().encodeToString(otherKey));
-        assertNull(new JwtSecurityManager(authentication, otherProperties)
+        assertNull(new JwtSecurityManager(authentication, otherProperties,
+                new LoginAuthenticatorRegistry(java.util.List.of(authentication), authentication))
                 .resolveSession(result.token())); // 无状态不代表放宽验签
         SecurityContext.set(session("old"));
-        assertThrows(LoginException.class, () -> manager.loginByUsername("alice", "wrong", "web"));
+        assertThrows(LoginException.class, () -> manager.login(new PasswordLogin("alice", "wrong", "web")));
         assertNull(SecurityContext.getUser());
 
-        LoginResult first = manager.loginByUsername("alice", "correct", "web");
-        LoginResult second = manager.loginByUsername("alice", "correct", "android");
+        LoginResult first = manager.login(new PasswordLogin("alice", "correct", "web"));
+        LoginResult second = manager.login(new PasswordLogin("alice", "correct", "android"));
         user.setNickname("新昵称");
         assertEquals("新昵称", manager.resolveSession(first.token()).user().getAttribute("nickname"));
         RoleEntity role = new RoleEntity();
@@ -155,8 +162,8 @@ class LoginContextTest {
         assertNull(manager.resolveSession(first.token()));
         assertNull(manager.refresh()); // 刷新时重新检查当前用户状态
         assertNull(SecurityContext.getUser());
-        assertThrows(LoginException.class, () -> authentication.authenticate("alice", "correct"));
-        assertThrows(LoginException.class, () -> manager.loginByUsername("alice", "correct", "web"));
+        assertThrows(LoginException.class, () -> authentication.authenticate(new PasswordLogin("alice", "correct")));
+        assertThrows(LoginException.class, () -> manager.login(new PasswordLogin("alice", "correct", "web")));
         user.setStatus(UserStatus.ENABLED);
         assertNotNull(manager.resolveSession(first.token())); // 恢复账号后未过期的 Token 仍可用
         when(users.findSnapshotById("u1")).thenReturn(null);
@@ -166,7 +173,7 @@ class LoginContextTest {
     private static LoginSession session(String token) {
         IUserDetails user = mock(IUserDetails.class);
         when(user.getUserId()).thenReturn("u1");
-        return new LoginSession(token, Instant.now().plusSeconds(300), user);
+        return new LoginSession(token, Instant.now().plusSeconds(300), user, "password");
     }
 
     private static MockHttpServletRequest request(String authorization) {

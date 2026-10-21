@@ -2,7 +2,7 @@
 
 [文档首页](../README.md) / [项目实践](README.md)
 
-两表角色权限模型、统一 loginByUsername 与业务账号认证、无状态 JWT 语义。
+两表角色权限模型、统一 LoginAuthenticator 认证与无状态 JWT 语义。
 
 ## 本页导航
 
@@ -17,11 +17,11 @@
 
 源码位于 [admin/rbac](../../admin/src/main/java/com/yulinlin/admin/rbac)，请求示例位于 [admin/rbac.http](../../admin/rbac.http)。案例只有 `rbac_user`、`rbac_role` 两张业务表，使用 JDK 25、MySQL 和纯无状态 `security-jwt`，不保存登录记录，未引入 Spring Security，也不同时引入 Sa-Token。
 
-> 2026-10-21：纯无状态 JWT 案例已统一为 loginByUsername；AdminAuthenticationService 一个 Bean 实现 UserAuthenticator 和 UserStore，不再公开按 userId 登录，不保存登录记录或撤销列表。注销和重置密码不使已签发 JWT 自动失效。源码和文档已调整，本轮未编译、未执行测试或数据库联调。
+> 2026-10-21：admin 源码和相关回归用例已迁移到统一 LoginAuthenticator。AdminAuthenticationService 同时实现 LoginAuthenticator<PasswordLogin> 和 UserStore，认证名为 password；登录响应和 JWT 携带 authType。完整扩展接入见[用户模型与认证器](../security/user.md)。本轮仅修改源码和文档，未编译、未执行测试或数据库联调。
 
 ### 启动方式与完整配置
 
-在 IDEA 中正常运行 `AdminApplication` 即可，RBAC 组件和 Repository 默认注册，不需要额外激活 `rbac` profile。案例设置已合并到 [application.yml](../../admin/src/main/resources/application.yml)，数据库连接继续由自己的 `dev` 或 `prod` 环境配置提供。MySQL 数据库本身应提前创建，框架启动扫描负责创建两张表及索引；如果环境配置覆盖了 `schema-packages` 或 Repository 的 `scan-packages`，应确保其扫描范围包含 RBAC 对应包。
+在 IDEA 中运行 `AdminApplication`。RBAC 组件和 Repository 默认注册，不需要额外激活 `rbac` profile。案例设置位于 [application.yml](../../admin/src/main/resources/application.yml)，数据库连接继续由自己的 `dev` 或 `prod` 环境配置提供。MySQL 数据库本身应提前创建，框架启动扫描负责创建两张表及索引；如果环境配置覆盖了 `schema-packages` 或 Repository 的 `scan-packages`，应确保其扫描范围包含 RBAC 对应包。
 
 启动环境设置 `ADMIN_RBAC_PASSWORD`，长度为 12–128 字符；可选设置 `ADMIN_RBAC_USERNAME`，默认 `admin`。不设置密码时跳过初始账号创建，接口不会变成免登录。初始账号已存在时，重启不会覆盖其密码、状态或角色。
 
@@ -113,21 +113,21 @@ private List<RoleEntity> roles;
 
 | 组件 | 职责 |
 | --- | --- |
-| `AdminAuthenticationService.authenticate` | 实现 UserAuthenticator，按 username 查询并校验密码和状态，调用自身 load 返回安全用户 DTO |
+| `AdminAuthenticationService.authenticate` | 实现 LoginAuthenticator<PasswordLogin>，name 返回 password，requestType 返回 PasswordLogin.class；按 username 校验密码和状态，返回安全用户 DTO |
 | `AdminAuthenticationService.load` | 同一 Bean 实现 UserStore；按 userId 查询最新用户及权限，拒绝停用/锁定/已删除用户，不再次校验密码 |
-| `AuthController` | 先处理验证码，然后调用注入的 ISecurityManager.loginByUsername(username, password, deviceType) |
+| `AuthController` | 先处理验证码，然后调用 ISecurityManager.login(new PasswordLogin(username, password, deviceType)) |
 | 框架 `JwtSecurityManager` / 默认 `JwtTokenCodec` | 签发、验签、有效期检查和公共上下文；无存储、无撤销 |
 | 框架登录拦截器 / 权限 AOP | Bearer Token 恢复当前用户，请求结束清理；检查登录、角色和权限 |
 
-Controller 中的核心代码：
+Controller 中的核心代码（PasswordLogin 从 com.yulinlin.security.auth 导入）：
 
 ```java
 authentication.validateCode(request.code());
 String deviceType = request.deviceType() == null ? "web" : request.deviceType();
-return R.ok(security.loginByUsername(request.username(), request.password(), deviceType), "登录成功");
+return R.ok(security.login(new PasswordLogin(request.username(), request.password(), deviceType)), "登录成功");
 ```
 
-也可调用 `SecurityUtil.loginByUsername(username, password, deviceType)`，它与注入管理器等价。原有按 userId 登录的公开入口已移除；用户 ID 只从认证后的安全用户里获取。登录 JSON 示例：
+也可调用 `SecurityUtil.login(new PasswordLogin(username, password, deviceType))`，它与注入管理器等价。业务完成外部认证后可用 `UserIdLogin(verifiedUserId, deviceType)`，但不能向客户端开放任意 ID 登录。登录 JSON 示例：
 
 ```json
 {"username":"admin","password":"你的管理员密码","deviceType":"web"}
@@ -135,7 +135,9 @@ return R.ok(security.loginByUsername(request.username(), request.password(), dev
 
 `deviceType` 可不传，admin 接口默认 `web`；显式传值只接受 1～32 位字母、数字、下划线或短横线。它是登录设备分类，不是凭证，也不自动读取加密的 Device-Type 请求头。
 
-响应为 `R<LoginResult>`，`data` 包含 `token`、`expiresAt`、`user`。默认 JWT 使用 HS256，只承载用户 ID 和必要登录元数据，不保存密码或角色权限。`AdminAuthenticationService.load(userId)` 每次请求查最新用户及关联角色，生成不可变 `AdminUserDetails`，不是持久化完整用户快照。角色权限变化在下一次请求生效，同一请求期间读取同一线程快照。
+响应为 `R<LoginResult>`，`data` 包含 `token`、`expiresAt`、`user`、`authType`。authType 为成功认证器的 name。默认 JWT 使用 HS256，只承载用户 ID 和必要登录元数据，不保存密码或角色权限。`AdminAuthenticationService.load(userId)` 每次请求查最新用户及关联角色，生成不可变 `AdminUserDetails`，不是持久化完整用户快照。角色权限变化在下一次请求生效，同一请求期间读取同一线程快照。
+
+本案例密码登录的 authType 固定为 `password`，其他服务端代码可通过 `SecurityUtil.getAuthType()` 读取。Admin 不开放 ID 登录接口，也不接受客户端自报 authType。新架构要求 JWT 包含有效 deviceType/authType；缺少这些字段的旧 Token 需要重新登录。
 
 账号认证和用户加载共用一个业务 Bean，不需要额外注册第二个 UserStore。登录按用户名查询，后续请求始终按 Token 内的稳定用户 ID 查询；修改用户名不会把旧 Token 错当成另一个用户名。原独立 AdminUserStore 已合并，不再保留重复组件。
 
@@ -145,7 +147,7 @@ admin 不声明 `ISecurityManager` Bean，框架自动提供唯一的 JWT 管理
 
 密码使用 JDK `PBKDF2WithHmacSHA256`，每次生成独立 16 字节随机盐、600000 次迭代和 256 位校验值；通过 `MessageDigest.isEqual` 比较。参数参考 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)。数据库只保存版本、迭代数、盐和哈希组成的字符串，用户 VO、`IUserDetails` 以及日志不包含密码哈希。登录查库不加 `@JoinCache`，SQL 参数日志也默认关闭。
 
-用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。业务请求可携带 code，但本例未接入验证码服务，非空 code 会明确拒绝；验证码不传给框架，业务先完成验证码检查，再调用 loginByUsername。
+用户名不存在和密码错误统一提示“用户名或密码错误”，抛出 `LoginException` 并由案例异常处理器返回 HTTP 401。业务请求可携带 code，但本例未接入验证码服务，非空 code 会明确拒绝；验证码不传给框架，业务先完成验证码检查，再调用 login(new PasswordLogin(...))。
 
 案例复用 security 公共鉴权 AOP：三个 Controller 类使用 `@ApiLogin`，登录方法通过 `@ApiPublic` 放行，其他方法默认需要登录；管理方法使用 `@ApiPerm("user:update")` 等权限声明。不再实现 AdminSecurityManager，也不再自建随机 Token、用户权限快照缓存或登录拦截器。
 
@@ -251,7 +253,7 @@ public void assignRoles(RbacRequests.AssignRoles request) {
 
 推荐按 [rbac.http](../../admin/rbac.http) 顺序执行：管理员登录 → 创建只读角色 → 创建用户 → 用户登录 → 验证 403 → 修改角色权限 → 用原 Token 验证新增权限 → 停用账号 → 验证原 Token 返回 401。请求文件有演示密码和占位管理员密码，使用前替换；重复创建同名用户或角色会被唯一约束拒绝。
 
-本案例于 2026-10-20 迁移为 security-jwt 登录，并同步调整已有回归用例源码和 HTTP 请求示例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。
+本案例于 2026-10-21 更新为 LoginAuthenticator 统一认证入口，同步迁移相关回归用例源码和 HTTP 请求示例；遵循仓库维护约定，未执行编译、打包、测试或真实 MySQL 联调，不能将提供请求示例视为已经验收通过。
 
 ---
 

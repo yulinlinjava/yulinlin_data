@@ -12,7 +12,7 @@
 | [公共实体与页面参数](models.md) | PagePo、JoinWhere、R、IdEntity、SuperEntity 和 TreeEntity。 |
 | [通用 Service 与树服务](service.md) | 复用 ISuperService/ITreeService，区分 Repository 职责。 |
 | [完整 CRUD 分层案例](crud-example.md) | 实体、Repository、DTO、Service 和 Controller 配套使用。 |
-| [Admin RBAC 与 JWT 登录案例](rbac.md) | 两表角色权限模型、统一 loginByUsername 与业务认证、无状态 JWT 语义。 |
+| [Admin RBAC 与 JWT 登录案例](rbac.md) | 两表角色权限、LoginAuthenticator + UserStore、统一密码登录和 authType。 |
 
 ## 建议顺序
 

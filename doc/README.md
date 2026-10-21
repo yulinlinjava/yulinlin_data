@@ -17,7 +17,7 @@
 | 提升查询效率 | [启用 ORM 缓存](cache/query.md) → [选择缓存与 TTL](cache/config.md) → [Key 和失效规则](cache/invalidation.md) |
 | 点击量聚合、延迟批量落库 | [EntityCounter](write-sync/counter.md) · [延迟写队列](write-sync/queue.md) · [多连接批量](write-sync/batch.md) |
 | 数据源同步与历史补齐 | [增量同步](write-sync/incremental.md) → [人工全量与续传](write-sync/full.md) |
-| 接入登录、权限或接口加密 | [模块选型](security/modules.md) → [JWT](security/jwt.md) / [Sa-Token](security/sa-token.md)；按需读[权限](security/authorization.md)、[加密](security/crypto.md)、[限流](security/rate-limit.md) |
+| 接入登录、权限或接口加密 | [模块选型](security/modules.md) → [统一登录与自定义认证](security/user.md#安全管理器) → [JWT](security/jwt.md) / [Sa-Token](security/sa-token.md) / [Spring](security/spring.md)；按需读[权限](security/authorization.md)、[加密](security/crypto.md)、[限流](security/rate-limit.md) |
 | 替换 Token 或接入外部安全框架 | [Token 编解码](security/token-codec.md) · [自定义管理器与拦截器](security/extension.md) |
 | 查工具类使用方式 | [HTTP](tools/http.md) · [反射复制与深克隆](tools/reflection.md) · [lang 类型目录](tools/catalog.md) |
 | 找最佳实践案例 | [完整 CRUD](practice/crud-example.md) · [Admin RBAC 与 JWT](practice/rbac.md) · [开发规范](practice/conventions.md) |

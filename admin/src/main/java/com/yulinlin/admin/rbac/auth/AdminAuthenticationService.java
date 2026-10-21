@@ -4,8 +4,9 @@ import com.yulinlin.admin.rbac.domain.UserEntity;
 import com.yulinlin.admin.rbac.domain.UserStatus;
 import com.yulinlin.admin.rbac.repository.UserRepository;
 import com.yulinlin.security.auth.LoginException;
+import com.yulinlin.security.auth.LoginAuthenticator;
+import com.yulinlin.security.auth.PasswordLogin;
 import com.yulinlin.security.auth.SecurityContext;
-import com.yulinlin.security.auth.UserAuthenticator;
 import com.yulinlin.security.auth.UserStore;
 import org.springframework.stereotype.Service;
 
@@ -13,7 +14,7 @@ import java.util.UUID;
 
 /** 一个业务组件提供账号认证和按 ID 加载用户；不保存密码到上下文，不签发 Token 或维护登录记录。 */
 @Service
-public class AdminAuthenticationService implements UserAuthenticator, UserStore {
+public class AdminAuthenticationService implements LoginAuthenticator<PasswordLogin>, UserStore {
     private final UserRepository users;
     private final PasswordHash passwords;
     private final String dummyHash;
@@ -31,10 +32,18 @@ public class AdminAuthenticationService implements UserAuthenticator, UserStore 
     }
 
     @Override
-    public AdminUserDetails authenticate(String username, String password) {
+    public String name() { return "password"; }
+
+    @Override
+    public Class<PasswordLogin> requestType() { return PasswordLogin.class; }
+
+    @Override
+    public AdminUserDetails authenticate(PasswordLogin request) {
         SecurityContext.clear();
+        if (request == null) throw new LoginException("用户名或密码错误");
+        String username = request.username();
         UserEntity user = username == null || username.isBlank() ? null : users.findByUsernameEq(username);
-        boolean valid = passwords.matches(password, user == null ? dummyHash : user.getPasswordHash());
+        boolean valid = passwords.matches(request.password(), user == null ? dummyHash : user.getPasswordHash());
         if (user == null || !valid) throw new LoginException("用户名或密码错误");
         if (user.getStatus() != UserStatus.ENABLED) throw new LoginException("账号已停用或锁定");
         AdminUserDetails details = load(user.getId());

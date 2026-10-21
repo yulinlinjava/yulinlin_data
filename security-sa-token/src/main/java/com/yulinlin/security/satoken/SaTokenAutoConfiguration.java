@@ -4,8 +4,8 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.yulinlin.security.SecurityAuthAutoConfiguration;
 import com.yulinlin.security.SecurityLoginAutoConfiguration;
 import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.LoginAuthenticatorRegistry;
 import com.yulinlin.security.auth.UserStore;
-import com.yulinlin.security.auth.UserAuthenticator;
 import com.yulinlin.security.web.LoginInterceptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -22,8 +22,8 @@ import org.springframework.context.annotation.Bean;
 })
 public class SaTokenAutoConfiguration {
     @Bean
-    public SaTokenSecurityManager saTokenSecurityManager(UserStore users, ObjectProvider<UserAuthenticator> authenticators) {
-        return new SaTokenSecurityManager(users, StpUtil::getStpLogic, authenticators.getIfAvailable());
+    public SaTokenSecurityManager saTokenSecurityManager(UserStore users, LoginAuthenticatorRegistry authenticators) {
+        return new SaTokenSecurityManager(users, StpUtil::getStpLogic, authenticators);
     }
 
     @Bean

@@ -16,8 +16,8 @@
 | 业务需要 | 引入的制品 | 业务需要提供 |
 | --- | --- | --- |
 | 仅加密、限流或公共权限协议 | `security` | 不需要登录实现；默认匿名管理器可启动 |
-| 无状态 JWT 登录 | `security-jwt` | `UserStore`、发起登录时的 `UserAuthenticator` Bean、JWT 签名配置；不存登录记录，不提供 Token 撤销 |
-| Sa-Token 登录 | `security-sa-token` | `UserStore`、使用统一账号密码登录时的 `UserAuthenticator` Bean；会话策略和存储使用 Sa-Token 自身配置 |
+| 无状态 JWT 登录 | `security-jwt` | UserStore、JWT 签名配置；按 LoginRequest 类型提供 LoginAuthenticator；不存登录记录，不提供 Token 撤销 |
+| Sa-Token 登录 | `security-sa-token` | UserStore、LoginAuthenticator；会话策略和存储使用 Sa-Token 自身配置 |
 | 已有 Spring Security 登录 | `security-spring` | 保留原有认证配置；可选 SpringUserMapper 映射业务用户 ID，无需默认提供 UserStore |
 | 已有其他安全框架 | `security` | 适配该框架的 `ISecurityManager` Bean |
 
@@ -35,7 +35,9 @@
 
 鉴权使用独立的 SecurityAuthAutoConfiguration 注册默认匿名管理器和 ApiAuthAspect，不依赖 MVC 或加密密钥配置，非 Web 项目也可保护 Service。MVC 登录上下文由 SecurityLoginAutoConfiguration 自动注册：有业务 `LoginInterceptor` Bean 就使用它，没有就使用所选登录模块的默认实现，无需启用开关。只使用加密、限流的项目不需要提供业务 ISecurityManager；默认匿名管理器不解析 Authorization，受保护方法仍拒绝匿名访问。
 
-已有 Spring Security 项目看 [Spring 接入](spring.md)，不必换成下表两种实现。security-spring 不重新签发 Token，也不替业务创建 AuthenticationManager；可保留原登录流程，或调用 `SecurityUtil.loginByUsername(username, password[, deviceType])`，复用 AuthenticationManager Bean 并保存 Session 身份。框架三个实现都不再公开按 ID 登录 API。
+已有 Spring Security 项目看 [Spring 接入](spring.md)，不必换成下表两种实现。security-spring 不重新签发 Token，也不替业务创建 AuthenticationManager；可保留原登录流程，或将 LoginAuthenticatorAuthenticationProvider 加入现有 Manager，再通过 `SecurityUtil.login(LoginRequest)` 登录并保存 Session 身份。所有登录方式都走 LoginAuthenticator，认证来源记录为其 name。
+
+账号密码、密钥、自定义认证由业务提供对应认证器；有 UserStore 时自动支持 UserIdLogin，只供上游已验证身份的服务端代码使用，不向客户端开放任意 ID 登录。旧 UserAuthenticator、ApiKeyAuthenticator 和 loginByUsername 入口已移除，统一使用新架构，不保留双轨认证。
 
 ### JWT 与 Sa-Token 如何选择
 
@@ -52,7 +54,7 @@
 | 修改密码 | 默认不撤销旧 JWT | 仅修改密码也不会自动踢人；业务需在提交后调用原生注销/踢人能力 |
 | 停用/删除账号 | UserStore 拒绝加载，阻止后续访问；不等于永久撤销 JWT | UserStore 拒绝加载；适配器处理不存在/不允许登录的用户 |
 | 自动续期 | 不提供，refresh 只刷新用户资料 | 活跃超时/续期规则取决于原生 Sa-Token 配置 |
-| 业务登录调用 | loginByUsername(username, password, deviceType)，UserAuthenticator 先认证 | 同左；也可保留原生 StpUtil.login/logout，自动兼容 SecurityContext |
+| 业务登录调用 | login(PasswordLogin / ApiKeyLogin / UserIdLogin / 自定义参数) | 同左；原生 StpUtil 登录需同时保存可信 authType，注销无需改变 |
 
 简单无状态认证选 JWT；需要服务端强制失效、设备会话管理选 Sa-Token。JWT 的服务端 logout 不足以防止已经泄漏的 Token 再次使用；重新启用账号后，其仍未过期的旧 JWT 可能再次被接受。删除账号后不要复用旧 userId，否则该身份的旧 JWT 在有效期内也可能被新账号接受。高要求业务应使用有状态方案或自定义凭证版本等校验。
 

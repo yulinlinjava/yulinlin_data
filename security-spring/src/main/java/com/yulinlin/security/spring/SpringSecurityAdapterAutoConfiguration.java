@@ -3,6 +3,7 @@ package com.yulinlin.security.spring;
 import com.yulinlin.security.SecurityAuthAutoConfiguration;
 import com.yulinlin.security.SecurityLoginAutoConfiguration;
 import com.yulinlin.security.auth.ISecurityManager;
+import com.yulinlin.security.auth.LoginAuthenticatorRegistry;
 import com.yulinlin.security.auth.UserStore;
 import com.yulinlin.security.web.LoginInterceptor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -24,7 +25,7 @@ import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 
 import java.util.List;
 
-/** 只适配现有 Spring Security，不创建认证提供者、用户表或 SecurityFilterChain。 */
+/** 适配现有 Spring Security，提供可选认证桥接 Provider，不创建 Manager、用户表或过滤器链。 */
 @AutoConfiguration(before = {SecurityAuthAutoConfiguration.class, SecurityLoginAutoConfiguration.class})
 @ConditionalOnMissingBean(value = ISecurityManager.class, ignoredType = {
         "com.yulinlin.security.jwt.JwtSecurityManager",
@@ -40,11 +41,19 @@ public class SpringSecurityAdapterAutoConfiguration {
 
     @Bean
     public SpringSecurityManager springSecurityManager(SpringUserMapper mapper, ObjectProvider<UserStore> users,
+            LoginAuthenticatorRegistry authenticators,
             ObjectProvider<AuthenticationManager> authenticationManagers,
             ObjectProvider<SecurityContextRepository> repositories,
             ObjectProvider<SessionAuthenticationStrategy> sessionStrategies) {
-        return new SpringSecurityManager(mapper, users::getIfAvailable, authenticationManagers::getIfAvailable,
+        return new SpringSecurityManager(mapper, users::getIfAvailable, authenticators, authenticationManagers::getIfAvailable,
                 repositories::getIfAvailable, sessionStrategies::getIfAvailable);
+    }
+
+    /** 仅提供桥接 Provider Bean；由业务显式加入其 AuthenticationManager，不修改已有过滤器链。 */
+    @Bean
+    @ConditionalOnMissingBean(LoginAuthenticatorAuthenticationProvider.class)
+    public LoginAuthenticatorAuthenticationProvider loginAuthenticatorAuthenticationProvider(LoginAuthenticatorRegistry authenticators) {
+        return new LoginAuthenticatorAuthenticationProvider(authenticators);
     }
 
     /** 默认用于 MVC 账号密码登录；自定义链必须显式共用同一个存储 Bean。 */

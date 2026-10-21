@@ -267,7 +267,7 @@ class SpringSecurityContextTest {
     @Test void tokenlessExternalSnapshotCannotBypassBearerTokenValidation() {
         ISecurityManager manager = mock(ISecurityManager.class);
         when(manager.resolveSession("supplied")).thenReturn(new LoginSession(null, null,
-                new DefaultSpringUserMapper.UserSnapshot("u1", "user", Set.of(), Set.of())));
+                new DefaultSpringUserMapper.UserSnapshot("u1", "user", Set.of(), Set.of()), null));
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", "Bearer supplied");
         assertThrows(ResponseStatusException.class, () -> new LoginContextInterceptor(() -> manager)

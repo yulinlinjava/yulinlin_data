@@ -18,7 +18,7 @@
 - **可选缓存**：Caffeine、Ehcache、Redis 可共存；统一 CacheMode、TTL、多数据源 Key 与条件分区失效。
 - **高频写入**：受控多连接批量、`.queue()` 延迟执行、EntityCounter 聚合自增和按维度聚合插入。
 - **搜索与结构初始化**：显式自动建表/索引，PostgreSQL 与 ES 的 `match()`、`highlight()`。
-- **配套能力**：轻量数据同步、慢操作监控、接口加密限流、无状态 JWT、有状态 Sa-Token 或现有 Spring Security 接入；统一 loginByUsername 账号密码登录，业务认证可替换。
+- **配套能力**：轻量数据同步、慢操作监控、接口加密限流、无状态 JWT、有状态 Sa-Token 或现有 Spring Security 接入；统一 [login(LoginRequest)](doc/security/user.md#安全管理器)，支持密码、密钥、可信 ID 和自定义认证方式，由 LoginAuthenticator.name 记录 authType。
 
 技术选型看[功能、开发成本与评分说明](doc/start/comparison.md)。比较的是交付同一业务能力需要的工作量，不是运行性能或通用排名。
 

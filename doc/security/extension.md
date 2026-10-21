@@ -64,25 +64,27 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 | 自己实现完整登录协议，继续使用框架拦截器 | security + 一个 ISecurityManager Bean | 你的 resolveSession 校验凭证，默认拦截器设置/清理 SecurityContext |
 | 已有安全框架自带请求拦截与上下文 | security + 一个 ISecurityManager 适配 Bean + 一个 LoginInterceptor Bean | 自定义拦截器接入外部身份生命周期，管理器读取其当前用户 |
 
-框架不要求自定义实现一定使用 UserStore；JWT/Sa-Token 用它恢复用户，使用 UserAuthenticator 验证账号密码；security-spring 只在按 ID 查询其他用户时可选使用 UserStore。自定义管理器可继承 `AbstractUserSecurityManager`，通过构造器传入 UserStore、UserAuthenticator，复用账号认证、加载和刷新，实现 protected createLogin(IUserDetails, deviceType)、logout、resolveSession；createLogin 只供内部已认证流程调用，不应扩大为 public。它不会替你实现存储、签名或撤销规则。
+框架不要求自定义实现一定使用 UserStore；JWT/Sa-Token 用它恢复用户，统一使用 LoginAuthenticator 验证对应 LoginRequest。Spring 的统一入口通过桥接 Provider 调用同一套认证器；UserStore 用于可选的 ID 登录和查询其他用户。自定义管理器可继承 `AbstractUserSecurityManager`，构造器传入 UserStore、LoginAuthenticatorRegistry，复用分发、加载和刷新；实现 `protected createLogin(IUserDetails user, String deviceType, String authType)`、logout、resolveSession。createLogin 只供内部认证后调用，不应扩大为 public；必须保存并恢复传入的 authType，不接受客户端覆盖。模板不替你实现存储、签名或撤销规则。
 
 继续使用框架上下文时，各方法的要求是：
 
 | 方法 | 实现要求 |
 | --- | --- |
-| loginByUsername(username, password, deviceType) | 可选覆盖：认证账号密码与状态，再建立登录；两参数默认方法自动使用设备 default；未覆盖时明确抛 UnsupportedOperationException |
+| login(LoginRequest) | 可选覆盖：通过 LoginAuthenticatorRegistry 按具体类型认证，成功后记录注册名称 authType；支持 PasswordLogin / ApiKeyLogin / 可信 UserIdLogin / 自定义类型；未覆盖时抛 UnsupportedOperationException |
 | resolveSession(token) | 不依赖当前线程身份，从可信凭证恢复 LoginSession；检查签名/会话、有效期和用户状态，不能只解码或信任客户端 userId |
 | logout() | 无状态仅清理上下文；有状态先执行自己的撤销，finally 清理上下文；不要声称 JWT 清理等于撤销 |
 | getUserDetails(userId) | 读取指定用户，不切换当前身份 |
 | refresh(userId) | 重载用户；为当前用户时重新校验凭证并更新快照，不把其他用户切换成当前用户，不隐式续期 |
 
-resolveSession 校验失败返回 null 或抛 LoginException；loginByUsername 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#自定义有状态登录)。
+resolveSession 校验失败返回 null 或抛 LoginException；login 失败应抛异常，不能返回 null 假装登录成功。基础设施异常正常传播。LoginResult/LoginSession 中的 user 必须是安全 DTO，不能含密码或 API Key 等凭证；使用框架拦截器时返回的 Token 要与请求 Token 一致。自定义有状态实现的可靠存储约定见[自定义有状态登录](#自定义有状态登录)。
+
+模型构造器为 `new LoginSession(token, expiresAt, user, authType)` 和 `new LoginResult(token, expiresAt, user, authType)`。登录结果可使用 `LoginResult.of(session)` 构造。authType 来自实际成功认证器的 name；外部原生身份确实没有可信来源元数据时允许 null，但不要捏造 password 等值。默认 JWT/Sa-Token 要求来源有效，旧 Token 不兼容。
 
 已经提供的 [Sa-Token](sa-token.md) 或 [Spring Security](spring.md) 适配按对应专题接入，不必自己重写管理器。其他外部框架：只引入公共 `security`，实现一个 `ISecurityManager` Bean；再提供一个 `LoginInterceptor` Bean，接入该框架请求身份的恢复与清理。不支持的统一 API 必须明确报错，不能凭 userId 绕过外部认证或只清理线程冒充注销。
 
-如果还希望业务直接读取 `SecurityContext`，可让 **同一个 ISecurityManager 实现类**额外实现 `SecurityContextResolver`：实现 `resolveContext(LoginSession cached)`，每次按外部当前身份校验，身份未变可复用 cached.user()，已注销返回 null，基础设施故障正常抛出。Spring 选中的管理器自动接入，无需额外注册 Resolver Bean；解析过程和 UserStore 不得递归读取 SecurityContext。内置 Sa-Token 使用这个桥接，因此无需修改原来的 StpUtil.login/logout 代码。
+如果还希望业务直接读取 `SecurityContext`，可让 **同一个 ISecurityManager 实现类**额外实现 `SecurityContextResolver`：实现 `resolveContext(LoginSession cached)`，每次按外部当前身份校验，身份未变可复用 cached.user()，已注销返回 null，基础设施故障正常抛出。Spring 选中的管理器自动接入，无需额外注册 Resolver Bean；解析过程和 UserStore 不得递归读取 SecurityContext。内置 Sa-Token 使用这个桥接，原生登录需额外保存 Token 专属 authType，详见 [Sa-Token 原生接入](sa-token.md#保留原来的登录代码)。
 
-不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；账号密码入口按需覆盖 loginByUsername。旧 login(userId) 已从协议和工具类移除，不再实现或调用它。
+不需要再实现适配器接口，也不强制使用 SecurityContext；覆盖 getUserDetails()、getToken()、getAuthType() 从外部框架读取当前身份，此时 resolveSession 可以保留默认实现。实现 logout、getUserDetails(userId)、refresh(userId)，以及需要的当前用户刷新语义；登录入口按需覆盖 login(LoginRequest)。旧认证接口和便捷入口已移除；可信 ID 登录统一写成 `login(new UserIdLogin(verifiedUserId, deviceType))`，不能直接信任客户端提供的 ID。
 
 下面是注册形式，放在业务 `@Configuration` 中。`ExternalAuth` 代表**业务自己封装的外部框架服务，不是本项目提供的类**；其中方法需按上表的安全和生命周期约定实现：
 
@@ -90,17 +92,19 @@ resolveSession 校验失败返回 null 或抛 LoginException；loginByUsername �
 import com.yulinlin.security.auth.ISecurityManager;
 import com.yulinlin.security.auth.IUserDetails;
 import com.yulinlin.security.auth.LoginResult;
+import com.yulinlin.security.auth.LoginRequest;
 import org.springframework.context.annotation.Bean;
 
 @Bean
 public ISecurityManager securityManager(ExternalAuth auth) {
     return new ISecurityManager() {
-        @Override public LoginResult loginByUsername(String username, String password, String deviceType) {
-            return auth.loginByUsername(username, password, deviceType);
+        @Override public LoginResult login(LoginRequest request) {
+            return auth.login(request); // 业务按类型认证；不支持的类型明确拒绝
         }
         @Override public void logout() { auth.logout(); }
         @Override public IUserDetails getUserDetails() { return auth.currentUser(); }
         @Override public String getToken() { return auth.currentToken(); }
+        @Override public String getAuthType() { return auth.currentAuthType(); }
         @Override public IUserDetails getUserDetails(String userId) {
             return auth.loadUser(userId);
         }

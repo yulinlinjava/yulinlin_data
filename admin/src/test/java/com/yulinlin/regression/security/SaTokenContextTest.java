@@ -19,7 +19,12 @@ import com.yulinlin.security.auth.LoginSession;
 import com.yulinlin.security.auth.SecurityContext;
 import com.yulinlin.security.auth.SecurityUtil;
 import com.yulinlin.security.auth.UserStore;
-import com.yulinlin.security.auth.UserAuthenticator;
+import com.yulinlin.security.auth.LoginAuthenticator;
+import com.yulinlin.security.auth.UserIdLogin;
+import com.yulinlin.security.satoken.SaTokenSecurityManager;
+import com.yulinlin.security.auth.ApiKeyLogin;
+import com.yulinlin.security.auth.PasswordLogin;
+import com.yulinlin.security.auth.LoginException;
 import com.yulinlin.security.satoken.SaTokenAutoConfiguration;
 import com.yulinlin.security.satoken.SaTokenLoginInterceptor;
 import com.yulinlin.security.web.LoginInterceptor;
@@ -37,6 +42,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.yulinlin.regression.security.LoginTestSupport.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -88,12 +94,12 @@ class SaTokenContextTest {
             assertNull(context.getStartupFailure());
             assertInstanceOf(SaTokenLoginInterceptor.class, context.getBean(LoginInterceptor.class));
             assertFalse(SecurityContext.isLogin());
-            StpUtil.login("u1"); // 不调用框架 login/set
+            trustedNativeLogin("u1"); // 不调用框架 login/set
             assertEquals("u1", SecurityContext.getUserId());
             assertEquals(StpUtil.getTokenValue(), SecurityContext.getToken());
             assertSame(SecurityContext.getUser(), SecurityUtil.getUserDetails());
             verify(users, times(1)).load("u1");
-            StpUtil.login("u2");
+            trustedNativeLogin("u2");
             assertEquals("u2", SecurityContext.getUserId());
             verify(users, times(1)).load("u2");
             StpUtil.logout();
@@ -104,37 +110,76 @@ class SaTokenContextTest {
     }
 
     @Test void frameworkLoginAndNativeLogoutShareTheSameToken() {
-        UserAuthenticator authenticator = mock(UserAuthenticator.class);
-        when(authenticator.authenticate("alice", "correct")).thenReturn(user("u1"));
-        runner().withBean(UserAuthenticator.class, () -> authenticator).run(context -> {
-            var result = SecurityUtil.loginByUsername("alice", "correct", "web");
-            verify(authenticator).authenticate("alice", "correct");
+        LoginAuthenticator<PasswordLogin> authenticator = mockAuthenticator(PasswordLogin.class, "password");
+        when(authenticator.authenticate(new PasswordLogin("alice", "correct", "web"))).thenReturn(user("u1"));
+        runner().withBean("passwordAuthenticator", LoginAuthenticator.class, () -> authenticator).run(context -> {
+            var result = SecurityUtil.login(new PasswordLogin("alice", "correct", "web"));
+            verify(authenticator).authenticate(new PasswordLogin("alice", "correct", "web"));
             assertEquals(result.token(), StpUtil.getTokenValue());
             assertEquals("u1", StpUtil.getLoginIdAsString());
+            assertEquals("password", result.authType());
+            assertEquals("password", SecurityUtil.getAuthType());
             StpUtil.logout();
             assertFalse(SecurityUtil.isLogin());
-            StpUtil.login("u2");
+            trustedNativeLogin("u2");
             SecurityUtil.logout();
             assertFalse(StpUtil.isLogin());
             assertFalse(SecurityContext.isLogin());
         });
     }
 
-    @Test void missingOrRejectedAccountAuthenticationCannotCreateANativeSession() {
+    @Test void apiKeyBeanCreatesANativeSessionThatCanBeRestoredAndLoggedOut() {
+        LoginAuthenticator<ApiKeyLogin> keys = mockAuthenticator(ApiKeyLogin.class, "api-key");
+        when(keys.authenticate(new ApiKeyLogin("partner-secret", "server"))).thenReturn(user("partner-1"));
+        runner().withBean("apiKeyAuthenticator", LoginAuthenticator.class, () -> keys).run(context -> {
+            var result = SecurityUtil.login(new ApiKeyLogin("partner-secret", "server"));
+            assertEquals("partner-1", StpUtil.getLoginIdAsString());
+            assertEquals(result.token(), StpUtil.getTokenValue());
+            verifyNoInteractions(users);
+            SecurityContext.clear();
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/protected");
+            request.addHeader("test-token", result.token());
+            beginRequest(request);
+            var interceptor = context.getBean(LoginInterceptor.class);
+            interceptor.preHandle(request, new MockHttpServletResponse(), this);
+            assertEquals("partner-1", SecurityUtil.getUserId());
+            assertEquals("api-key", SecurityContext.getAuthType());
+            verify(users).load("partner-1");
+            verify(keys, times(1)).authenticate(new ApiKeyLogin("partner-secret", "server"));
+            SecurityUtil.logout();
+            assertNull(StpUtil.getLoginIdByToken(result.token()));
+            assertFalse(SecurityUtil.isLogin());
+        });
+    }
+
+    @Test void missingOrInvalidApiKeyCannotCreateANativeSession() {
         runner().run(context -> {
-            assertThrows(IllegalStateException.class, () -> SecurityUtil.loginByUsername("alice", "password"));
+            assertThrows(IllegalStateException.class, () -> SecurityUtil.login(new ApiKeyLogin("key")));
             assertFalse(StpUtil.isLogin());
         });
-        runner().withBean(UserAuthenticator.class, () -> (username, password) -> null).run(context -> {
+        runner().withBean("apiKeyAuthenticator", LoginAuthenticator.class,
+                () -> authenticator(ApiKeyLogin.class, "api-key", request -> null)).run(context -> {
+            assertThrows(LoginException.class, () -> SecurityUtil.login(new ApiKeyLogin("bad-key")));
+            assertFalse(StpUtil.isLogin());
+        });
+    }
+
+    @Test void missingOrRejectedAccountAuthenticationCannotCreateANativeSession() {
+        runner().run(context -> {
+            assertThrows(IllegalStateException.class, () -> SecurityUtil.login(new PasswordLogin("alice", "password")));
+            assertFalse(StpUtil.isLogin());
+        });
+        runner().withBean("passwordAuthenticator", LoginAuthenticator.class,
+                () -> authenticator(PasswordLogin.class, "password", request -> null)).run(context -> {
             assertThrows(com.yulinlin.security.auth.LoginException.class,
-                    () -> SecurityUtil.loginByUsername("alice", "wrong"));
+                    () -> SecurityUtil.login(new PasswordLogin("alice", "wrong")));
             assertFalse(StpUtil.isLogin());
         });
     }
 
     @Test void nextRequestUsesNativeHeaderPrefixCookieOrLegacyBearer() {
         runner().run(context -> {
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             String token = StpUtil.getTokenValue();
             LoginInterceptor interceptor = context.getBean(LoginInterceptor.class);
             for (String source : new String[]{"header", "cookie", "bearer"}) {
@@ -170,7 +215,7 @@ class SaTokenContextTest {
 
     @Test void invalidNativeCredentialCannotFallBackToAnotherValidBearer() {
         runner().run(context -> {
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             String token = StpUtil.getTokenValue();
             config.setTokenPrefix("Token");
             MockHttpServletRequest request = new MockHttpServletRequest("POST", "/profile");
@@ -186,11 +231,11 @@ class SaTokenContextTest {
 
     @Test void kickoutAndExpiryCannotReuseCachedUser() {
         runner().run(context -> {
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             assertEquals("u1", SecurityContext.getUserId());
             StpUtil.kickout("u1");
             assertNull(SecurityContext.getUser());
-            StpUtil.login("u2");
+            trustedNativeLogin("u2");
             assertEquals("u2", SecurityContext.getUserId());
             StpUtil.getStpLogic().getSaTokenDao().delete(
                     StpUtil.getStpLogic().splicingKeyTokenValue(StpUtil.getTokenValue()));
@@ -200,18 +245,18 @@ class SaTokenContextTest {
 
     @Test void failuresClearOldSnapshotAndUserLoadingCannotReenterContext() {
         runner().run(context -> {
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             assertEquals("u1", SecurityContext.getUserId());
-            StpUtil.login("u2");
+            trustedNativeLogin("u2");
             when(users.load("u2")).thenThrow(new IllegalStateException("模拟用户存储不可用"));
             assertThrows(IllegalStateException.class, SecurityContext::getUser);
             assertNull(localSnapshot());
             when(users.load("u3")).thenAnswer(call -> SecurityContext.getUser());
-            StpUtil.login("u3");
+            trustedNativeLogin("u3");
             assertThrows(IllegalStateException.class, SecurityContext::getUser);
             assertNull(localSnapshot());
             when(users.load("u4")).thenReturn(null);
-            StpUtil.login("u4");
+            trustedNativeLogin("u4");
             assertNull(SecurityContext.getUser());
             assertFalse(StpUtil.isLogin());
         });
@@ -219,7 +264,7 @@ class SaTokenContextTest {
 
     @Test void sessionStoreFailureDoesNotFallBackToCachedIdentity() {
         runner().run(context -> {
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             assertEquals("u1", SecurityContext.getUserId());
             StpLogic broken = spy(StpUtil.getStpLogic());
             doThrow(new IllegalStateException("模拟会话存储不可用"))
@@ -232,7 +277,7 @@ class SaTokenContextTest {
 
     @Test void contextDoesNotPropagateToNewThreadsAndAsyncHandoffClearsSnapshot() {
         runner().run(context -> {
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             assertNotNull(SecurityContext.getUser());
             AtomicReference<IUserDetails> result = new AtomicReference<>();
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -255,9 +300,42 @@ class SaTokenContextTest {
         runner().withBean(LoginInterceptor.class, () -> custom).run(context -> {
             assertSame(custom, context.getBean(LoginInterceptor.class));
             assertTrue(context.getBeansOfType(SaTokenLoginInterceptor.class).isEmpty());
-            StpUtil.login("u1");
+            trustedNativeLogin("u1");
             assertEquals("u1", SecurityContext.getUserId());
         });
+    }
+
+    @Test void nativeTokenWithoutAuthenticationSourceIsNotRestored() {
+        runner().run(context -> {
+            StpUtil.login("u1"); // 有原生会话但没有可信来源元数据
+            assertTrue(StpUtil.isLogin());
+            assertFalse(SecurityContext.isLogin());
+            assertNull(SecurityContext.getAuthType());
+            verifyNoInteractions(users);
+        });
+    }
+
+    @Test void trustedIdLoginIsRegisteredAutomaticallyAndSourcesStayTokenScoped() {
+        runner().withBean("passwordAuthenticator", LoginAuthenticator.class,
+                () -> authenticator(PasswordLogin.class, "password", request -> user("u1")))
+                .run(context -> {
+                    var first = SecurityUtil.login(new UserIdLogin("u1", "web"));
+                    var second = SecurityUtil.login(new PasswordLogin("alice", "correct", "web"));
+                    assertNotEquals(first.token(), second.token());
+                    assertEquals("user-id", first.authType());
+                    assertEquals("password", second.authType());
+                    var manager = context.getBean(SaTokenSecurityManager.class);
+                    assertEquals("user-id", manager.resolveSession(first.token()).authType());
+                    assertEquals("password", manager.resolveSession(second.token()).authType());
+                    assertEquals("password", SecurityContext.getAuthType());
+                });
+    }
+
+    private static void trustedNativeLogin(String userId) {
+        StpUtil.login(userId, StpUtil.getStpLogic().createSaLoginParameter()
+                .setDeviceType("web").setIsShare(false));
+        StpUtil.getStpLogic().getTokenSessionByToken(StpUtil.getTokenValue())
+                .set(SaTokenSecurityManager.AUTH_TYPE_KEY, "native-password");
     }
 
     private void beginRequest(MockHttpServletRequest request) {

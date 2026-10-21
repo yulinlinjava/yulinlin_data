@@ -1,24 +1,16 @@
 package com.yulinlin.security.auth;
 
-/** 登录协议；统一使用账号密码入口，具体实现负责认证，不开放仅凭 userId 建立登录的入口。 */
+/** 统一登录协议；按参数类型认证，UserIdLogin 只供已完成上游身份验证的可信服务端调用。 */
 public interface ISecurityManager {
 
-    /** 校验账号密码后建立登录；未指定设备时使用 default。 */
-    default LoginResult loginByUsername(String username, String password) {
-        return loginByUsername(username, password, "default");
-    }
-
     /**
-     * 委托具体实现校验账号密码及账号状态，然后建立登录。验证码仍由业务校验。
-     * Spring 适配使用 AuthenticationManager；JWT、Sa-Token 使用业务提供的 UserAuthenticator。
-     * 设备类型仅为登录元数据，不是身份凭证，也不自动代表设备隔离策略。
-     *
-     * @return 安全用户与登录凭证；Session 模式的 token、expiresAt 可以为 null
-     * @throws LoginException 账号密码认证被拒绝或无法建立登录
-     * @throws UnsupportedOperationException 当前实现未提供账号密码登录
+     * 统一登录入口，内置参数为 PasswordLogin / ApiKeyLogin / UserIdLogin，支持业务自定义参数。
+     * JWT、Sa-Token 委托 LoginAuthenticator；Spring 经 AuthenticationManager 调用认证桥接 Provider。
+     * 验证码由业务先校验；不支持的类型或未配置的认证方式必须拒绝，不能降级放行。
+     * Session 模式的 LoginResult.token / expiresAt 可以为 null。
      */
-    default LoginResult loginByUsername(String username, String password, String deviceType) {
-        throw new UnsupportedOperationException("当前安全管理器不支持账号密码登录，请引入登录模块或提供账号认证实现");
+    default LoginResult login(LoginRequest request) {
+        throw new UnsupportedOperationException("当前安全管理器不支持登录，请引入登录模块或提供认证实现");
     }
 
     /** 验证 Token 并恢复请求快照；可无状态验签或校验服务端会话，不依赖当前上下文。 */
@@ -39,6 +31,9 @@ public interface ISecurityManager {
 
     /** 当前请求的 Token；Session/Basic 等外部认证可在已登录时返回 null，不得把密码或 Session ID 冒充 Token。 */
     default String getToken() { return SecurityContext.getToken(); }
+
+    /** 本次已验证登录的认证器名称；匿名或原生外部身份未提供该信息时为 null。 */
+    default String getAuthType() { return SecurityContext.getAuthType(); }
 
     default boolean isLogin() { return getUserDetails() != null; }
 

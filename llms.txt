@@ -28,9 +28,9 @@ Schema 通过启动扫描和显式 autoSchema=true 参与；一张物理表只�
 
 多库/多连接事务是本地协调，不是分布式原子提交。代理遵循路由事务和原线程。全量同步要求业务停写并排空队列，内存增量同步不保证可靠交付。缓存失效、序列化和跨节点语义按缓存专题，不把业务缓存与 ORM namespace 混用。
 
-三个登录模块统一公开 loginByUsername(username,password[,deviceType])，设备默认 default；ISecurityManager/SecurityUtil 及内置实现已移除 login(userId[,deviceType])。JWT/Sa-Token 通过业务 UserAuthenticator Bean 校验账号密码，返回安全 IUserDetails 后内部使用真实 userId 建立登录；UserStore 负责后续用户恢复，不负责密码校验。JWT 纯无状态，注销不撤销 Token；Sa-Token 有状态，原生 StpUtil.login/logout 兼容不变。security-spring 使用 AuthenticationManager Bean，SpringUserMapper 映射用户，默认 Session 登录 getToken 为 null。三个登录模块只选一个。自定义 LoginInterceptor Bean 自动替换默认实现，无 auth.enabled 开关；外部上下文由原体系清理。
+三个登录模块统一公开 login(LoginRequest)，内置 PasswordLogin、ApiKeyLogin、UserIdLogin，设备默认 default，也允许业务自定义参数。LoginAuthenticator<T> 的 requestType 精确匹配参数类，name 作为 authType；重复名称或类型启动失败，未知类型拒绝，不降级。旧 UserAuthenticator/ApiKeyAuthenticator 和 loginByUsername 已移除。UserIdLogin 仅供上游已验证身份的可信服务端使用，有 UserStore 时内置注册，禁止公开任意用户 ID 登录。JWT/Sa-Token 直接使用认证器；Spring 经 LoginRequestAuthenticationToken 和 LoginAuthenticatorAuthenticationProvider 在 AuthenticationManager 内执行，业务将该 Provider 加入 Manager。认证器不得递归调用登录入口。
 
-UserAuthenticator.authenticate 按 username 校验账号密码；UserStore.load 按稳定 userId 恢复用户，不改为按用户名加载。两个接口可由一个业务 Bean 实现，admin 的 AdminAuthenticationService 已合并实现，避免重复注册。
+LoginAuthenticator.authenticate 校验其对应凭证和状态，UserStore.load 按稳定 userId 加载安全用户，二者可由同一个业务 Bean 实现；不要将密码/API Key 放进用户 DTO。JWT 纯无状态、注销不撤销；JWT 必须签名携带 deviceType/authType，旧 Token 缺失不兼容。Sa-Token 有状态，authType 保存在 Token 会话，统一入口禁用 Token 共享；原生登录需自行保存可信来源。Spring 原生身份若无来源则 authType 为 null，不猜测；默认 Session 登录没有可返回 Token。登录模块只选一个，自定义 LoginInterceptor Bean 自动替换默认实现，无 auth.enabled。admin 已迁移到 LoginAuthenticator<PasswordLogin> + UserStore，认证名 password，Controller 调用 login(new PasswordLogin(...))；不开放任意 ID 登录接口。相关用例源码已更新，但未执行编译或测试。
 
 接口加密：未配置任何 crypto.devices 设备密钥时不注册加解密组件，交给业务处理；JWT 密钥不触发报文加密。配置任意设备密钥后校验 unknown、key、IV；enabled=false 只表示兼容解密、响应明文，不代表卸载。无密钥时 ApiCrypto 注解不强制加密。
 

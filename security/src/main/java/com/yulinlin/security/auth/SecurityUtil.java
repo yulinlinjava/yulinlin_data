@@ -43,16 +43,13 @@ public final class SecurityUtil implements SmartInitializingSingleton, Disposabl
                 ? resolver : null;
     }
 
-    public static LoginResult loginByUsername(String username, String password) {
-        return manager().loginByUsername(username, password);
-    }
-    public static LoginResult loginByUsername(String username, String password, String deviceType) {
-        return manager().loginByUsername(username, password, deviceType);
-    }
+    public static LoginResult login(LoginRequest request) { return manager().login(request); }
+
     public static void logout() { manager().logout(); }
     public static IUserDetails getUserDetails() { return manager().getUserDetails(); }
     public static IUserDetails getUserDetails(String userId) { return manager().getUserDetails(userId); }
     public static String getToken() { return manager().getToken(); }
+    public static String getAuthType() { return manager().getAuthType(); }
     public static IUserDetails requireUser() { return manager().requireUser(); }
     public static boolean isLogin() { return manager().isLogin(); }
     public static IUserDetails refresh() { return manager().refresh(); }

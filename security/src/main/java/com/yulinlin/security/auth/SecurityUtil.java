@@ -1,26 +1,49 @@
 package com.yulinlin.security.auth;
 
 import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import com.yulinlin.security.session.LoginSessionManager;
+import com.yulinlin.security.session.SessionManagementProperties;
 
 /** 静态便捷入口，只委托 Spring 选定的管理器，不另存用户或 Token。适用于单应用上下文。 */
 public final class SecurityUtil implements SmartInitializingSingleton, DisposableBean {
     private static volatile SecurityUtil active;
     private final ObjectProvider<ISecurityManager> managers;
     private ISecurityManager selected;
+    private final ObjectProvider<LoginSessionManager> sessionManagers;
+    private final SessionManagementProperties sessionProperties;
+    private LoginSessionManager sessions;
 
     public SecurityUtil(ObjectProvider<ISecurityManager> managers) {
+        this(managers, null, new SessionManagementProperties());
+    }
+
+    public SecurityUtil(ObjectProvider<ISecurityManager> managers, ObjectProvider<LoginSessionManager> sessionManagers,
+                        SessionManagementProperties sessionProperties) {
         this.managers = managers;
+        this.sessionManagers = sessionManagers;
+        this.sessionProperties = sessionProperties;
     }
 
     @Override
     public void afterSingletonsInstantiated() {
-        try {
-            selected = managers.getObject();
-        } catch (NoUniqueBeanDefinitionException error) {
-            throw new IllegalStateException("存在多个 ISecurityManager，请只引入一种登录实现，或通过 @Primary 明确选择", error);
+        var candidates = managers.stream().toList();
+        if (candidates.size() != 1) {
+            throw new IllegalStateException("必须且只能有一个 ISecurityManager，不能通过 @Primary 混用多个安全实现");
+        }
+        selected = candidates.getFirst();
+        sessionProperties.validate();
+        var sessionCandidates = sessionManagers == null ? java.util.List.<LoginSessionManager>of()
+                : sessionManagers.stream().toList();
+        if (sessionCandidates.size() > 1) {
+            throw new IllegalStateException("只能有一个 LoginSessionManager，不能通过 @Primary 选择多个会话管理器");
+        }
+        if (sessionProperties.isEnabled(selected.sessionManagementEnabledByDefault())) {
+            if (sessionCandidates.isEmpty()) {
+                throw new IllegalStateException("已开启统一会话管理，但当前安全实现没有 LoginSessionManager；JWT/匿名实现不支持此功能");
+            }
+            sessions = sessionCandidates.getFirst();
         }
         synchronized (SecurityUtil.class) {
             if (active != null && active != this) {
@@ -34,6 +57,14 @@ public final class SecurityUtil implements SmartInitializingSingleton, Disposabl
         SecurityUtil binding = active;
         if (binding == null) throw new IllegalStateException("安全管理器尚未初始化或应用已关闭");
         return binding.selected;
+    }
+
+    /** 关闭或不支持时明确失败，不返回一个静默空实现。 */
+    public static LoginSessionManager sessions() {
+        SecurityUtil binding = active;
+        if (binding == null) throw new IllegalStateException("安全管理器尚未初始化或应用已关闭");
+        if (binding.sessions == null) throw new UnsupportedOperationException("统一会话管理未开启或当前实现不支持");
+        return binding.sessions;
     }
 
     /** 上下文桥接跟随唯一选定的管理器；JWT/匿名实现不受影响。 */

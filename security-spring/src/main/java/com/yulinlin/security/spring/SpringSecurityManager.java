@@ -33,6 +33,8 @@ import java.util.function.Supplier;
 
 /** 适配 Spring 身份；账号密码、密钥都委托 AuthenticationManager，会话策略和身份持久化复用 Spring 协议。 */
 public final class SpringSecurityManager implements ISecurityManager, SecurityContextResolver {
+    @Override public boolean sessionManagementEnabledByDefault() { return true; }
+
     private final SpringUserMapper mapper;
     private final Supplier<UserStore> users;
     private final Supplier<AuthenticationManager> authenticationManagers;
@@ -129,13 +131,22 @@ public final class SpringSecurityManager implements ISecurityManager, SecurityCo
             repository.saveContext(context, request, response);
             return new LoginResult(null, null, user, authType);
         } catch (AuthenticationException error) {
+            clearFailedSession(strategy, request, error);
             clearFailedLogin(repository, request, response, error);
             throw new LoginException("登录认证或会话校验未通过，请检查凭证、认证提供者与登录限制", error);
         } catch (RuntimeException | Error error) {
+            clearFailedSession(strategy, request, error);
             clearFailedLogin(repository, request, response, error);
             throw error;
         } finally {
             if (credentials != null) credentials.eraseCredentials();
+        }
+    }
+
+    private static void clearFailedSession(SessionAuthenticationStrategy strategy, HttpServletRequest request, Throwable failure) {
+        if (strategy instanceof SpringSessionSupport support) {
+            try { support.loginFailed(request); }
+            catch (RuntimeException cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
         }
     }
 

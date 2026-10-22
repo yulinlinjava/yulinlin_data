@@ -13,6 +13,7 @@
 | [自定义接口加解密](crypto-codec.md) | 提供 CryptoCodec Bean 替换算法与密文格式，不要求配置 AES 密钥。 |
 | [限流与 IP 黑名单](rate-limit.md) | 注解限流、业务黑名单和 Nginx 可信真实 IP。 |
 | [用户模型与安全管理器](user.md) | 统一 LoginAuthenticator，密码、密钥、可信 ID 与自定义登录；name 记录 authType。 |
+| [会话管理与数量限制](user.md#会话管理与数量限制) | 会话分页、计数、踢人、自定义管理器与分布式使用边界。 |
 | [无状态 JWT 登录](jwt.md) | 最小接入和请求身份恢复；注销不会撤销已发出的 JWT。 |
 | [自定义 Token 生成与解析](token-codec.md) | 替换 JwtTokenCodec，统一生成与解析协议。 |
 | [自定义安全实现与拦截器](extension.md) | 有 LoginInterceptor Bean 就使用用户实现，否则自动提供默认实现。 |

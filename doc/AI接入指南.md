@@ -1235,6 +1235,10 @@ int restored = ModelUpdateWrapper.newInstance("mysql", DemoUser.class)
         .execute();
 ```
 
+`inc/dec` 的 `Money`、`Coin` 参数会经过 ORM 编码器转换为存储单位：例如 `Money.of(12.5)` 对数据库加减 `1250`，`Coin.of(12.5)` 对数据库加减 `125`，无需业务先调用 `encode()`。普通数字按数据库存储单位处理，例如传入 `1L` 就只加减 `1`，不会根据字段类型自动放大。
+
+普通数字和 `BigDecimal` 保留数字参数，`BigInteger` 精确转换为 `BigDecimal`；`AtomicInteger/AtomicLong/LongAdder/DoubleAdder` 在 SQL 参数生成时取值。其他自定义 `Number` 使用已注册的编码器，编码结果必须是 JDBC 支持的数字，否则在执行 SQL 前报错。此规则针对普通更新 Wrapper，不改变 [EntityCounter](#ai-write-sync-counter) 的独立类型限制，也不会自动迁移现有数据库列类型。
+
 集合更新会为每个对象建立更新节点。每个对象都应携带完整非空主键，只设置真正需要修改的字段：
 
 ```java
@@ -3830,6 +3834,8 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 
 一个项目只选一种登录实现，不混用 `security-jwt`、`security-sa-token`、`security-spring`。这些模块已经包含公共 `security` 的能力。
 
+同时启用多个内置实现，或注册多个 `ISecurityManager`，启动直接失败，不能用 `@Primary` 绕过。会话管理器 `LoginSessionManager` 也只允许一个。
+
 | 业务需要 | 引入的制品 | 接入要求 |
 | --- | --- | --- |
 | 仅加密、限流或权限注解 | `security` | 不要求实现登录；未登录用户不能访问受保护方法 |
@@ -3874,7 +3880,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 | 刷新资料 | `refresh()`，不重新签发 Token | `refresh()`，不等于重新登录 |
 | 多实例部署 | 各实例使用一致的签名配置和用户数据 | 各实例需要共享有效的登录状态 |
 
-只需要简单 Token 登录可选 JWT；需要注销后使当前 Token 失效可选有状态登录。统一 API 不承诺批量踢人、查询在线用户或自动续期。
+只需要简单 Token 登录可选 JWT；需要注销、踢人、会话查询及数量限制可选有状态登录。Sa-Token/Spring 默认开启[统一会话管理](#ai-security-user-会话管理与数量限制)，数量默认不限，可通过 `session.enabled=false` 关闭；JWT 保持无状态，默认不参与，显式开启才报不支持。Spring 仍须显式接入原生过滤器链。
 
 JWT 用户重新启用后，其尚未过期的旧 Token 可能继续使用。删除用户后不要复用旧 userId。需要更严格的凭证撤销规则，使用有状态方案或[自定义管理器](#ai-security-extension-自定义有状态登录)。
 
@@ -4646,6 +4652,7 @@ location /api/ {
 - [一个业务组件实现两个接口](#ai-security-user-一个业务组件实现两个接口)
 - [常用组件扩展入口](#ai-security-user-常用组件扩展入口)
 - [加载用户信息](#ai-security-user-加载用户信息)
+- [会话管理与数量限制](#ai-security-user-会话管理与数量限制)
 
 <a id="ai-security-user-登录用户模型"></a>
 ### 登录用户模型
@@ -4854,6 +4861,7 @@ String type = SecurityContext.getAuthType(); // sms
 | JWT 生成/验签 | JwtTokenCodec | generate(user, deviceType, authType) 与 parse 成对替换 |
 | Token 读取 | LoginInterceptor | Bean 自动替换并注册，默认生命周期清理仍在 |
 | 整体安全实现 | ISecurityManager | 实现 login(LoginRequest)、恢复、注销等；可适配外部上下文 |
+| 会话查询与踢人 | LoginSessionManager | 自定义 Bean 替换所选模块的默认管理器；操作真实会话 |
 
 登录公共协议位于 com.yulinlin.security.auth，JwtTokenCodec 位于 com.yulinlin.security.jwt，LoginInterceptor 位于 com.yulinlin.security.web。认证名称来自验证流程，不因 HTTP URL、类名或 Bean 名变化而变化。authType 不代替角色权限，也不自动实现多因素认证。
 
@@ -4870,6 +4878,73 @@ public UserStore userStore(AccountService accounts) {
 UserStore.load 不验证密码、不签发 Token，不递归读取 SecurityContext。不存在/禁用用户返回 null 或抛 LoginException；基础设施错误正常抛出，不能返回默认用户，返回 ID 必须与查询 ID 相同。
 
 JWT/Sa-Token 认证器返回的安全用户直接用于当前登录，下一次请求才按 ID 重新加载；请求内复用快照。业务缓存需要自行处理角色/状态变更，refresh 不会替业务清理缓存。已有 Spring 登录体系采用其用户资料加载规则，不承诺自动重查业务数据库。
+
+<a id="ai-security-user-会话管理与数量限制"></a>
+### 会话管理与数量限制
+
+Sa-Token/Spring 默认开启统一会话管理，数量默认不限；JWT 默认不参与，只有显式配置 `enabled: true` 才因不支持而启动报错。仅使用公共 security/匿名实现时默认不参与。Spring 即使省略配置也需要完成[过滤器链接入](#ai-security-spring-会话管理接入)。
+
+```yaml
+yulinlin:
+  security:
+    session:
+      enabled: true                 # Sa-Token/Spring 可省略；false 显式关闭。JWT 不要设为 true
+      max-sessions: 3                # 默认 -1 不限；只能为 -1 或正整数
+      query:
+        default-page-size: 20
+        max-page-size: 100
+```
+
+`max-sessions` 限制每个用户所有设备类型的有效登录会话总数，不是物理设备去重数。同一设备创建两个独立会话按两个计数。超限时允许新登录并淘汰已有会话，淘汰顺序遵循原生机制；不提供拒绝新登录、按设备类型分别限额或跨节点严格原子上限配置。
+
+数量上限在登录链路中执行，不能只在查询时统计。默认开启管理不意味着限制登录次数，未配置 `max-sessions` 时为 `-1`。启用后使用统一配置，不重复设置原生等价限制；显式关闭后不注册默认管理器、不适配统一上限，但不停止原生 Session、Redis 或业务已有的原生限制：
+
+```yaml
+yulinlin:
+  security:
+    session:
+      enabled: false
+```
+
+```java
+import com.yulinlin.security.session.*;
+
+LoginSessionManager sessions = SecurityUtil.sessions(); // 也可直接注入
+SessionPage mine = sessions.listSessions(SessionQuery.user(userId));
+SessionPage first = sessions.listSessions(new SessionQuery(null, null, null, 20));
+// userId=null 查询全局；需要 GLOBAL_QUERY 能力。后续用 first.nextCursor() 继续分页。
+long count = sessions.countSessions(userId);
+sessions.getSession(userId, sessionId); // Optional<LoginSessionView>
+sessions.kickoutSession(userId, sessionId, "管理员操作");
+sessions.kickoutAll(userId, "密码已重置");
+// 需要 DEVICE_TYPE 能力，当前默认 Sa-Token 支持：
+sessions.kickoutByDeviceType(userId, "web", "退出网页端");
+```
+
+这些方法不自动做管理员授权或生成 HTTP 接口。业务必须先验证操作权限；对本人操作，userId 应来自已验证身份，而不是信任前端输入。reason 是业务操作原因参数，默认原生适配不持久化审计记录，调用方负责审计。
+
+返回模型：
+
+- `LoginSessionView`：sessionId、userId、username、deviceType、deviceId、createdAt、lastAccessAt、expiresAt、current。只有 sessionId/userId 必需，其余未知值为 null，不补造设备信息或时间。
+- `sessionId` 是原生高熵会话凭证的带模块前缀单向摘要，仅作管理标识，不能用于鉴权；不返回 Token 或原始 Cookie。相同原生会话跨节点得到同一标识，原生会话 ID 轮换后管理标识也随之变化。
+- `SessionQuery`：userId、deviceType、cursor、pageSize。未指定分页大小使用默认值；超出上限或不支持的过滤条件会报错。
+- `SessionPage`：items、nextCursor、hasMore、可空 total。分页是实时视图，不保证跨页快照；游标只能用于同一实现、同一过滤条件。某页可为空但仍有后续游标。
+- `capabilities()` 返回 `GLOBAL_QUERY`、`DEVICE_TYPE` 等实际支持能力；不能从“接了 Redis”推断一定支持全局枚举。
+
+已失效会话不计数，踢人操作幂等；存储故障会抛异常，不当作空列表或撤销成功。踢人针对既有会话，不是账号封禁，不中断已经执行中的请求，也不能撤销与该会话无关的 Bearer/Basic/Remember-Me 等凭证。
+
+<a id="ai-security-user-自定义与分布式"></a>
+#### 自定义与分布式
+
+注册一个 `LoginSessionManager` Bean，默认管理器自动退让，不能用 `@Primary` 在多个会话管理器间选择。关闭统一功能不会删除业务自行声明的 Bean，但 `SecurityUtil.sessions()` 不提供关闭状态的管理入口。
+
+自定义 `ISecurityManager` 默认不自动启用管理，可覆盖 `sessionManagementEnabledByDefault()` 返回 true，或显式配置 `enabled: true`；仍须提供真实的 LoginSessionManager。显式 false 优先于实现默认值。`SessionManagementProperties.getEnabled()` 为 null 表示未配置，按当前安全实现的默认值解析，不等同于 false。仅在 JWT 项目额外提供管理器 Bean，不会使默认 JWT 自动参与会话管理。
+
+只替换查询和管理逻辑时，保留所选模块的原生登录策略与数量限制。若连会话存储、签发和有效性规则一起更换，必须同时适配登录、鉴权、注销；完全自定义时可只依赖 security，实现 `ISecurityManager` 和 `LoginSessionManager`，注入 `SessionManagementProperties` 执行统一限制。不能仅写一个 Redis 会话列表，而让鉴权继续只认本机内存。
+
+分布式节点应共享权威会话存储，并使用一致的用户映射、命名空间、序列化及策略。A 登录后 B 可查，B 撤销后 A/C 的后续校验应失败；存储故障不能降级到本机或放行。第一版复用原生并发控制，不承诺跨节点同时登录时绝不瞬间超限，需要严格上限的业务由自定义实现处理原子性。
+
+不新增统一 Redis 配置或存储/锁 SPI。Sa-Token 使用官方存储插件；Spring 使用 Spring Session 或自定义实现，详见各模块接入文档。
 
 ---
 
@@ -4912,6 +4987,8 @@ yulinlin:
 登录响应包含 authType，后续使用 `SecurityContext.getAuthType()` 或 `SecurityUtil.getAuthType()` 读取。缺少 deviceType/authType 的旧 Token 不再兼容，需要重新登录；不根据当前请求猜测或补齐认证方式。
 
 本模块提供**纯无状态 JWT**，没有服务端登录记录、Token 黑名单或按用户撤销能力。注销后客户端应删除 Token，但已发出的 Token 仍可能有效。保持签名密钥和校验配置稳定即可在应用重启后使用未过期 JWT，前提是 `UserStore` 仍允许该用户访问。
+
+JWT 默认不参与统一会话管理，不需要额外配置 `yulinlin.security.session.enabled=false`。显式 false 也允许；显式 true 会在启动时提示不支持，不会因为 Sa-Token/Spring 默认开启而要求 JWT 注册会话管理器。
 
 业务 API Key 与 JWT 签名 secret 是不同凭证。密钥登录只在签发时验证 API Key，JWT 不保存原密钥或独立密钥权限；停用/轮换 API Key 不会自动撤销已签发 JWT。后续权限以 UserStore 为准，建议密钥绑定独立服务账号，不能只在认证时临时缩减同一用户的权限。
 
@@ -5112,6 +5189,7 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 | logout() | 按自身登录协议注销，并清理请求身份；无状态 JWT 不能宣称已撤销旧 Token |
 | getUserDetails(userId) | 查询指定用户，不切换当前身份 |
 | refresh() / refresh(userId) | 刷新用户资料，当前用户时更新当前请求身份；不切换用户，不隐式续期 |
+| sessionManagementEnabledByDefault() | 自定义实现默认返回 false；需要默认启用时覆盖为 true，并提供 LoginSessionManager；显式 session.enabled 配置优先 |
 
 注册形式如下，BusinessSecurityManager、BusinessIdentityService 均为业务自己实现的类，不是框架提供的类：
 
@@ -5157,6 +5235,7 @@ resolveSession 验证失败可返回 null 或抛 LoginException；login 失败�
 - [最小接入](#ai-security-sa-token-最小接入)
 - [登录与请求](#ai-security-sa-token-登录与请求)
 - [当前用户与注销](#ai-security-sa-token-当前用户与注销)
+- [会话管理和分布式](#ai-security-sa-token-会话管理和分布式)
 - [使用边界](#ai-security-sa-token-使用边界)
 
 <a id="ai-security-sa-token-最小接入"></a>
@@ -5226,6 +5305,17 @@ SecurityUtil.logout();  // 注销当前 Token
 
 客户端在注销成功后删除本地 Token。请求结束自动清理当前上下文，但不会注销登录；`SecurityContext.clear()` 也不等于注销。
 
+<a id="ai-security-sa-token-会话管理和分布式"></a>
+### 会话管理和分布式
+
+默认提供 `SaTokenLoginSessionManager`，无需配置 `yulinlin.security.session.enabled=true`；数量上限默认 `-1`，不限登录会话数。业务使用[统一查询、计数和踢人接口](#ai-security-user-会话管理与数量限制)，支持全局分页及按 deviceType 过滤、踢人。设置 `yulinlin.security.session.enabled=false` 可关闭统一管理与上限适配，保留原生登录。
+
+管理操作直接读取原生 Account-Session 和 Terminal，过滤失效 Token，不创建第二套登录记录，也不会因为管理查询而续期。默认用户名不可得时返回 null。
+
+统一 `max-sessions` 下发到原生 `max-login-count`，统一入口和正常原生登录共用限制；显式配置冲突的 `sa-token.max-login-count` 或关闭 `is-concurrent` 会报错。不要在单次原生登录参数或运行时重新覆盖统一策略。
+
+分布式使用 Sa-Token 官方 `sa-token-redis-template` 等插件，版本与项目 Sa-Token 保持一致。配置原生 Redis 连接与命名空间即可，上层统一接口不变，不需要自定义管理器，也不需要本框架的新 Redis 模块。Boot 3 使用 `spring.data.redis.*`；当前 Sa-Token 1.46 的相关 Redis 插件要求 Redis 6.0+，具体以[官方插件说明](https://sa-token.com/up/integ-redis.html)为准。
+
 <a id="ai-security-sa-token-使用边界"></a>
 ### 使用边界
 
@@ -5233,7 +5323,7 @@ SecurityUtil.logout();  // 注销当前 Token
 - 引入 ORM 的 cache-redis 模块，不等于登录状态已经持久化。
 - `UserStore` 应拒绝不存在、禁用或不允许继续访问的用户。加载失败不能返回旧用户兜底。
 - 修改密码、停用业务密钥不会自动注销已经建立的登录，不要把这类操作等同于注销全部设备。
-- 公开统一 API 不提供在线会话列表、批量踢人或按用户注销全部 Token。
+- 会话管理默认开启、数量默认不限；可显式关闭，不会自动暴露管理员 HTTP 接口。
 - 用户身份不自动传递到新线程，异步任务显式传入必要的业务信息。
 - 复杂登录策略通过[公开扩展接口](#ai-security-extension)接入，普通业务继续调用同一套 API。
 
@@ -5259,6 +5349,8 @@ SecurityUtil.logout();  // 注销当前 Token
 - [当前用户与权限](#ai-security-spring-当前用户与权限)
 - [登录与注销](#ai-security-spring-登录与注销)
 - [查询用户与刷新](#ai-security-spring-查询用户与刷新)
+- [会话管理接入](#ai-security-spring-会话管理接入)
+- [分布式 Spring Session](#ai-security-spring-分布式-spring-session)
 - [使用边界](#ai-security-spring-使用边界)
 
 <a id="ai-security-spring-最小接入"></a>
@@ -5332,6 +5424,53 @@ SecurityUtil.logout();
 | getAuthType() | 返回可信认证来源，没有该信息时返回 null |
 
 业务权限修改后是否立即生效，取决于项目采用的用户资料刷新策略；不要把 refresh 当成所有请求权限的强制刷新。
+
+<a id="ai-security-spring-会话管理接入"></a>
+### 会话管理接入
+
+[统一会话管理](#ai-security-user-会话管理与数量限制)默认开启，数量默认不限。即使没有写 `session.enabled`，也必须在业务已有的有状态过滤器链构建前显式接入：
+
+```java
+@Bean
+SecurityFilterChain securityFilterChain(HttpSecurity http, SpringSessionSupport sessions) throws Exception {
+    // 保留项目已有的认证、授权、CSRF、Remember-Me 等安全配置。
+    // ...
+    sessions.configure(http); // 放在最后，之后不要再覆盖会话策略、注册表或上下文存储
+    return http.build();
+}
+```
+
+`SpringSessionSupport` 位于 `com.yulinlin.security.spring`。它配置原生数量限制、注册表和失效检查，并将该链生成的原生 `SessionAuthenticationStrategy` 提供给统一 MVC 登录入口，避免原生登录与 `SecurityUtil.login` 使用不同策略。默认开启但未接入会启动失败。
+
+升级已有项目时应完成上述接入，或显式设置 `yulinlin.security.session.enabled=false` 保留原有登录与会话策略。关闭时不提供 SpringSessionSupport，不需要调用 configure，也不会关闭原生 Session 或删除业务原有的会话配置。
+
+默认适配一个有状态过滤器链；其他无状态链不接入该组件。需要多个独立 Session 认证体系时使用自定义实现，不重复调用 configure。开启时不要另外注册 SessionAuthenticationStrategy Bean；需要调整 fixation/CSRF 等，在 configure 之前定制该链原生配置。
+
+本地默认使用 `SessionRegistryImpl`，同时提供 `HttpSessionEventPublisher` 清理已销毁会话。Boot 会注册 Listener Bean；非 Boot Servlet 部署需按容器规则注册监听器。原生注销、过期事件必须正常送达，不能把注册表当成独立认证数据库。
+
+默认 `SpringLoginSessionManager` 支持按用户查询、计数、指定/全部踢人，本地注册表还支持全局分页。它通过原生 expireNow 标记会话，后续请求由原生过滤器拒绝；不能直接删注册表记录冒充踢人。
+
+原生 SessionRegistry 不提供 deviceType/deviceId/创建时间/到期时间，默认这些字段为 null，不声明 DEVICE_TYPE 能力。需要设备查询等附加元数据时，注册自定义 LoginSessionManager，并与实际 Session 生命周期保持一致。
+
+<a id="ai-security-spring-分布式-spring-session"></a>
+### 分布式 Spring Session
+
+引入并配置项目所需的 Spring Session 官方存储实现，再提供对应原生注册表，例如已有带用户索引的仓库时：
+
+```java
+@Bean
+<S extends org.springframework.session.Session>
+org.springframework.security.core.session.SessionRegistry sessionRegistry(
+        org.springframework.session.FindByIndexNameSessionRepository<S> repository) {
+    return new org.springframework.session.security.SpringSessionBackedSessionRegistry<>(repository);
+}
+```
+
+框架自身不依赖 Spring Session/Redis，也不替项目配置连接。检测到 SessionRepository 时不会静默创建本地注册表；缺少配套 SessionRegistry 会启动失败。仅提供任意 SessionRepository 不代表具备用户索引能力。
+
+默认 principal 映射规则：IUserDetails 使用 userId，UserDetails 使用 username，Principal 使用 name，String 直接作为 ID。对于分布式反查，默认使用 userId 作为原生索引名；如果业务 ID 与原生 principal 名称不一致（包括非标准 principal 的 getName/toString 规则），必须提供 SpringSessionPrincipalResolver，分别实现 userId(principal) 与 principal(userId)。自定义 SpringUserMapper 且使用默认管理器时也必须显式提供该映射器。
+
+Spring Session 原生注册表不支持 getAllPrincipals，因此默认分布式适配不声明 GLOBAL_QUERY：按用户查询和踢人可用，全局查询会明确报不支持。需要跨节点全局列表时提供自定义 LoginSessionManager，通过可靠的查询索引实现；不能只枚举当前节点或扫描猜测的 Redis 私有结构。
 
 <a id="ai-security-spring-使用边界"></a>
 ### 使用边界

@@ -84,7 +84,7 @@ yulinlin:
   security:
     jwt:
       # 必填：至少32字节随机密钥的Base64；不能使用每次启动变化的随机值。
-      secret: ${ADMIN_JWT_SECRET}
+      secret: "2o2gADWTbDfzW+UUbLZEXsI2Mf/c8Zg6l+q+7Ma861Q="
       issuer: yulinlin-admin
       ttl: 2h
     # 不提供 CryptoCodec 且不配置 crypto.devices 时不接管加解密；登录、权限和限流照常工作。

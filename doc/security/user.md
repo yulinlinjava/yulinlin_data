@@ -15,6 +15,7 @@
 - [一个业务组件实现两个接口](#一个业务组件实现两个接口)
 - [常用组件扩展入口](#常用组件扩展入口)
 - [加载用户信息](#加载用户信息)
+- [会话管理与数量限制](#会话管理与数量限制)
 
 ## 登录用户模型
 
@@ -215,6 +216,7 @@ String type = SecurityContext.getAuthType(); // sms
 | JWT 生成/验签 | JwtTokenCodec | generate(user, deviceType, authType) 与 parse 成对替换 |
 | Token 读取 | LoginInterceptor | Bean 自动替换并注册，默认生命周期清理仍在 |
 | 整体安全实现 | ISecurityManager | 实现 login(LoginRequest)、恢复、注销等；可适配外部上下文 |
+| 会话查询与踢人 | LoginSessionManager | 自定义 Bean 替换所选模块的默认管理器；操作真实会话 |
 
 登录公共协议位于 com.yulinlin.security.auth，JwtTokenCodec 位于 com.yulinlin.security.jwt，LoginInterceptor 位于 com.yulinlin.security.web。认证名称来自验证流程，不因 HTTP URL、类名或 Bean 名变化而变化。authType 不代替角色权限，也不自动实现多因素认证。
 
@@ -230,6 +232,71 @@ public UserStore userStore(AccountService accounts) {
 UserStore.load 不验证密码、不签发 Token，不递归读取 SecurityContext。不存在/禁用用户返回 null 或抛 LoginException；基础设施错误正常抛出，不能返回默认用户，返回 ID 必须与查询 ID 相同。
 
 JWT/Sa-Token 认证器返回的安全用户直接用于当前登录，下一次请求才按 ID 重新加载；请求内复用快照。业务缓存需要自行处理角色/状态变更，refresh 不会替业务清理缓存。已有 Spring 登录体系采用其用户资料加载规则，不承诺自动重查业务数据库。
+
+## 会话管理与数量限制
+
+Sa-Token/Spring 默认开启统一会话管理，数量默认不限；JWT 默认不参与，只有显式配置 `enabled: true` 才因不支持而启动报错。仅使用公共 security/匿名实现时默认不参与。Spring 即使省略配置也需要完成[过滤器链接入](spring.md#会话管理接入)。
+
+```yaml
+yulinlin:
+  security:
+    session:
+      enabled: true                 # Sa-Token/Spring 可省略；false 显式关闭。JWT 不要设为 true
+      max-sessions: 3                # 默认 -1 不限；只能为 -1 或正整数
+      query:
+        default-page-size: 20
+        max-page-size: 100
+```
+
+`max-sessions` 限制每个用户所有设备类型的有效登录会话总数，不是物理设备去重数。同一设备创建两个独立会话按两个计数。超限时允许新登录并淘汰已有会话，淘汰顺序遵循原生机制；不提供拒绝新登录、按设备类型分别限额或跨节点严格原子上限配置。
+
+数量上限在登录链路中执行，不能只在查询时统计。默认开启管理不意味着限制登录次数，未配置 `max-sessions` 时为 `-1`。启用后使用统一配置，不重复设置原生等价限制；显式关闭后不注册默认管理器、不适配统一上限，但不停止原生 Session、Redis 或业务已有的原生限制：
+
+```yaml
+yulinlin:
+  security:
+    session:
+      enabled: false
+```
+
+```java
+import com.yulinlin.security.session.*;
+
+LoginSessionManager sessions = SecurityUtil.sessions(); // 也可直接注入
+SessionPage mine = sessions.listSessions(SessionQuery.user(userId));
+SessionPage first = sessions.listSessions(new SessionQuery(null, null, null, 20));
+// userId=null 查询全局；需要 GLOBAL_QUERY 能力。后续用 first.nextCursor() 继续分页。
+long count = sessions.countSessions(userId);
+sessions.getSession(userId, sessionId); // Optional<LoginSessionView>
+sessions.kickoutSession(userId, sessionId, "管理员操作");
+sessions.kickoutAll(userId, "密码已重置");
+// 需要 DEVICE_TYPE 能力，当前默认 Sa-Token 支持：
+sessions.kickoutByDeviceType(userId, "web", "退出网页端");
+```
+
+这些方法不自动做管理员授权或生成 HTTP 接口。业务必须先验证操作权限；对本人操作，userId 应来自已验证身份，而不是信任前端输入。reason 是业务操作原因参数，默认原生适配不持久化审计记录，调用方负责审计。
+
+返回模型：
+
+- `LoginSessionView`：sessionId、userId、username、deviceType、deviceId、createdAt、lastAccessAt、expiresAt、current。只有 sessionId/userId 必需，其余未知值为 null，不补造设备信息或时间。
+- `sessionId` 是原生高熵会话凭证的带模块前缀单向摘要，仅作管理标识，不能用于鉴权；不返回 Token 或原始 Cookie。相同原生会话跨节点得到同一标识，原生会话 ID 轮换后管理标识也随之变化。
+- `SessionQuery`：userId、deviceType、cursor、pageSize。未指定分页大小使用默认值；超出上限或不支持的过滤条件会报错。
+- `SessionPage`：items、nextCursor、hasMore、可空 total。分页是实时视图，不保证跨页快照；游标只能用于同一实现、同一过滤条件。某页可为空但仍有后续游标。
+- `capabilities()` 返回 `GLOBAL_QUERY`、`DEVICE_TYPE` 等实际支持能力；不能从“接了 Redis”推断一定支持全局枚举。
+
+已失效会话不计数，踢人操作幂等；存储故障会抛异常，不当作空列表或撤销成功。踢人针对既有会话，不是账号封禁，不中断已经执行中的请求，也不能撤销与该会话无关的 Bearer/Basic/Remember-Me 等凭证。
+
+### 自定义与分布式
+
+注册一个 `LoginSessionManager` Bean，默认管理器自动退让，不能用 `@Primary` 在多个会话管理器间选择。关闭统一功能不会删除业务自行声明的 Bean，但 `SecurityUtil.sessions()` 不提供关闭状态的管理入口。
+
+自定义 `ISecurityManager` 默认不自动启用管理，可覆盖 `sessionManagementEnabledByDefault()` 返回 true，或显式配置 `enabled: true`；仍须提供真实的 LoginSessionManager。显式 false 优先于实现默认值。`SessionManagementProperties.getEnabled()` 为 null 表示未配置，按当前安全实现的默认值解析，不等同于 false。仅在 JWT 项目额外提供管理器 Bean，不会使默认 JWT 自动参与会话管理。
+
+只替换查询和管理逻辑时，保留所选模块的原生登录策略与数量限制。若连会话存储、签发和有效性规则一起更换，必须同时适配登录、鉴权、注销；完全自定义时可只依赖 security，实现 `ISecurityManager` 和 `LoginSessionManager`，注入 `SessionManagementProperties` 执行统一限制。不能仅写一个 Redis 会话列表，而让鉴权继续只认本机内存。
+
+分布式节点应共享权威会话存储，并使用一致的用户映射、命名空间、序列化及策略。A 登录后 B 可查，B 撤销后 A/C 的后续校验应失败；存储故障不能降级到本机或放行。第一版复用原生并发控制，不承诺跨节点同时登录时绝不瞬间超限，需要严格上限的业务由自定义实现处理原子性。
+
+不新增统一 Redis 配置或存储/锁 SPI。Sa-Token 使用官方存储插件；Spring 使用 Spring Session 或自定义实现，详见各模块接入文档。
 
 ---
 

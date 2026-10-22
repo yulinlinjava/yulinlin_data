@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Profile;
 
 import javax.sql.DataSource;
 
@@ -32,6 +33,7 @@ public class AdminApplication  {
 	@ConfigurationProperties("spring.datasource") //绑定属性
 	@Bean("dataSource")
 	@Primary
+	@Profile("!dev")
 	public DataSource dataSource() {
 		DruidDataSource druidDataSource = new DruidDataSource();
 

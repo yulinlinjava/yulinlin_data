@@ -29,6 +29,8 @@ yulinlin:
 
 本模块提供**纯无状态 JWT**，没有服务端登录记录、Token 黑名单或按用户撤销能力。注销后客户端应删除 Token，但已发出的 Token 仍可能有效。保持签名密钥和校验配置稳定即可在应用重启后使用未过期 JWT，前提是 `UserStore` 仍允许该用户访问。
 
+JWT 默认不参与统一会话管理，不需要额外配置 `yulinlin.security.session.enabled=false`。显式 false 也允许；显式 true 会在启动时提示不支持，不会因为 Sa-Token/Spring 默认开启而要求 JWT 注册会话管理器。
+
 业务 API Key 与 JWT 签名 secret 是不同凭证。密钥登录只在签发时验证 API Key，JWT 不保存原密钥或独立密钥权限；停用/轮换 API Key 不会自动撤销已签发 JWT。后续权限以 UserStore 为准，建议密钥绑定独立服务账号，不能只在认证时临时缩减同一用户的权限。
 
 需要注销立即失效或管理在线登录状态时，选择[有状态登录](sa-token.md)或[自定义安全实现](extension.md)，不要把纯 JWT 的注销当成服务端撤销。

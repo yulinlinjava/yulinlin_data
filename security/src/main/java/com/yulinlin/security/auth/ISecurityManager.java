@@ -4,6 +4,12 @@ package com.yulinlin.security.auth;
 public interface ISecurityManager {
 
     /**
+     * 未配置 session.enabled 时是否默认启用会话管理。Sa-Token/Spring 为 true，JWT/未知实现为 false。
+     * 返回 true 的自定义实现还必须提供 LoginSessionManager 并接入真实登录/鉴权链路；显式开关优先。
+     */
+    default boolean sessionManagementEnabledByDefault() { return false; }
+
+    /**
      * 统一登录入口，内置参数为 PasswordLogin / ApiKeyLogin / UserIdLogin，支持业务自定义参数。
      * JWT、Sa-Token 委托 LoginAuthenticator；Spring 经 AuthenticationManager 调用认证桥接 Provider。
      * 验证码由业务先校验；不支持的类型或未配置的认证方式必须拒绝，不能降级放行。

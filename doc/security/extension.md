@@ -104,6 +104,7 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 | logout() | 按自身登录协议注销，并清理请求身份；无状态 JWT 不能宣称已撤销旧 Token |
 | getUserDetails(userId) | 查询指定用户，不切换当前身份 |
 | refresh() / refresh(userId) | 刷新用户资料，当前用户时更新当前请求身份；不切换用户，不隐式续期 |
+| sessionManagementEnabledByDefault() | 自定义实现默认返回 false；需要默认启用时覆盖为 true，并提供 LoginSessionManager；显式 session.enabled 配置优先 |
 
 注册形式如下，BusinessSecurityManager、BusinessIdentityService 均为业务自己实现的类，不是框架提供的类：
 

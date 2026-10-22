@@ -7,6 +7,10 @@ import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.wrapper.IWrapper;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.Objects;
+
 
 public class SimpParamsContext implements IParamsContext {
 
@@ -62,12 +66,31 @@ public class SimpParamsContext implements IParamsContext {
 
     @Override
     public String putNumberGetKey(Number value) {
+        Objects.requireNonNull(value, "value");
+        Number scalar = arithmeticScalar(value);
+        if (scalar == null) {
+            // Money/Coin 等 Number 仍需按编码器转换存储单位，原子类也需读取值快照。
+            scalar = arithmeticScalar(dataBuffer.encode(value));
+            if (scalar == null) {
+                throw new IllegalArgumentException("算术参数编码后必须是 JDBC 支持的数字类型："
+                        + value.getClass().getName());
+            }
+        }
         String key = "" + i++;
-        Number scalar = value instanceof java.math.BigInteger integer
-                ? new java.math.BigDecimal(integer) : java.util.Objects.requireNonNull(value, "value");
-        // 数字已经是数据库算术标量，不能再次经过字段存储编码器。
+        // 只绕过原生数字的存储编码，避免 BigDecimal 被转成文本或金额被重复缩放。
         dataBuffer.toMap().put(key, scalar);
         return "#{" + key + "}";
+    }
+
+    private static Number arithmeticScalar(Object value) {
+        if (value == null) return null;
+        Class<?> type = value.getClass();
+        if (type == BigInteger.class) return new BigDecimal((BigInteger) value);
+        if (type == Byte.class || type == Short.class || type == Integer.class || type == Long.class
+                || type == Float.class || type == Double.class || type == BigDecimal.class) {
+            return (Number) value;
+        }
+        return null;
     }
 
     @Override

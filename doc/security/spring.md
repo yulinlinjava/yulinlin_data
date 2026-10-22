@@ -10,6 +10,8 @@
 - [当前用户与权限](#当前用户与权限)
 - [登录与注销](#登录与注销)
 - [查询用户与刷新](#查询用户与刷新)
+- [会话管理接入](#会话管理接入)
+- [分布式 Spring Session](#分布式-spring-session)
 - [使用边界](#使用边界)
 
 ## 最小接入
@@ -79,6 +81,51 @@ SecurityUtil.logout();
 | getAuthType() | 返回可信认证来源，没有该信息时返回 null |
 
 业务权限修改后是否立即生效，取决于项目采用的用户资料刷新策略；不要把 refresh 当成所有请求权限的强制刷新。
+
+## 会话管理接入
+
+[统一会话管理](user.md#会话管理与数量限制)默认开启，数量默认不限。即使没有写 `session.enabled`，也必须在业务已有的有状态过滤器链构建前显式接入：
+
+```java
+@Bean
+SecurityFilterChain securityFilterChain(HttpSecurity http, SpringSessionSupport sessions) throws Exception {
+    // 保留项目已有的认证、授权、CSRF、Remember-Me 等安全配置。
+    // ...
+    sessions.configure(http); // 放在最后，之后不要再覆盖会话策略、注册表或上下文存储
+    return http.build();
+}
+```
+
+`SpringSessionSupport` 位于 `com.yulinlin.security.spring`。它配置原生数量限制、注册表和失效检查，并将该链生成的原生 `SessionAuthenticationStrategy` 提供给统一 MVC 登录入口，避免原生登录与 `SecurityUtil.login` 使用不同策略。默认开启但未接入会启动失败。
+
+升级已有项目时应完成上述接入，或显式设置 `yulinlin.security.session.enabled=false` 保留原有登录与会话策略。关闭时不提供 SpringSessionSupport，不需要调用 configure，也不会关闭原生 Session 或删除业务原有的会话配置。
+
+默认适配一个有状态过滤器链；其他无状态链不接入该组件。需要多个独立 Session 认证体系时使用自定义实现，不重复调用 configure。开启时不要另外注册 SessionAuthenticationStrategy Bean；需要调整 fixation/CSRF 等，在 configure 之前定制该链原生配置。
+
+本地默认使用 `SessionRegistryImpl`，同时提供 `HttpSessionEventPublisher` 清理已销毁会话。Boot 会注册 Listener Bean；非 Boot Servlet 部署需按容器规则注册监听器。原生注销、过期事件必须正常送达，不能把注册表当成独立认证数据库。
+
+默认 `SpringLoginSessionManager` 支持按用户查询、计数、指定/全部踢人，本地注册表还支持全局分页。它通过原生 expireNow 标记会话，后续请求由原生过滤器拒绝；不能直接删注册表记录冒充踢人。
+
+原生 SessionRegistry 不提供 deviceType/deviceId/创建时间/到期时间，默认这些字段为 null，不声明 DEVICE_TYPE 能力。需要设备查询等附加元数据时，注册自定义 LoginSessionManager，并与实际 Session 生命周期保持一致。
+
+## 分布式 Spring Session
+
+引入并配置项目所需的 Spring Session 官方存储实现，再提供对应原生注册表，例如已有带用户索引的仓库时：
+
+```java
+@Bean
+<S extends org.springframework.session.Session>
+org.springframework.security.core.session.SessionRegistry sessionRegistry(
+        org.springframework.session.FindByIndexNameSessionRepository<S> repository) {
+    return new org.springframework.session.security.SpringSessionBackedSessionRegistry<>(repository);
+}
+```
+
+框架自身不依赖 Spring Session/Redis，也不替项目配置连接。检测到 SessionRepository 时不会静默创建本地注册表；缺少配套 SessionRegistry 会启动失败。仅提供任意 SessionRepository 不代表具备用户索引能力。
+
+默认 principal 映射规则：IUserDetails 使用 userId，UserDetails 使用 username，Principal 使用 name，String 直接作为 ID。对于分布式反查，默认使用 userId 作为原生索引名；如果业务 ID 与原生 principal 名称不一致（包括非标准 principal 的 getName/toString 规则），必须提供 SpringSessionPrincipalResolver，分别实现 userId(principal) 与 principal(userId)。自定义 SpringUserMapper 且使用默认管理器时也必须显式提供该映射器。
+
+Spring Session 原生注册表不支持 getAllPrincipals，因此默认分布式适配不声明 GLOBAL_QUERY：按用户查询和踢人可用，全局查询会明确报不支持。需要跨节点全局列表时提供自定义 LoginSessionManager，通过可靠的查询索引实现；不能只枚举当前节点或扫描猜测的 Redis 私有结构。
 
 ## 使用边界
 

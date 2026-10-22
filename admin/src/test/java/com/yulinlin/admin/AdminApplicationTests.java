@@ -7,11 +7,13 @@ import com.yulinlin.admin.rbac.service.UserService;
 import com.yulinlin.common.model.EntityCounter;
 import com.yulinlin.common.model.ModelInsertWrapper;
 import com.yulinlin.common.model.ModelSelectWrapper;
+import com.yulinlin.common.model.ModelUpdateWrapper;
 import com.yulinlin.common.util.SnowflakeUtil;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
+import com.yulinlin.data.lang.util.Money;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,9 +42,13 @@ public class AdminApplicationTests {
     public void go() throws Exception{
 
 
-        NumberEntity number = new NumberEntity();
+        ModelUpdateWrapper.newInstance(UserInfoEntity.class)
+                .inc(UserInfoEntity::getGold, Money.of(1))
+                .eq("1")
+                .execute();
 
 
+        int a = 0;
   /*      number.setId("1");
         number.setNum(1);
 
@@ -56,8 +62,6 @@ public class AdminApplicationTests {
         number.setNum(2);
         EntityCounter.update(number).submit();*/
 
-        Thread.sleep(70*1000);
-        int a = 0;
 
 
     }

@@ -24,6 +24,8 @@ import java.util.function.Supplier;
  * 原生 StpUtil.login/logout 与统一入口共用身份；用户资料仅在请求内缓存，不另建登录记录。
  */
 public final class SaTokenSecurityManager extends AbstractUserSecurityManager implements SecurityContextResolver {
+    @Override public boolean sessionManagementEnabledByDefault() { return true; }
+
     /** 原生可信登录接入时，需在对应 Token-Session 中保存已验证认证方式；不能使用客户端声明。 */
     public static final String AUTH_TYPE_KEY = "yulinlin.authType";
     private final Supplier<StpLogic> logicSupplier;

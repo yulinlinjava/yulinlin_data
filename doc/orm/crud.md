@@ -137,6 +137,10 @@ int restored = ModelUpdateWrapper.newInstance("mysql", DemoUser.class)
         .execute();
 ```
 
+`inc/dec` 的 `Money`、`Coin` 参数会经过 ORM 编码器转换为存储单位：例如 `Money.of(12.5)` 对数据库加减 `1250`，`Coin.of(12.5)` 对数据库加减 `125`，无需业务先调用 `encode()`。普通数字按数据库存储单位处理，例如传入 `1L` 就只加减 `1`，不会根据字段类型自动放大。
+
+普通数字和 `BigDecimal` 保留数字参数，`BigInteger` 精确转换为 `BigDecimal`；`AtomicInteger/AtomicLong/LongAdder/DoubleAdder` 在 SQL 参数生成时取值。其他自定义 `Number` 使用已注册的编码器，编码结果必须是 JDBC 支持的数字，否则在执行 SQL 前报错。此规则针对普通更新 Wrapper，不改变 [EntityCounter](../write-sync/counter.md) 的独立类型限制，也不会自动迁移现有数据库列类型。
+
 集合更新会为每个对象建立更新节点。每个对象都应携带完整非空主键，只设置真正需要修改的字段：
 
 ```java

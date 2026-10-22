@@ -122,7 +122,7 @@ Page<PayChannelEntity> result = ModelSelectWrapper
 
 ### 统一 Controller 响应：`R<E>`
 
-普通 JSON Controller 统一使用 `@PostMapping + @RequestBody`并显式返回 `R<E>`。查询、详情、创建、修改和删除都把参数放进一个 JSON 请求体，启用 `@ApiCrypto`后才能对整个 body 使用同一套明文判定和解密流程；框架不会通过全局 Advice 猜测并自动包装任意返回对象。
+普通 JSON Controller 统一使用 `@PostMapping + @RequestBody`并显式返回 `R<E>`。查询、详情、创建、修改和删除都把参数放进一个 JSON 请求体；配置设备密钥或自定义 CryptoCodec 后，无注解接口也使用全局加解密规则，`@ApiCrypto(false)` 用于兼容明密文请求、保持响应明文。框架不会自动把任意返回对象包装为 R。
 
 ```java
 @PostMapping("/page")
@@ -151,9 +151,9 @@ public R<Void> delete(@RequestBody IdPo po) {
 
 `starter`默认注册最低优先级的异常处理器：参数绑定或 JSON 格式错误返回 `400`；`ApiException`携带 `400–599`标准 HTTP 错误码时使用该状态，其他数值按 `400`处理；`ResponseStatusException`保留 HTTP 状态；未识别异常记录完整服务端日志并返回 `500 + 系统繁忙，请稍后重试`。错误 HTTP 状态和 `R.code`保持一致；业务项目可以提供更高优先级的 `@RestControllerAdvice`覆盖细分规则。不要把 SQL、文件路径、密钥或异常堆栈写进客户端 `msg`。
 
-启用 `@ApiCrypto`且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](../security/README.md)。
+接口按全局规则需要加密且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](../security/README.md)。
 
-业务 JSON 接口不要用 `@GetMapping`、`@PutMapping`、`@PatchMapping`或 `@DeleteMapping`承载加密参数，也不要把敏感条件放在 query/path 中。监控页面、静态资源、健康检查、文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不受这条约束；流式响应不使用 `R`包装，也不进入面向 JSON 的 `@ApiCrypto`响应处理。
+业务 JSON 接口不要用 `@GetMapping`、`@PutMapping`、`@PatchMapping`或 `@DeleteMapping`承载加密参数，也不要把敏感条件放在 query/path 中。监控页面、静态资源、健康检查、文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不受这条约束；流式响应不使用 `R`包装，应配置 `crypto.exclude-paths` 跳过 JSON 加解密流程，不能仅靠不写注解规避。
 
 ## 基础实体选择
 

@@ -52,7 +52,7 @@ public class UserApi {
 - 空数组、空白编码、编码首尾空白或冲突声明会抛出明确的配置异常，不静默放行。
 - 未登录返回 HTTP 401；登录后缺少角色或权限返回 HTTP 403。搭配 starter 时错误响应包装为 R；自定义异常处理器应保留对应状态，不把拒绝访问改成成功。
 - 获取当前用户时发生的数据库、Redis 或业务异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
-- ApiPublic 只影响鉴权，不关闭 ApiCrypto、ApiLimit 或 IP 黑名单。
+- ApiPublic 只影响鉴权，不关闭全局接口加解密、ApiLimit 或 IP 黑名单。公开登录接口也遵守加密配置，需要例外时使用 ApiCrypto(false) 或排除路径。
 
 ### 默认匿名安全管理器
 

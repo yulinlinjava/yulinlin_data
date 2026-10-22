@@ -27,6 +27,7 @@
 - 没有 Codec 时，即使标注 `@ApiCrypto`，框架也不会读取、解密或改写正文，不附加加密响应头；请求和响应按正常接口协议处理，业务可自行实现加解密。
 - 不接管不等于“任意密文都能直接进入 Controller”。业务未提供解密逻辑时，JSON 转换器仍可能拒绝密文。正常 HTTP 大小限制仍由 Web 容器和业务配置负责。
 - 配置了任意一个非空设备密钥，就启用框架加解密；此时 `devices.unknown`、所有已声明设备的 key、CBC IV 和算法配置必须合法，错误配置启动时报错。
+- 存在默认或自定义 Codec 时，无注解的业务接口也参与：全局 `enabled=true` 要求密文请求、加密响应；`@ApiCrypto(false)` 是允许明文请求、返回明文的例外。
 - 已启用默认或自定义 Codec 时，`enabled=false` 仍为兼容模式：请求可明文或密文，响应明文；它不是完全关闭。
 - 登录、权限、限流不受设备密钥有无影响。业务手工创建的加密组件由业务自己管理；这里控制的是框架自动配置。配置在启动时判断，修改后需重启。
 
@@ -40,7 +41,7 @@
 yulinlin:
   security:
     crypto:
-      # true：严格加密；false：兼容明文/密文请求，响应统一明文
+      # 无注解接口也参与；true：全局严格加密；false：兼容解密、响应明文
       enabled: true
 
       # 客户端通过该请求头选择设备密钥
@@ -114,7 +115,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 存在默认或自定义 Codec 时控制严格加密；false 时兼容解密、响应明文；无 Codec 时不接管 |
+| `enabled` | `true` | 存在 Codec 时全局参与，包括无注解接口；true 严格加密，false 兼容解密、响应明文；无 Codec 不接管 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的路径模式，如 `/public/**` |
 | `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
@@ -141,18 +142,21 @@ padding   = PKCS5/PKCS7
 
 ## 接口注解
 
-需要框架加密的业务接口先配置设备密钥或提供自定义 CryptoCodec，再使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。存在 Codec 时全局 `enabled` 控制严格加密模式：
+配置设备密钥或提供自定义 CryptoCodec 后，全局 `enabled` 决定默认行为，**无注解接口也参与加解密**。不需要每个 Controller 都标注 `@ApiCrypto`；注解用于声明例外，可放在类或具体方法上，方法配置优先于类配置：
 
 | 全局配置 | 接口注解 | 请求 | 响应 |
 | --- | --- | --- | --- |
-| 无自定义 Codec，也无设备密钥 | 任意注解 | 框架不处理 | 框架不处理 |
-| 有 Codec，`enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 整个 JSON 加密后的文本密文，默认 AES 为 Base64 | 加密 |
+| 无自定义 Codec，也无设备密钥 | 任意注解或无注解 | 框架不处理 | 框架不处理 |
+| 有 Codec，`enabled=true` | 无注解 / `@ApiCrypto` / `@ApiCrypto(true)` | 要求整个 JSON 加密后的文本密文，默认 AES 为 Base64 | 加密 |
 | 有 Codec，`enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
-| 有 Codec，`enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
-| 任意值 | 没有注解 | security 完全不处理 | 明文 |
+| 有 Codec，`enabled=false` | 任意注解或无注解 | 普通 JSON 或整个 body 密文都支持 | 明文 |
 | 任意值 | 命中 `exclude-paths` | security 完全不处理 | 明文 |
 
 存在 Codec 时，`enabled=false` 是兼容模式，仍能解密尚未升级的旧客户端请求；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。完全不让框架处理时，不提供自定义 Codec 且移除所有设备密钥，或将对应接口加入排除路径。
+
+类标注 `@ApiCrypto(false)` 时，该类未单独标注的方法也采用兼容请求、明文响应；方法可用 `@ApiCrypto(true)` 恢复全局严格行为，但不能覆盖全局 `enabled=false`。排除路径优先于所有注解。
+
+**升级注意：去掉注解不再表示跳过处理。** 已配置密钥或自定义 Codec 的项目，开启全局加密后，原本无注解的接口也会要求密文并加密返回。迁移阶段可先设置 `enabled=false`，或对明确需要明文返回的接口添加 `@ApiCrypto(false)`；文件、监控及第三方回调等不走该协议的路径要加入排除列表。
 
 业务 JSON 接口推荐统一使用 `@PostMapping + @RequestBody`。接口加密只处理 body，不加密 query 参数和 path 变量。
 
@@ -168,7 +172,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class UserController {
 
-    @ApiCrypto
+    // 无注解：跟随全局配置；enabled=true 时请求和返回都加密。
     @PostMapping("/api/user/detail")
     public R<UserVO> detail(@RequestBody UserDetailPo request) {
         return R.ok(userService.detail(request.getId()));
@@ -350,7 +354,7 @@ yulinlin:
 
 默认列表只有 `/monitor/**`。配置新列表会替换默认列表，因此使用监控模块时必须继续保留它。不要提供由客户端控制的“跳过加密”请求头，否则业务接口可能被绕过。
 
-文件上传、文件下载、视频流、SSE、WebSocket、静态资源和健康检查不适合本模块的 JSON 接口加密，应保持无 `@ApiCrypto`，必要时加入排除路径。
+文件上传、文件下载、视频流、SSE、WebSocket、静态资源、健康检查及不使用此加密协议的第三方回调，应将实际路径加入排除列表。无注解不再跳过处理；`@ApiCrypto(false)` 也不是文件接口的完整排除方式，因为它仍会尝试解密非 JSON 正文。
 
 ## 可选 AES-GCM
 

@@ -35,6 +35,78 @@ class CryptoCodecTest {
     private final RecordingCodec codec = new RecordingCodec();
 
     @Test
+    void globalEncryptionIncludesUnannotatedEndpoints() throws Exception {
+        CryptoRequestBodyAdvice requests = requestAdvice(codec);
+        CryptoResponseBodyAdvice responses = responseAdvice(codec);
+        assertTrue(requests.supports(parameter("plain", 0), String.class,
+                MappingJackson2HttpMessageConverter.class));
+        assertTrue(responses.supports(parameter("plain", -1), MappingJackson2HttpMessageConverter.class));
+        assertEquals("{\"ok\":true}", read(requests, "custom-cipher", "web", "plain"));
+        assertEquals(400, assertThrows(ResponseStatusException.class,
+                () -> read(requests, "{}", "web", "plain")).getStatusCode().value());
+
+        DataResponse body = new DataResponse("无注解接口");
+        assertSame(body, write(responses, body, request("/api/plain", "web"),
+                new HttpHeaders(), parameter("plain", -1)));
+        assertEquals("custom-cipher", body.getData());
+        assertTrue(body.crypt);
+        assertEquals("无注解接口", new String(codec.plaintext, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void globalCompatibilityIncludesEveryAnnotationChoice() throws Exception {
+        properties.setEnabled(false);
+        CryptoRequestBodyAdvice requests = requestAdvice(codec);
+        CryptoResponseBodyAdvice responses = responseAdvice(codec);
+        for (String method : new String[]{"plain", "strict", "compatible"}) {
+            codec.ciphertext = null;
+            codec.plaintext = null;
+            assertTrue(requests.supports(parameter(method, 0), String.class,
+                    MappingJackson2HttpMessageConverter.class));
+            assertFalse(responses.supports(parameter(method, -1), MappingJackson2HttpMessageConverter.class));
+            assertEquals("{}", read(requests, "{}", "web", method));
+            assertNull(codec.ciphertext);
+            assertEquals("{\"ok\":true}", read(requests, "cipher", "web", method));
+            DataResponse body = new DataResponse("保持明文");
+            assertSame(body, write(responses, body, request("/api/plain", "web"),
+                    new HttpHeaders(), parameter(method, -1)));
+            assertEquals("保持明文", body.getData());
+            assertFalse(body.crypt);
+            assertNull(codec.plaintext);
+        }
+    }
+
+    @Test
+    void methodExceptionsOverrideClassSettingsButNotGlobalDisable() throws Exception {
+        assertEndpointMode(StrictClassEndpoint.class, "plain", true);
+        assertEndpointMode(StrictClassEndpoint.class, "compatible", false);
+        assertEndpointMode(CompatibleClassEndpoint.class, "plain", false);
+        assertEndpointMode(CompatibleClassEndpoint.class, "strict", true);
+        properties.setEnabled(false);
+        assertEndpointMode(CompatibleClassEndpoint.class, "strict", false);
+    }
+
+    private void assertEndpointMode(Class<?> endpoint, String method, boolean strict) throws Exception {
+        MethodParameter input = parameter(endpoint, method, 0);
+        MethodParameter output = parameter(endpoint, method, -1);
+        CryptoRequestBodyAdvice requests = requestAdvice(codec);
+        CryptoResponseBodyAdvice responses = responseAdvice(codec);
+        assertTrue(requests.supports(input, String.class, MappingJackson2HttpMessageConverter.class));
+        assertEquals(strict, responses.supports(output, MappingJackson2HttpMessageConverter.class));
+        if (strict) {
+            assertEquals(400, assertThrows(ResponseStatusException.class,
+                    () -> read(requests, "{}", "web", input)).getStatusCode().value());
+        } else {
+            assertEquals("{}", read(requests, "{}", "web", input));
+        }
+        assertEquals("{\"ok\":true}", read(requests, "cipher", "web", input));
+        DataResponse body = new DataResponse("正文");
+        assertSame(body, write(responses, body, request("/api/value", "web"), new HttpHeaders(), output));
+        assertEquals(strict, body.crypt);
+        assertEquals(strict ? "custom-cipher" : "正文", body.getData());
+    }
+
+    @Test
     void customCodecWorksWithoutKeysAndReceivesUnmodifiedCiphertext() throws Exception {
         assertFalse(properties.hasDeviceKeys());
         CryptoRequestBodyAdvice advice = requestAdvice(codec);
@@ -73,6 +145,12 @@ class CryptoCodecTest {
         assertNull(codec.ciphertext);
         assertFalse(responseAdvice(codec).supports(parameter("compatible", -1),
                 MappingJackson2HttpMessageConverter.class));
+        assertEquals("{\"ok\":true}", read(requestAdvice(codec), "cipher", "web", "compatible"));
+        DataResponse body = new DataResponse("例外接口返回明文");
+        assertSame(body, write(responseAdvice(codec), body, request("/api/value", "web"),
+                new HttpHeaders(), parameter("compatible", -1)));
+        assertFalse(body.crypt);
+        assertEquals("例外接口返回明文", body.getData());
     }
 
     @Test
@@ -140,6 +218,9 @@ class CryptoCodecTest {
         assertFalse(noRequestCodec.supports(parameter("strict", 0), String.class,
                 MappingJackson2HttpMessageConverter.class));
         assertFalse(noResponseCodec.supports(parameter("strict", -1), MappingJackson2HttpMessageConverter.class));
+        assertFalse(noRequestCodec.supports(parameter("plain", 0), String.class,
+                MappingJackson2HttpMessageConverter.class));
+        assertFalse(noResponseCodec.supports(parameter("plain", -1), MappingJackson2HttpMessageConverter.class));
         HttpInputMessage input = mock(HttpInputMessage.class);
         assertSame(input, noRequestCodec.beforeBodyRead(input, parameter("strict", 0), String.class,
                 MappingJackson2HttpMessageConverter.class));
@@ -147,10 +228,10 @@ class CryptoCodecTest {
 
         Object original = new Object();
         assertSame(original, write(responseAdvice(codec), original,
-                request("/monitor/data", "web"), new HttpHeaders()));
+                request("/monitor/data", "web"), new HttpHeaders(), parameter("plain", -1)));
         assertNull(codec.plaintext);
         ServerHttpRequest excluded = request("/monitor/data", "web");
-        assertSame(excluded, requestAdvice(codec).beforeBodyRead(excluded, parameter("strict", 0),
+        assertSame(excluded, requestAdvice(codec).beforeBodyRead(excluded, parameter("plain", 0),
                 String.class, MappingJackson2HttpMessageConverter.class));
         verify(excluded, never()).getBody();
     }
@@ -165,10 +246,10 @@ class CryptoCodecTest {
         String json = "{\"enabled\":false}";
         String encrypted = defaults.encrypt("web", json.getBytes(StandardCharsets.UTF_8));
         String transported = "\"" + encrypted.replace('+', ' ') + "\"\r\n";
-        assertEquals(json, read(requestAdvice(defaults), transported, "web", "strict"));
+        assertEquals(json, read(requestAdvice(defaults), transported, "web", "plain"));
         HttpHeaders headers = new HttpHeaders();
         Object response = write(responseAdvice(defaults), Map.of("enabled", false),
-                request("/api/value", "web"), headers);
+                request("/api/value", "web"), headers, parameter("plain", -1));
         assertEquals("unknown", headers.getFirst("Device-Type"));
         assertEquals("AES/CBC/PKCS5Padding", headers.getFirst(CryptoResponseBodyAdvice.CRYPTO_HEADER));
         assertFalse(new ObjectMapper().readTree(defaults.decrypt("unknown", (String) response))
@@ -185,18 +266,27 @@ class CryptoCodecTest {
     }
 
     private String read(CryptoRequestBodyAdvice advice, String body, String device, String method) throws Exception {
+        return read(advice, body, device, parameter(method, 0));
+    }
+
+    private String read(CryptoRequestBodyAdvice advice, String body, String device, MethodParameter inputType) throws Exception {
         MockHttpInputMessage input = new MockHttpInputMessage(body.getBytes(StandardCharsets.UTF_8));
         if (device != null) input.getHeaders().set("Device-Type", device);
-        HttpInputMessage decoded = advice.beforeBodyRead(input, parameter(method, 0), String.class,
+        HttpInputMessage decoded = advice.beforeBodyRead(input, inputType, String.class,
                 MappingJackson2HttpMessageConverter.class);
         return new String(decoded.getBody().readAllBytes(), StandardCharsets.UTF_8);
     }
 
     private Object write(CryptoResponseBodyAdvice advice, Object body,
                          ServerHttpRequest request, HttpHeaders headers) throws Exception {
+        return write(advice, body, request, headers, parameter("strict", -1));
+    }
+
+    private Object write(CryptoResponseBodyAdvice advice, Object body,
+                         ServerHttpRequest request, HttpHeaders headers, MethodParameter returnType) {
         ServerHttpResponse response = mock(ServerHttpResponse.class);
         when(response.getHeaders()).thenReturn(headers);
-        return advice.beforeBodyWrite(body, parameter("strict", -1), MediaType.APPLICATION_JSON,
+        return advice.beforeBodyWrite(body, returnType, MediaType.APPLICATION_JSON,
                 MappingJackson2HttpMessageConverter.class, request, response);
     }
 
@@ -210,12 +300,29 @@ class CryptoCodecTest {
     }
 
     private static MethodParameter parameter(String method, int index) throws Exception {
-        return new MethodParameter(Endpoint.class.getDeclaredMethod(method, String.class), index);
+        return parameter(Endpoint.class, method, index);
+    }
+
+    private static MethodParameter parameter(Class<?> endpoint, String method, int index) throws Exception {
+        return new MethodParameter(endpoint.getDeclaredMethod(method, String.class), index);
     }
 
     private static class Endpoint {
+        public String plain(String body) { return body; }
         @ApiCrypto public String strict(String body) { return body; }
         @ApiCrypto(false) public String compatible(String body) { return body; }
+    }
+
+    @ApiCrypto
+    private static class StrictClassEndpoint {
+        public String plain(String body) { return body; }
+        @ApiCrypto(false) public String compatible(String body) { return body; }
+    }
+
+    @ApiCrypto(false)
+    private static class CompatibleClassEndpoint {
+        public String plain(String body) { return body; }
+        @ApiCrypto public String strict(String body) { return body; }
     }
 
     private static class DataResponse implements CryptoDataResponse {

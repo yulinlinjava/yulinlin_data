@@ -40,6 +40,7 @@
 - 可信业务按 ID 登录使用 `UserIdLogin`，不能直接接受客户端任意用户 ID。
 - 自定义 `LoginInterceptor` Bean 会自动替换默认拦截器，不需要额外启用开关或重复注册。
 - 没有自定义 CryptoCodec 且不配置设备密钥时，不处理接口加解密；登录、权限和限流仍可单独使用。自定义实现不要求 AES 密钥，详见[加密扩展](crypto-codec.md)。
+- 存在 Codec 时无注解接口也参与全局加解密；ApiCrypto(false) 仅使该接口兼容请求、返回明文。要完全跳过，配置 exclude-paths，见[规则表](crypto.md#接口注解)。
 
 ## JWT 与 Sa-Token 如何选择
 

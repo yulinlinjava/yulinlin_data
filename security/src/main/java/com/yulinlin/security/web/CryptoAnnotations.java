@@ -9,6 +9,13 @@ final class CryptoAnnotations {
     private CryptoAnnotations() {
     }
 
+    /** 全局开启时默认严格加密；方法/类上的 false 为例外，方法配置优先。 */
+    static boolean encryptionRequired(MethodParameter parameter, boolean enabled) {
+        if (!enabled) return false;
+        ApiCrypto annotation = find(parameter);
+        return annotation == null || annotation.value();
+    }
+
     static ApiCrypto find(MethodParameter parameter) {
         if (parameter.getMethod() != null) {
             ApiCrypto methodAnnotation = AnnotatedElementUtils.findMergedAnnotation(

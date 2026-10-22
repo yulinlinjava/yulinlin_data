@@ -11,7 +11,7 @@ import java.util.Map;
 @ConfigurationProperties("yulinlin.security.crypto")
 public class SecurityCryptoProperties {
 
-    /** Enables strict encrypted requests and encrypted responses on @ApiCrypto(true) endpoints. */
+    /** 有 CryptoCodec 时全局要求密文请求并加密响应；ApiCrypto(false) 可例外。false 时仍兼容解密。 */
     private boolean enabled = true;
 
     /** Request header used to select the device key. */

@@ -32,7 +32,7 @@ Schema 通过启动扫描和显式 autoSchema=true 参与；一张物理表只�
 
 LoginAuthenticator.authenticate 校验其对应凭证和状态，UserStore.load 按稳定 userId 加载安全用户，二者可由同一个业务 Bean 实现；不要将密码/API Key 放进用户 DTO。JWT 纯无状态、注销不撤销；JWT 必须签名携带 deviceType/authType，缺失不兼容。Sa-Token 有状态，注销当前登录会使对应凭证失效，重启保留状态需要持久化配置。外部身份若无可信来源则 authType 为 null，不猜测；会话登录可以没有可返回的 Token。登录模块只选一个，自定义 LoginInterceptor Bean 自动替换并注册，无启用开关。Admin 案例使用 LoginAuthenticator<PasswordLogin> + UserStore，认证名 password，Controller 调用 login(new PasswordLogin(...))，不开放任意 ID 登录接口。
 
-接口加密：自定义 CryptoCodec Bean 优先，不要求 AES 密钥；没有自定义实现时才按 crypto.devices 创建设备 AES。两者都没有时不处理请求和响应，JWT 密钥不触发报文加密。默认 AES 配置必须合法且包含 unknown；自定义实现自行选择设备密钥。enabled=false 只表示兼容解密、响应明文，不是完全关闭。没有 Codec 时 ApiCrypto 注解不强制加密。CryptoCodec 只处理字节与文本密文，不负责 JSON 或 R 包装；默认 AES 的 Base64 修正规则不作用于自定义密文。
+接口加密：自定义 CryptoCodec Bean 优先，不要求 AES 密钥；没有自定义实现时才按 crypto.devices 创建设备 AES。两者都没有时不处理请求和响应，JWT 密钥不触发报文加密。默认 AES 配置必须合法且包含 unknown；自定义实现自行选择设备密钥。存在 Codec 时，无注解接口也参与：enabled=true 全局要求密文请求、加密响应；ApiCrypto(false) 是兼容请求、明文响应的例外，方法优先于类；enabled=false 对所有接口兼容解密、返回明文，不是完全关闭。exclude-paths 优先，文件/监控/不走本协议的回调等必须排除。没有 Codec 时注解不强制加密。CryptoCodec 只处理字节与文本密文，不负责 JSON 或 R 包装；默认 AES 的 Base64 修正规则不作用于自定义密文。
 
 默认只做源码/文档修改和静态阅读；除非当前任务明确授权，不执行编译、打包、单元测试、JMH、Spring YAML 属性绑定测试或 git diff --check。历史报告不代表当前改动已验证。
 

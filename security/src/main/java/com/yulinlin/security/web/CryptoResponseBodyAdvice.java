@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.data.lang.security.CryptoDataResponse;
 import com.yulinlin.security.SecurityCryptoProperties;
-import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.crypto.CryptoCodec;
 import com.yulinlin.security.crypto.CryptoException;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
@@ -74,9 +73,7 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
     public boolean supports(
             MethodParameter returnType,
             Class<? extends HttpMessageConverter<?>> converterType) {
-        if (!configured) return false;
-        ApiCrypto annotation = CryptoAnnotations.find(returnType);
-        return enabled && annotation != null && annotation.value()
+        return configured && CryptoAnnotations.encryptionRequired(returnType, enabled)
                 && !pathExclusions.isCurrentRequestExcluded();
     }
 
@@ -88,10 +85,11 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             Class<? extends HttpMessageConverter<?>> selectedConverterType,
             ServerHttpRequest request,
             ServerHttpResponse response) {
-        if (!configured || !enabled || pathExclusions.isExcluded(request)) return body;
+        if (!configured || !CryptoAnnotations.encryptionRequired(returnType, enabled)
+                || pathExclusions.isExcluded(request)) return body;
         boolean stringResponse = StringHttpMessageConverter.class.isAssignableFrom(selectedConverterType);
         if (!stringResponse && !isJson(selectedContentType)) {
-            throw new CryptoException("@ApiCrypto response only supports JSON or String response bodies");
+            throw new CryptoException("接口加密仅支持 JSON 或字符串响应，请将文件等接口加入 yulinlin.security.crypto.exclude-paths");
         }
         if (body instanceof CryptoDataResponse dataResponse && dataResponse.getData() == null) {
             return body;

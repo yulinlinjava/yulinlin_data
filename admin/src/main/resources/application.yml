@@ -87,8 +87,9 @@ yulinlin:
       secret: ${ADMIN_JWT_SECRET}
       issuer: yulinlin-admin
       ttl: 2h
-    # 不配置 crypto.devices 密钥，框架不接管接口加解密；登录、权限和限流照常工作。
+    # 不提供 CryptoCodec 且不配置 crypto.devices 时不接管加解密；登录、权限和限流照常工作。
     # 接入框架加密时，再配置双方约定的设备密钥（含 unknown）和 CBC IV。
+    # 全局开启后无注解接口也加解密；ApiCrypto(false) 是例外，文件等路径使用 exclude-paths。
     limit:
       enabled: true
 

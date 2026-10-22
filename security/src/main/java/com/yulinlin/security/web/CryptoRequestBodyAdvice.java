@@ -1,7 +1,6 @@
 package com.yulinlin.security.web;
 
 import com.yulinlin.security.SecurityCryptoProperties;
-import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.crypto.CryptoCodec;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.core.MethodParameter;
@@ -65,9 +64,8 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
             MethodParameter methodParameter,
             Type targetType,
             Class<? extends HttpMessageConverter<?>> converterType) {
-        if (!configured) return false;
-        ApiCrypto annotation = CryptoAnnotations.find(methodParameter);
-        return annotation != null && !pathExclusions.isCurrentRequestExcluded();
+        // 兼容模式也必须读取密文，无注解并不表示跳过解密。
+        return configured && !pathExclusions.isCurrentRequestExcluded();
     }
 
     @Override
@@ -79,8 +77,7 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
         if (!configured || pathExclusions.isExcluded(inputMessage)) return inputMessage;
         byte[] requestBody = StreamUtils.copyToByteArray(inputMessage.getBody());
         checkSize(requestBody.length);
-        ApiCrypto annotation = CryptoAnnotations.find(parameter);
-        boolean encryptionRequired = enabled && annotation != null && annotation.value();
+        boolean encryptionRequired = CryptoAnnotations.encryptionRequired(parameter, enabled);
 
         String content = new String(requestBody, StandardCharsets.UTF_8);
         String inspectedContent = content.strip();

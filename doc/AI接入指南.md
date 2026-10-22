@@ -3857,6 +3857,7 @@ Ehcache 默认使用 JSON 字节保存结果，Redis 默认使用 Smile 字节�
 - 可信业务按 ID 登录使用 `UserIdLogin`，不能直接接受客户端任意用户 ID。
 - 自定义 `LoginInterceptor` Bean 会自动替换默认拦截器，不需要额外启用开关或重复注册。
 - 没有自定义 CryptoCodec 且不配置设备密钥时，不处理接口加解密；登录、权限和限流仍可单独使用。自定义实现不要求 AES 密钥，详见[加密扩展](#ai-security-crypto-codec)。
+- 存在 Codec 时无注解接口也参与全局加解密；ApiCrypto(false) 仅使该接口兼容请求、返回明文。要完全跳过，配置 exclude-paths，见[规则表](#ai-security-crypto-接口注解)。
 
 <a id="ai-security-modules-jwt-与-sa-token-如何选择"></a>
 ### JWT 与 Sa-Token 如何选择
@@ -3917,6 +3918,7 @@ JWT 用户重新启用后，其尚未过期的旧 Token 可能继续使用。删
 - 没有 Codec 时，即使标注 `@ApiCrypto`，框架也不会读取、解密或改写正文，不附加加密响应头；请求和响应按正常接口协议处理，业务可自行实现加解密。
 - 不接管不等于“任意密文都能直接进入 Controller”。业务未提供解密逻辑时，JSON 转换器仍可能拒绝密文。正常 HTTP 大小限制仍由 Web 容器和业务配置负责。
 - 配置了任意一个非空设备密钥，就启用框架加解密；此时 `devices.unknown`、所有已声明设备的 key、CBC IV 和算法配置必须合法，错误配置启动时报错。
+- 存在默认或自定义 Codec 时，无注解的业务接口也参与：全局 `enabled=true` 要求密文请求、加密响应；`@ApiCrypto(false)` 是允许明文请求、返回明文的例外。
 - 已启用默认或自定义 Codec 时，`enabled=false` 仍为兼容模式：请求可明文或密文，响应明文；它不是完全关闭。
 - 登录、权限、限流不受设备密钥有无影响。业务手工创建的加密组件由业务自己管理；这里控制的是框架自动配置。配置在启动时判断，修改后需重启。
 
@@ -3931,7 +3933,7 @@ JWT 用户重新启用后，其尚未过期的旧 Token 可能继续使用。删
 yulinlin:
   security:
     crypto:
-      # true：严格加密；false：兼容明文/密文请求，响应统一明文
+      # 无注解接口也参与；true：全局严格加密；false：兼容解密、响应明文
       enabled: true
 
       # 客户端通过该请求头选择设备密钥
@@ -4006,7 +4008,7 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 存在默认或自定义 Codec 时控制严格加密；false 时兼容解密、响应明文；无 Codec 时不接管 |
+| `enabled` | `true` | 存在 Codec 时全局参与，包括无注解接口；true 严格加密，false 兼容解密、响应明文；无 Codec 不接管 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的路径模式，如 `/public/**` |
 | `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
@@ -4034,18 +4036,21 @@ padding   = PKCS5/PKCS7
 <a id="ai-security-crypto-接口注解"></a>
 ### 接口注解
 
-需要框架加密的业务接口先配置设备密钥或提供自定义 CryptoCodec，再使用 `@ApiCrypto`。它可以放在 Controller 类或具体方法上，方法配置优先于类配置。存在 Codec 时全局 `enabled` 控制严格加密模式：
+配置设备密钥或提供自定义 CryptoCodec 后，全局 `enabled` 决定默认行为，**无注解接口也参与加解密**。不需要每个 Controller 都标注 `@ApiCrypto`；注解用于声明例外，可放在类或具体方法上，方法配置优先于类配置：
 
 | 全局配置 | 接口注解 | 请求 | 响应 |
 | --- | --- | --- | --- |
-| 无自定义 Codec，也无设备密钥 | 任意注解 | 框架不处理 | 框架不处理 |
-| 有 Codec，`enabled=true` | `@ApiCrypto` / `@ApiCrypto(true)` | 整个 JSON 加密后的文本密文，默认 AES 为 Base64 | 加密 |
+| 无自定义 Codec，也无设备密钥 | 任意注解或无注解 | 框架不处理 | 框架不处理 |
+| 有 Codec，`enabled=true` | 无注解 / `@ApiCrypto` / `@ApiCrypto(true)` | 要求整个 JSON 加密后的文本密文，默认 AES 为 Base64 | 加密 |
 | 有 Codec，`enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
-| 有 Codec，`enabled=false` | `@ApiCrypto(true/false)` | 普通 JSON 或整个 body 密文都支持 | 明文 |
-| 任意值 | 没有注解 | security 完全不处理 | 明文 |
+| 有 Codec，`enabled=false` | 任意注解或无注解 | 普通 JSON 或整个 body 密文都支持 | 明文 |
 | 任意值 | 命中 `exclude-paths` | security 完全不处理 | 明文 |
 
 存在 Codec 时，`enabled=false` 是兼容模式，仍能解密尚未升级的旧客户端请求；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。完全不让框架处理时，不提供自定义 Codec 且移除所有设备密钥，或将对应接口加入排除路径。
+
+类标注 `@ApiCrypto(false)` 时，该类未单独标注的方法也采用兼容请求、明文响应；方法可用 `@ApiCrypto(true)` 恢复全局严格行为，但不能覆盖全局 `enabled=false`。排除路径优先于所有注解。
+
+**升级注意：去掉注解不再表示跳过处理。** 已配置密钥或自定义 Codec 的项目，开启全局加密后，原本无注解的接口也会要求密文并加密返回。迁移阶段可先设置 `enabled=false`，或对明确需要明文返回的接口添加 `@ApiCrypto(false)`；文件、监控及第三方回调等不走该协议的路径要加入排除列表。
 
 业务 JSON 接口推荐统一使用 `@PostMapping + @RequestBody`。接口加密只处理 body，不加密 query 参数和 path 变量。
 
@@ -4061,7 +4066,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class UserController {
 
-    @ApiCrypto
+    // 无注解：跟随全局配置；enabled=true 时请求和返回都加密。
     @PostMapping("/api/user/detail")
     public R<UserVO> detail(@RequestBody UserDetailPo request) {
         return R.ok(userService.detail(request.getId()));
@@ -4247,7 +4252,7 @@ yulinlin:
 
 默认列表只有 `/monitor/**`。配置新列表会替换默认列表，因此使用监控模块时必须继续保留它。不要提供由客户端控制的“跳过加密”请求头，否则业务接口可能被绕过。
 
-文件上传、文件下载、视频流、SSE、WebSocket、静态资源和健康检查不适合本模块的 JSON 接口加密，应保持无 `@ApiCrypto`，必要时加入排除路径。
+文件上传、文件下载、视频流、SSE、WebSocket、静态资源、健康检查及不使用此加密协议的第三方回调，应将实际路径加入排除列表。无注解不再跳过处理；`@ApiCrypto(false)` 也不是文件接口的完整排除方式，因为它仍会尝试解密非 JSON 正文。
 
 <a id="ai-security-crypto-可选-aes-gcm"></a>
 ### 可选 AES-GCM
@@ -4400,14 +4405,14 @@ public CryptoCodec cryptoCodec(BusinessCryptoService service) {
 yulinlin:
   security:
     crypto:
-      enabled: true
+      enabled: true # 无注解接口也默认要求密文请求、加密响应
       device-header: Device-Type
       exclude-paths:
         - /monitor/**
       max-request-size: 1MB
 ```
 
-自定义实现仍使用 @ApiCrypto。enabled=false 或 @ApiCrypto(false) 表示请求兼容明文/密文、响应明文，不是禁用解密；排除路径则请求和响应都不处理。没有注解的接口不参与。
+自定义实现与默认 AES 使用相同的全局规则：无需注解，enabled=true 时默认要求密文请求、加密响应。@ApiCrypto(false) 是请求兼容明文/密文、响应明文的例外；方法设置优先于类设置。enabled=false 时，所有接口（无注解或任意注解）都兼容明密文请求、返回明文，不是禁用解密。排除路径始终请求和响应都不处理，文件、监控及不走该协议的回调接口应配置排除，详见[规则表](#ai-security-crypto-接口注解)。
 
 deviceType 已去除首尾空白并转换为小写，只接受 1～32 位字母、数字、下划线或短横线。请求头缺失、空白或格式非法时传入 unknown；其他合法设备名原样传给自定义实现，不根据 YAML 设备列表过滤。业务决定未知设备使用哪组密钥或拒绝请求，设备类型不是身份凭证。
 
@@ -5465,7 +5470,7 @@ public class UserApi {
 - 空数组、空白编码、编码首尾空白或冲突声明会抛出明确的配置异常，不静默放行。
 - 未登录返回 HTTP 401；登录后缺少角色或权限返回 HTTP 403。搭配 starter 时错误响应包装为 R；自定义异常处理器应保留对应状态，不把拒绝访问改成成功。
 - 获取当前用户时发生的数据库、Redis 或业务异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
-- ApiPublic 只影响鉴权，不关闭 ApiCrypto、ApiLimit 或 IP 黑名单。
+- ApiPublic 只影响鉴权，不关闭全局接口加解密、ApiLimit 或 IP 黑名单。公开登录接口也遵守加密配置，需要例外时使用 ApiCrypto(false) 或排除路径。
 
 <a id="ai-security-authorization-默认匿名安全管理器"></a>
 #### 默认匿名安全管理器
@@ -6954,7 +6959,7 @@ Page<PayChannelEntity> result = ModelSelectWrapper
 <a id="ai-practice-models-统一-controller-响应r"></a>
 #### 统一 Controller 响应：`R<E>`
 
-普通 JSON Controller 统一使用 `@PostMapping + @RequestBody`并显式返回 `R<E>`。查询、详情、创建、修改和删除都把参数放进一个 JSON 请求体，启用 `@ApiCrypto`后才能对整个 body 使用同一套明文判定和解密流程；框架不会通过全局 Advice 猜测并自动包装任意返回对象。
+普通 JSON Controller 统一使用 `@PostMapping + @RequestBody`并显式返回 `R<E>`。查询、详情、创建、修改和删除都把参数放进一个 JSON 请求体；配置设备密钥或自定义 CryptoCodec 后，无注解接口也使用全局加解密规则，`@ApiCrypto(false)` 用于兼容明密文请求、保持响应明文。框架不会自动把任意返回对象包装为 R。
 
 ```java
 @PostMapping("/page")
@@ -6983,9 +6988,9 @@ public R<Void> delete(@RequestBody IdPo po) {
 
 `starter`默认注册最低优先级的异常处理器：参数绑定或 JSON 格式错误返回 `400`；`ApiException`携带 `400–599`标准 HTTP 错误码时使用该状态，其他数值按 `400`处理；`ResponseStatusException`保留 HTTP 状态；未识别异常记录完整服务端日志并返回 `500 + 系统繁忙，请稍后重试`。错误 HTTP 状态和 `R.code`保持一致；业务项目可以提供更高优先级的 `@RestControllerAdvice`覆盖细分规则。不要把 SQL、文件路径、密钥或异常堆栈写进客户端 `msg`。
 
-启用 `@ApiCrypto`且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](security/README.md)。
+接口按全局规则需要加密且返回 `R`时，只替换并加密 `data`，随后设置 `crypt=true`；`code`、`ok`、`msg`和 `timestamp`保持明文。`data == null`时跳过加密并保持 `crypt=false`，错误提示因此无需客户端先解密。详细协议见[接口安全](security/README.md)。
 
-业务 JSON 接口不要用 `@GetMapping`、`@PutMapping`、`@PatchMapping`或 `@DeleteMapping`承载加密参数，也不要把敏感条件放在 query/path 中。监控页面、静态资源、健康检查、文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不受这条约束；流式响应不使用 `R`包装，也不进入面向 JSON 的 `@ApiCrypto`响应处理。
+业务 JSON 接口不要用 `@GetMapping`、`@PutMapping`、`@PatchMapping`或 `@DeleteMapping`承载加密参数，也不要把敏感条件放在 query/path 中。监控页面、静态资源、健康检查、文件下载、图片/视频/音频流、SSE、重定向以及直接写 `HttpServletResponse`的接口不受这条约束；流式响应不使用 `R`包装，应配置 `crypto.exclude-paths` 跳过 JSON 加解密流程，不能仅靠不写注解规避。
 
 <a id="ai-practice-models-基础实体选择"></a>
 ### 基础实体选择
@@ -7530,7 +7535,7 @@ yulinlin:
 
 RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](#ai-datasources-routing)和 [Schema](#ai-datasources-schema) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
-Admin 默认不提供 CryptoCodec，也不配置设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 此时不会触发正文处理，可以直接发送普通 JSON。要接入框架加密，按[接口加密](#ai-security-crypto)配置设备密钥（含 `unknown`）和 CBC IV，或提供[自定义 CryptoCodec](#ai-security-crypto-codec)，启用 `crypto.enabled`，并将对应 Controller 改为 `@ApiCrypto`。存在 Codec 且 `enabled=false` 时仍会兼容解密，不能把它当作完全关闭。报文加密不替代 HTTPS。
+Admin 默认不提供 CryptoCodec，也不配置设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 此时不会触发正文处理，可以直接发送普通 JSON。要接入框架加密，按[接口加密](#ai-security-crypto)配置设备密钥（含 `unknown`）和 CBC IV，或提供[自定义 CryptoCodec](#ai-security-crypto-codec)，启用 `crypto.enabled`，并移除对应 Controller 的 `@ApiCrypto(false)`（或改为 true），即可跟随全局严格加密。无注解接口也参与；保留 false 的接口兼容请求并返回明文。全局 `enabled=false` 仍兼容解密，不是完全关闭。文件、监控等接口配置排除路径；报文加密不替代 HTTPS。
 
 登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
 

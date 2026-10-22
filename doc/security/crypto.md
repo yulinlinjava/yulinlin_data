@@ -397,7 +397,7 @@ GCM 使用以下 UTF-8 内容作为 AAD，客户端必须完全一致：
 
 ```java
 import com.yulinlin.security.crypto.CryptoCodec;
-import java.nio.charset.StandardCharsets;
+import com.yulinlin.security.crypto.CryptoContext;
 
 public class SecureValueService {
     private final CryptoCodec cryptoCodec;
@@ -407,16 +407,16 @@ public class SecureValueService {
     }
 
     public String encrypt(String deviceType, String value) {
-        return cryptoCodec.encrypt(deviceType, value.getBytes(StandardCharsets.UTF_8));
+        return cryptoCodec.encrypt(CryptoContext.of(deviceType), value);
     }
 
     public String decrypt(String deviceType, String ciphertext) {
-        return new String(cryptoCodec.decrypt(deviceType, ciphertext), StandardCharsets.UTF_8);
+        return cryptoCodec.decrypt(CryptoContext.of(deviceType), ciphertext);
     }
 }
 ```
 
-手动调用时传入规范设备名，并自行控制大小、处理异常。没有自定义 Codec 且未配置设备密钥时不能直接注入 CryptoCodec。自定义协议、Bean 示例和响应约定见[自定义接口加解密](crypto-codec.md)。
+手动调用时传入规范设备名，并自行控制大小、处理异常。`CryptoContext.of` 使用空请求头；需要协议头时可显式构造 CryptoContext。没有自定义 Codec 且未配置设备密钥时不能直接注入 CryptoCodec。自定义协议、Bean 示例和响应约定见[自定义接口加解密](crypto-codec.md)。
 
 ## 安全边界与限制
 

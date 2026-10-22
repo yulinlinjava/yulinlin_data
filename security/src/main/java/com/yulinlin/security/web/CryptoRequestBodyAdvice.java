@@ -2,6 +2,7 @@ package com.yulinlin.security.web;
 
 import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.crypto.CryptoCodec;
+import com.yulinlin.security.crypto.CryptoContext;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
@@ -91,10 +92,12 @@ public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
 
         try {
             String device = HeaderDeviceTypeResolver.normalize(deviceTypeResolver.resolve(inputMessage.getHeaders()));
-            byte[] plaintext = Objects.requireNonNull(cryptoCodec.decrypt(device, content),
+            CryptoContext context = new CryptoContext(device, inputMessage.getHeaders());
+            String plaintext = Objects.requireNonNull(cryptoCodec.decrypt(context, content),
                     "CryptoCodec.decrypt 不能返回 null");
-            checkSize(plaintext.length);
-            return bodyMessage(inputMessage.getHeaders(), plaintext, true);
+            byte[] plaintextBytes = plaintext.getBytes(StandardCharsets.UTF_8);
+            checkSize(plaintextBytes.length);
+            return bodyMessage(inputMessage.getHeaders(), plaintextBytes, true);
         } catch (ResponseStatusException error) {
             throw error;
         } catch (Exception error) {

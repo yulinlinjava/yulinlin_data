@@ -62,13 +62,14 @@ public final class DeviceCryptoManager implements CryptoCodec {
     }
 
     @Override
-    public String encrypt(String deviceType, byte[] plaintext) {
-        return getRequired(deviceType).encryptBase64(plaintext);
+    public String encrypt(CryptoContext context, String plaintext) {
+        return getRequired(context.deviceType()).encryptBase64(plaintext.getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
-    public byte[] decrypt(String deviceType, String ciphertext) {
-        return getRequired(deviceType).decryptBase64(normalizeCiphertext(ciphertext));
+    public String decrypt(CryptoContext context, String ciphertext) {
+        byte[] plaintext = getRequired(context.deviceType()).decryptBase64(normalizeCiphertext(ciphertext));
+        return new String(plaintext, StandardCharsets.UTF_8);
     }
 
     /** 默认 AES 的传输兼容规则，不应用于业务自定义密文协议。 */

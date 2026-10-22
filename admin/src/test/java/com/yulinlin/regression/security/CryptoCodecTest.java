@@ -5,6 +5,7 @@ import com.yulinlin.data.lang.security.CryptoDataResponse;
 import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.crypto.CryptoCodec;
+import com.yulinlin.security.crypto.CryptoContext;
 import com.yulinlin.security.crypto.CryptoException;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
 import com.yulinlin.security.web.CryptoRequestBodyAdvice;
@@ -50,7 +51,7 @@ class CryptoCodecTest {
                 new HttpHeaders(), parameter("plain", -1)));
         assertEquals("custom-cipher", body.getData());
         assertTrue(body.crypt);
-        assertEquals("无注解接口", new String(codec.plaintext, StandardCharsets.UTF_8));
+        assertEquals("无注解接口", codec.plaintext);
     }
 
     @Test
@@ -124,6 +125,39 @@ class CryptoCodecTest {
     }
 
     @Test
+    void customCodecReceivesReadOnlyRequestHeadersInBothDirections() throws Exception {
+        MockHttpInputMessage input = new MockHttpInputMessage("cipher".getBytes(StandardCharsets.UTF_8));
+        input.getHeaders().set("Device-Type", "WEB");
+        input.getHeaders().set("X-Key-Id", "request-key");
+        requestAdvice(codec).beforeBodyRead(input, parameter("strict", 0), String.class,
+                MappingJackson2HttpMessageConverter.class);
+
+        assertEquals("web", codec.context.deviceType());
+        assertEquals("request-key", codec.context.requestHeaders().getFirst("X-Key-Id"));
+        assertThrows(UnsupportedOperationException.class,
+                () -> codec.context.requestHeaders().set("X-Key-Id", "modified"));
+        input.getHeaders().set("X-Key-Id", "changed-after-decrypt");
+        assertEquals("request-key", codec.context.requestHeaders().getFirst("X-Key-Id"));
+
+        ServerHttpRequest request = request("/api/value", "APP");
+        request.getHeaders().set("X-Key-Id", "response-key");
+        write(responseAdvice(codec), Map.of("ok", true), request, new HttpHeaders());
+
+        assertEquals("app", codec.context.deviceType());
+        assertEquals("response-key", codec.context.requestHeaders().getFirst("X-Key-Id"));
+        request.getHeaders().set("X-Key-Id", "changed-after-encrypt");
+        assertEquals("response-key", codec.context.requestHeaders().getFirst("X-Key-Id"));
+    }
+
+    @Test
+    void cryptoContextAlwaysContainsNormalizedDeviceType() {
+        assertEquals("unknown", CryptoContext.of(null).deviceType());
+        assertEquals("unknown", CryptoContext.of("  ").deviceType());
+        assertEquals("unknown", CryptoContext.of("invalid/device").deviceType());
+        assertEquals("partner_1", CryptoContext.of(" Partner_1 ").deviceType());
+    }
+
+    @Test
     void compatibilityModeAcceptsJsonAndStillDecryptsCiphertext() throws Exception {
         properties.setEnabled(false);
         CryptoRequestBodyAdvice advice = requestAdvice(codec);
@@ -188,7 +222,7 @@ class CryptoCodecTest {
         assertEquals("custom-cipher", body.getData());
         assertEquals(200, body.code);
         assertTrue(body.crypt);
-        assertEquals("字符串内容", new String(codec.plaintext, StandardCharsets.UTF_8));
+        assertEquals("字符串内容", codec.plaintext);
         assertEquals("web", headers.getFirst("Device-Type"));
         assertNull(headers.getFirst(CryptoResponseBodyAdvice.CRYPTO_HEADER));
 
@@ -244,7 +278,7 @@ class CryptoCodecTest {
         properties.setDevices(Map.of("unknown", device));
         DeviceCryptoManager defaults = new DeviceCryptoManager(properties);
         String json = "{\"enabled\":false}";
-        String encrypted = defaults.encrypt("web", json.getBytes(StandardCharsets.UTF_8));
+        String encrypted = defaults.encrypt(CryptoContext.of("web"), json);
         String transported = "\"" + encrypted.replace('+', ' ') + "\"\r\n";
         assertEquals(json, read(requestAdvice(defaults), transported, "web", "plain"));
         HttpHeaders headers = new HttpHeaders();
@@ -252,7 +286,7 @@ class CryptoCodecTest {
                 request("/api/value", "web"), headers, parameter("plain", -1));
         assertEquals("unknown", headers.getFirst("Device-Type"));
         assertEquals("AES/CBC/PKCS5Padding", headers.getFirst(CryptoResponseBodyAdvice.CRYPTO_HEADER));
-        assertFalse(new ObjectMapper().readTree(defaults.decrypt("unknown", (String) response))
+        assertFalse(new ObjectMapper().readTree(defaults.decrypt(CryptoContext.of("unknown"), (String) response))
                 .get("enabled").booleanValue());
     }
 
@@ -337,18 +371,21 @@ class CryptoCodecTest {
     /** 仅用于记录输入的测试替身，不是加密算法。 */
     private static class RecordingCodec implements CryptoCodec {
         private String device;
+        private CryptoContext context;
         private String ciphertext;
-        private byte[] plaintext;
+        private String plaintext;
         private String encoded = "custom-cipher";
-        private byte[] decoded = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+        private String decoded = "{\"ok\":true}";
         private CryptoException failure;
-        @Override public String encrypt(String deviceType, byte[] value) {
-            device = deviceType;
-            plaintext = value.clone();
+        @Override public String encrypt(CryptoContext context, String value) {
+            this.context = context;
+            device = context.deviceType();
+            plaintext = value;
             return encoded;
         }
-        @Override public byte[] decrypt(String deviceType, String value) {
-            device = deviceType;
+        @Override public String decrypt(CryptoContext context, String value) {
+            this.context = context;
+            device = context.deviceType();
             ciphertext = value;
             if (failure != null) throw failure;
             return decoded;

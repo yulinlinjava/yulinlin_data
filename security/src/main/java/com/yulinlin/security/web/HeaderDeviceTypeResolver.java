@@ -1,14 +1,10 @@
 package com.yulinlin.security.web;
 
 import com.yulinlin.security.SecurityCryptoProperties;
+import com.yulinlin.security.crypto.CryptoContext;
 import org.springframework.http.HttpHeaders;
 
-import java.util.Locale;
-import java.util.regex.Pattern;
-
 public final class HeaderDeviceTypeResolver implements DeviceTypeResolver {
-
-    private static final Pattern DEVICE_NAME = Pattern.compile("[a-z0-9_-]{1,32}");
 
     private final String headerName;
 
@@ -26,8 +22,6 @@ public final class HeaderDeviceTypeResolver implements DeviceTypeResolver {
 
     /** 统一入口规范化；是否支持某个合法设备名由实际 CryptoCodec 决定。 */
     static String normalize(String device) {
-        if (device == null || device.isBlank()) return "unknown";
-        String normalized = device.trim().toLowerCase(Locale.ROOT);
-        return DEVICE_NAME.matcher(normalized).matches() ? normalized : "unknown";
+        return CryptoContext.normalizeDeviceType(device);
     }
 }

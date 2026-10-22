@@ -10,12 +10,14 @@
 package com.yulinlin.security.crypto;
 
 public interface CryptoCodec {
-    String encrypt(String deviceType, byte[] plaintext);
-    byte[] decrypt(String deviceType, String ciphertext);
+    String encrypt(CryptoContext context, String plaintext);
+    String decrypt(CryptoContext context, String ciphertext);
 }
 ```
 
-encrypt 返回文本密文，decrypt 返回明文字节。对象由框架先转 JSON，字符串直接转 UTF-8；R 响应只处理 data，其他字段保持不变。Codec 不负责 JSON 序列化、登录、权限或响应包装。
+encrypt 和 decrypt 都处理字符串。对象由框架先转 JSON；R 响应只处理 data，其他字段保持不变。Codec 不负责 JSON 序列化、登录、权限或响应包装。
+
+CryptoContext 提供框架规范化后的 `deviceType()` 和原请求头的只读副本 `requestHeaders()`。自定义实现可以根据 `X-Key-Id`、租户、Token 或协议版本选择密钥，但不能修改 Web 请求头。响应加密阶段的 `requestHeaders()` 仍然是原请求头，不是响应头。
 
 ## 注册业务实现
 
@@ -23,19 +25,22 @@ encrypt 返回文本密文，decrypt 返回明文字节。对象由框架先转 
 
 ```java
 import com.yulinlin.security.crypto.CryptoCodec;
+import com.yulinlin.security.crypto.CryptoContext;
 import org.springframework.context.annotation.Bean;
 
 @Bean
 public CryptoCodec cryptoCodec(BusinessCryptoService service) {
     return new CryptoCodec() {
         @Override
-        public String encrypt(String deviceType, byte[] plaintext) {
-            return service.encrypt(deviceType, plaintext);
+        public String encrypt(CryptoContext context, String plaintext) {
+            String keyId = context.requestHeaders().getFirst("X-Key-Id");
+            return service.encrypt(context.deviceType(), keyId, plaintext);
         }
 
         @Override
-        public byte[] decrypt(String deviceType, String ciphertext) {
-            return service.decrypt(deviceType, ciphertext);
+        public String decrypt(CryptoContext context, String ciphertext) {
+            String keyId = context.requestHeaders().getFirst("X-Key-Id");
+            return service.decrypt(context.deviceType(), keyId, ciphertext);
         }
     };
 }
@@ -66,7 +71,7 @@ yulinlin:
 
 自定义实现与默认 AES 使用相同的全局规则：无需注解，enabled=true 时默认要求密文请求、加密响应。@ApiCrypto(false) 是请求兼容明文/密文、响应明文的例外；方法设置优先于类设置。enabled=false 时，所有接口（无注解或任意注解）都兼容明密文请求、返回明文，不是禁用解密。排除路径始终请求和响应都不处理，文件、监控及不走该协议的回调接口应配置排除，详见[规则表](crypto.md#接口注解)。
 
-deviceType 已去除首尾空白并转换为小写，只接受 1～32 位字母、数字、下划线或短横线。请求头缺失、空白或格式非法时传入 unknown；其他合法设备名原样传给自定义实现，不根据 YAML 设备列表过滤。业务决定未知设备使用哪组密钥或拒绝请求，设备类型不是身份凭证。
+`context.deviceType()` 已去除首尾空白并转换为小写，只接受 1～32 位字母、数字、下划线或短横线。请求头缺失、空白或格式非法时传入 unknown；其他合法设备名原样传给自定义实现，不根据 YAML 设备列表过滤。业务决定未知设备使用哪组密钥或拒绝请求，设备类型不是身份凭证。
 
 ## 密文协议约定
 
@@ -85,13 +90,12 @@ deviceType 已去除首尾空白并转换为小写，只接受 1～32 位字母�
 注入 CryptoCodec 即可，与接口自动加解密使用相同的 Bean：
 
 ```java
-byte[] plaintext = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-String encrypted = cryptoCodec.encrypt("web", plaintext);
-String decrypted = new String(cryptoCodec.decrypt("web", encrypted),
-        java.nio.charset.StandardCharsets.UTF_8);
+CryptoContext context = CryptoContext.of("web");
+String encrypted = cryptoCodec.encrypt(context, json);
+String decrypted = cryptoCodec.decrypt(context, encrypted);
 ```
 
-手动调用时由调用方提供规范设备名、控制大小并处理异常；不会自动应用 @ApiCrypto、路径排除、JSON 序列化或响应包装。
+手动调用时由调用方提供规范设备名、控制大小并处理异常；`CryptoContext.of` 使用空请求头。如果手动调用也需要协议头，可以显式构造 `new CryptoContext(deviceType, headers)`。手动调用不会自动应用 @ApiCrypto、路径排除、JSON 序列化或响应包装。
 
 ---
 

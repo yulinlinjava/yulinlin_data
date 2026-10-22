@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yulinlin.data.lang.security.CryptoDataResponse;
 import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.crypto.CryptoCodec;
+import com.yulinlin.security.crypto.CryptoContext;
 import com.yulinlin.security.crypto.CryptoException;
 import com.yulinlin.security.crypto.DeviceCryptoManager;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -20,7 +21,6 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 @ControllerAdvice
@@ -107,13 +107,14 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid crypto device");
         }
         try {
+            CryptoContext context = new CryptoContext(device, request.getHeaders());
             Object result;
             if (body instanceof CryptoDataResponse dataResponse) {
-                String ciphertext = encrypt(device, dataResponse.getData());
+                String ciphertext = encrypt(context, dataResponse.getData());
                 dataResponse.onCryptAfter(ciphertext);
                 result = body;
             } else {
-                String ciphertext = encrypt(device, body);
+                String ciphertext = encrypt(context, body);
                 result = stringResponse ? objectMapper.writeValueAsString(ciphertext) : ciphertext;
             }
             HttpHeaders headers = response.getHeaders();
@@ -128,8 +129,8 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         }
     }
 
-    private String encrypt(String device, Object value) throws JsonProcessingException {
-        String ciphertext = cryptoCodec.encrypt(device, plaintext(value));
+    private String encrypt(CryptoContext context, Object value) throws JsonProcessingException {
+        String ciphertext = cryptoCodec.encrypt(context, plaintext(value));
         if (ciphertext == null || ciphertext.isBlank()) {
             throw new CryptoException("CryptoCodec.encrypt 必须返回非空密文");
         }
@@ -140,10 +141,10 @@ public final class CryptoResponseBodyAdvice implements ResponseBodyAdvice<Object
         return ciphertext;
     }
 
-    private byte[] plaintext(Object value) throws JsonProcessingException {
+    private String plaintext(Object value) throws JsonProcessingException {
         return value instanceof String text
-                ? text.getBytes(StandardCharsets.UTF_8)
-                : objectMapper.writeValueAsBytes(value);
+                ? text
+                : objectMapper.writeValueAsString(value);
     }
 
     private boolean isJson(MediaType mediaType) {

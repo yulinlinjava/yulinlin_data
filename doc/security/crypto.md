@@ -26,9 +26,10 @@
 - `devices` 未配置、为空，或所有设备的 `key` 都为 null / 空白：不启用默认 AES。
 - 没有 Codec 时，即使标注 `@ApiCrypto`，框架也不会读取、解密或改写正文，不附加加密响应头；请求和响应按正常接口协议处理，业务可自行实现加解密。
 - 不接管不等于“任意密文都能直接进入 Controller”。业务未提供解密逻辑时，JSON 转换器仍可能拒绝密文。正常 HTTP 大小限制仍由 Web 容器和业务配置负责。
-- 配置了任意一个非空设备密钥，就启用框架加解密；此时 `devices.unknown`、所有已声明设备的 key、CBC IV 和算法配置必须合法，错误配置启动时报错。
-- 存在默认或自定义 Codec 时，无注解的业务接口也参与：全局 `enabled=true` 要求密文请求、加密响应；`@ApiCrypto(false)` 是允许明文请求、返回明文的例外。
-- 已启用默认或自定义 Codec 时，`enabled=false` 仍为兼容模式：请求可明文或密文，响应明文；它不是完全关闭。
+- 配置了任意一个非空设备密钥，就注册默认 AES Codec；此时 `devices.unknown`、所有已声明设备的 key、CBC IV 和算法配置必须合法，错误配置启动时报错。
+- `advice-enabled` 默认 `true`。设置为 `false` 时，只停用 `CryptoRequestBodyAdvice` 和 `CryptoResponseBodyAdvice`，请求和响应不再由这两个 Advice 处理；默认或自定义 CryptoCodec 仍保留，可注入并手动调用，设备配置校验也不会跳过。
+- Advice 启用且存在默认或自定义 Codec 时，无注解的业务接口也参与：全局 `enabled=true` 要求密文请求、加密响应；`@ApiCrypto(false)` 是允许明文请求、返回明文的例外。
+- Advice 启用且存在默认或自定义 Codec 时，`enabled=false` 仍为兼容模式：请求可明文或密文，响应明文；它不是完全关闭。
 - 登录、权限、限流不受设备密钥有无影响。业务手工创建的加密组件由业务自己管理；这里控制的是框架自动配置。配置在启动时判断，修改后需重启。
 
 没有自定义 Codec 且密钥全部缺失时按“不接管”处理，部署时应核对环境变量和配置来源；需要强制加密的项目应确保 Codec 已接入，不能只依赖 `@ApiCrypto` 注解。
@@ -41,6 +42,9 @@
 yulinlin:
   security:
     crypto:
+      # MVC 自动加解密总开关；false 只停用两个 Advice，保留 CryptoCodec
+      advice-enabled: true
+
       # 无注解接口也参与；true：全局严格加密；false：兼容解密、响应明文
       enabled: true
 
@@ -115,7 +119,8 @@ YULINLIN_SECURITY_UNKNOWN_IV=1234567890abcdef
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 存在 Codec 时全局参与，包括无注解接口；true 严格加密，false 兼容解密、响应明文；无 Codec 不接管 |
+| `advice-enabled` | `true` | 是否注册请求解密和响应加密 Advice；false 不影响 Codec、鉴权或限流，修改后需重启 |
+| `enabled` | `true` | Advice 启用且存在 Codec 时全局参与，包括无注解接口；true 严格加密，false 兼容解密、响应明文；无 Codec 不接管 |
 | `device-header` | `Device-Type` | 客户端设备类型请求头；同时回写到加密响应 |
 | `exclude-paths` | `/monitor/**` | 同时跳过请求解密和响应加密的路径模式，如 `/public/**` |
 | `max-request-size` | `1MB` | 密文与解密后正文的大小上限 |
@@ -142,17 +147,27 @@ padding   = PKCS5/PKCS7
 
 ## 接口注解
 
-配置设备密钥或提供自定义 CryptoCodec 后，全局 `enabled` 决定默认行为，**无注解接口也参与加解密**。不需要每个 Controller 都标注 `@ApiCrypto`；注解用于声明例外，可放在类或具体方法上，方法配置优先于类配置：
+以下加解密规则以 `advice-enabled=true` 为前提。配置设备密钥或提供自定义 CryptoCodec 后，全局 `enabled` 决定默认行为，**无注解接口也参与加解密**。不需要每个 Controller 都标注 `@ApiCrypto`；注解用于声明例外，可放在类或具体方法上，方法配置优先于类配置：
 
 | 全局配置 | 接口注解 | 请求 | 响应 |
 | --- | --- | --- | --- |
+| `advice-enabled=false` | 任意注解或无注解 | 框架 Advice 不处理 | 框架 Advice 不处理 |
 | 无自定义 Codec，也无设备密钥 | 任意注解或无注解 | 框架不处理 | 框架不处理 |
 | 有 Codec，`enabled=true` | 无注解 / `@ApiCrypto` / `@ApiCrypto(true)` | 要求整个 JSON 加密后的文本密文，默认 AES 为 Base64 | 加密 |
 | 有 Codec，`enabled=true` | `@ApiCrypto(false)` | 普通 JSON 原样读取；非 JSON body 仍尝试解密 | 明文 |
 | 有 Codec，`enabled=false` | 任意注解或无注解 | 普通 JSON 或整个 body 密文都支持 | 明文 |
 | 任意值 | 命中 `exclude-paths` | security 完全不处理 | 明文 |
 
-存在 Codec 时，`enabled=false` 是兼容模式，仍能解密尚未升级的旧客户端请求；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。完全不让框架处理时，不提供自定义 Codec 且移除所有设备密钥，或将对应接口加入排除路径。
+Advice 启用且存在 Codec 时，`enabled=false` 是兼容模式，仍能解密尚未升级的旧客户端请求；此时 `@ApiCrypto(true)` 不再拒绝明文请求，响应也不会加密。要保留 Codec 但完全停用框架的 MVC 自动加解密，设置 `advice-enabled=false`；只排除部分接口时使用 `exclude-paths`。`@ApiCrypto(true)` 不能重新开启已停用的 Advice，业务自行注册的处理逻辑仍由业务管理。
+
+```yaml
+yulinlin:
+  security:
+    crypto:
+      advice-enabled: false
+```
+
+关闭后请同步调整客户端或由业务接管报文处理；框架不会再自动解开旧客户端发送的密文。该开关不改变 HTTPS、鉴权和限流配置。
 
 类标注 `@ApiCrypto(false)` 时，该类未单独标注的方法也采用兼容请求、明文响应；方法可用 `@ApiCrypto(true)` 恢复全局严格行为，但不能覆盖全局 `enabled=false`。排除路径优先于所有注解。
 
@@ -392,6 +407,8 @@ GCM 使用以下 UTF-8 内容作为 AAD，客户端必须完全一致：
 例如 web 设备的 AAD 是 `1\nweb\nA256GCM`。密文、设备名、IV、认证标签或密钥不匹配都会导致解密失败；这是 GCM 相比默认固定 IV CBC 的主要安全优势。
 
 ## 手动使用
+
+只需要手动调用时可设置 `advice-enabled=false`；该开关不会移除或替换已注册的 Codec。
 
 存在默认或自定义加密实现时，统一注入公开的 `CryptoCodec`，与接口加解密使用同一个 Bean：
 

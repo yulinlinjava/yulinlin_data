@@ -10,6 +10,7 @@ import java.lang.annotation.Target;
 /**
  * 覆盖接口的全局加密默认行为。无注解接口同样参与，方法配置优先于类配置。
  * 排除路径始终跳过请求解密和响应加密。
+ * advice-enabled=false 时两个 MVC Advice 不注册，本注解不触发自动加解密。
  */
 @Documented
 @Inherited

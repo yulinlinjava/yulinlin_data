@@ -11,7 +11,10 @@ import java.util.Map;
 @ConfigurationProperties("yulinlin.security.crypto")
 public class SecurityCryptoProperties {
 
-    /** 有 CryptoCodec 时全局要求密文请求并加密响应；ApiCrypto(false) 可例外。false 时仍兼容解密。 */
+    /** 是否注册 MVC 请求解密和响应加密 Advice；关闭不影响 CryptoCodec 的注册与手动调用。 */
+    private boolean adviceEnabled = true;
+
+    /** Advice 启用且有 CryptoCodec 时全局要求密文请求并加密响应；false 时仍兼容解密。 */
     private boolean enabled = true;
 
     /** Request header used to select the device key. */
@@ -30,6 +33,14 @@ public class SecurityCryptoProperties {
     public boolean hasDeviceKeys() {
         return devices != null && devices.values().stream()
                 .anyMatch(device -> device != null && device.getKey() != null && !device.getKey().isBlank());
+    }
+
+    public boolean isAdviceEnabled() {
+        return adviceEnabled;
+    }
+
+    public void setAdviceEnabled(boolean adviceEnabled) {
+        this.adviceEnabled = adviceEnabled;
     }
 
     public boolean isEnabled() {

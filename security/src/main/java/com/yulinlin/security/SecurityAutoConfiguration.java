@@ -55,6 +55,8 @@ public class SecurityAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(CryptoCodec.class)
+    @ConditionalOnProperty(prefix = "yulinlin.security.crypto", name = "advice-enabled",
+            havingValue = "true", matchIfMissing = true)
     public CryptoRequestBodyAdvice cryptoRequestBodyAdvice(
             CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,
@@ -66,6 +68,8 @@ public class SecurityAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(CryptoCodec.class)
+    @ConditionalOnProperty(prefix = "yulinlin.security.crypto", name = "advice-enabled",
+            havingValue = "true", matchIfMissing = true)
     public CryptoResponseBodyAdvice cryptoResponseBodyAdvice(
             CryptoCodec cryptoCodec,
             DeviceTypeResolver deviceTypeResolver,

@@ -62,6 +62,7 @@ public CryptoCodec cryptoCodec(BusinessCryptoService service) {
 yulinlin:
   security:
     crypto:
+      advice-enabled: true # 默认开启；false 只停用两个 MVC Advice，保留 Codec
       enabled: true # 无注解接口也默认要求密文请求、加密响应
       device-header: Device-Type
       exclude-paths:
@@ -69,7 +70,9 @@ yulinlin:
       max-request-size: 1MB
 ```
 
-自定义实现与默认 AES 使用相同的全局规则：无需注解，enabled=true 时默认要求密文请求、加密响应。@ApiCrypto(false) 是请求兼容明文/密文、响应明文的例外；方法设置优先于类设置。enabled=false 时，所有接口（无注解或任意注解）都兼容明密文请求、返回明文，不是禁用解密。排除路径始终请求和响应都不处理，文件、监控及不走该协议的回调接口应配置排除，详见[规则表](crypto.md#接口注解)。
+`advice-enabled=false` 时不注册框架的请求解密和响应加密 Advice，保留自定义 CryptoCodec，可继续注入和手动调用；不影响鉴权、限流，修改配置后需重启。注解不能覆盖该开关，业务自行注册的处理逻辑仍由业务管理。
+
+`advice-enabled=true` 时，自定义实现与默认 AES 使用相同的全局规则：无需注解，enabled=true 时默认要求密文请求、加密响应。@ApiCrypto(false) 是请求兼容明文/密文、响应明文的例外；方法设置优先于类设置。enabled=false 时，所有接口（无注解或任意注解）都兼容明密文请求、返回明文，不是禁用解密。排除路径始终请求和响应都不处理，文件、监控及不走该协议的回调接口应配置排除，详见[规则表](crypto.md#接口注解)。
 
 `context.deviceType()` 已去除首尾空白并转换为小写，只接受 1～32 位字母、数字、下划线或短横线。请求头缺失、空白或格式非法时传入 unknown；其他合法设备名原样传给自定义实现，不根据 YAML 设备列表过滤。业务决定未知设备使用哪组密钥或拒绝请求，设备类型不是身份凭证。
 

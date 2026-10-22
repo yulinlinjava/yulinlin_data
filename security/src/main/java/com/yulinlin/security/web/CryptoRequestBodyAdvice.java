@@ -4,6 +4,7 @@ import com.yulinlin.security.SecurityCryptoProperties;
 import com.yulinlin.security.crypto.CryptoCodec;
 import com.yulinlin.security.crypto.CryptoContext;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpInputMessage;
@@ -23,6 +24,8 @@ import java.util.Objects;
 
 @ControllerAdvice
 @ConditionalOnBean(CryptoCodec.class)
+@ConditionalOnProperty(prefix = "yulinlin.security.crypto", name = "advice-enabled",
+        havingValue = "true", matchIfMissing = true)
 public final class CryptoRequestBodyAdvice extends RequestBodyAdviceAdapter {
 
     private final CryptoCodec cryptoCodec;

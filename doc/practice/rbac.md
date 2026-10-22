@@ -69,7 +69,7 @@ yulinlin:
 
 RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](../datasources/routing.md)和 [Schema](../datasources/schema.md) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
-Admin 默认不提供 CryptoCodec，也不配置设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 此时不会触发正文处理，可以直接发送普通 JSON。要接入框架加密，按[接口加密](../security/crypto.md)配置设备密钥（含 `unknown`）和 CBC IV，或提供[自定义 CryptoCodec](../security/crypto-codec.md)，启用 `crypto.enabled`，并移除对应 Controller 的 `@ApiCrypto(false)`（或改为 true），即可跟随全局严格加密。无注解接口也参与；保留 false 的接口兼容请求并返回明文。全局 `enabled=false` 仍兼容解密，不是完全关闭。文件、监控等接口配置排除路径；报文加密不替代 HTTPS。
+Admin 默认不提供 CryptoCodec，也不配置设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 此时不会触发正文处理，可以直接发送普通 JSON。要接入框架加密，按[接口加密](../security/crypto.md)配置设备密钥（含 `unknown`）和 CBC IV，或提供[自定义 CryptoCodec](../security/crypto-codec.md)，保持 `crypto.advice-enabled=true`（默认）并启用 `crypto.enabled`，再移除对应 Controller 的 `@ApiCrypto(false)`（或改为 true），即可跟随全局严格加密。无注解接口也参与；保留 false 的接口兼容请求并返回明文。全局 `enabled=false` 仍兼容解密，不是完全关闭；`advice-enabled=false` 才会停用两个 MVC Advice，同时保留 Codec 供手动调用。文件、监控等接口配置排除路径；报文加密不替代 HTTPS。
 
 登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
 

@@ -102,6 +102,8 @@ SecurityFilterChain securityFilterChain(HttpSecurity http, SpringSessionSupport 
 
 默认适配一个有状态过滤器链；其他无状态链不接入该组件。需要多个独立 Session 认证体系时使用自定义实现，不重复调用 configure。开启时不要另外注册 SessionAuthenticationStrategy Bean；需要调整 fixation/CSRF 等，在 configure 之前定制该链原生配置。
 
+原生定制案例见[Spring Cookie 登录](native-config.md#spring-cookie-登录案例)。使用 `sessionConcurrency(...)` 定制超限拒绝登录、`expiredUrl` 或失效响应，这些选项不会被统一接入覆盖。数量只配置 `max-sessions`，在接入前或之后再设置 `maximumSessions` / `SessionLimit` 都会启动报错（包括相同数值）。注册表和上下文仓库必须与注入的 Bean 相同，`STATELESS` / `NEVER`、接入后关闭会话或上下文配置也会报错；完整规则及版本兼容边界见[冲突说明](native-config.md#冲突与关闭行为)。
+
 本地默认使用 `SessionRegistryImpl`，同时提供 `HttpSessionEventPublisher` 清理已销毁会话。Boot 会注册 Listener Bean；非 Boot Servlet 部署需按容器规则注册监听器。原生注销、过期事件必须正常送达，不能把注册表当成独立认证数据库。
 
 默认 `SpringLoginSessionManager` 支持按用户查询、计数、指定/全部踢人，本地注册表还支持全局分页。它通过原生 expireNow 标记会话，后续请求由原生过滤器拒绝；不能直接删注册表记录冒充踢人。

@@ -199,6 +199,10 @@
         "title": "安全模块选型"
       },
       {
+        "file": "security/native-config.md",
+        "title": "原生配置与统一策略"
+      },
+      {
         "file": "security/crypto.md",
         "title": "接口加密与前端对接"
       },

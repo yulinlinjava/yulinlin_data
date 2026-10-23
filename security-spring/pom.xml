@@ -11,6 +11,11 @@
     <artifactId>security-spring</artifactId>
     <dependencies>
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>com.yulinlin</groupId>
             <artifactId>security</artifactId>
             <version>${yulinlin.version}</version>

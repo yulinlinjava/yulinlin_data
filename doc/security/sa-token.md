@@ -84,6 +84,8 @@ SecurityUtil.logout();  // 注销当前 Token
 
 统一 `max-sessions` 下发到原生 `max-login-count`，统一入口和正常原生登录共用限制；显式配置冲突的 `sa-token.max-login-count` 或关闭 `is-concurrent` 会报错。不要在单次原生登录参数或运行时重新覆盖统一策略。
 
+原生 YAML 和 Java 扩展点继续保留，完整例子见[原生配置与统一策略](native-config.md#sa-token-请求头登录案例)。启动时还会检查最终 `SaTokenConfig` / `StpLogic`：自定义配置必须显式设置与统一上限相同的 `maxLoginCount`，不会把业务配置当作默认值覆盖。统一登录始终要求 `is-share=false`，显式共享配置会报错，不再静默覆盖；关闭会话管理不改变独立 Token 的登录契约。
+
 分布式使用 Sa-Token 官方 `sa-token-redis-template` 等插件，版本与项目 Sa-Token 保持一致。配置原生 Redis 连接与命名空间即可，上层统一接口不变，不需要自定义管理器，也不需要本框架的新 Redis 模块。Boot 3 使用 `spring.data.redis.*`；当前 Sa-Token 1.46 的相关 Redis 插件要求 Redis 6.0+，具体以[官方插件说明](https://sa-token.com/up/integ-redis.html)为准。
 
 ## 使用边界

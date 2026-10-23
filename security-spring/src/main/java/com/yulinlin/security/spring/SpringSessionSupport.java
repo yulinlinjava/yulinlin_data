@@ -17,6 +17,8 @@ public final class SpringSessionSupport implements SessionAuthenticationStrategy
     private final SessionManagementProperties properties;
     private final SecurityContextRepository repository;
     private volatile SessionAuthenticationStrategy delegate;
+    private SpringSessionPolicy policy;
+    private HttpSecurity configuredHttp;
     private boolean configured;
 
     public SpringSessionSupport(SessionRegistry registry, SessionManagementProperties properties,
@@ -30,16 +32,29 @@ public final class SpringSessionSupport implements SessionAuthenticationStrategy
     public synchronized void configure(HttpSecurity http) throws Exception {
         if (configured) throw new IllegalStateException("SpringSessionSupport 只能绑定一个有状态过滤器链；多会话体系请自定义适配");
         properties.validate();
+        http.sessionManagement(session -> {
+            policy = new SpringSessionPolicy(http, session, registry, repository);
+            // 沿用原来的 maximumSessions(int) 接入方式，保留原生 SessionManagementFilter 的装配语义。
+            session.maximumSessions(properties.getMaxSessions()).sessionRegistry(registry);
+            policy.captureLimit();
+            session.sessionConcurrency(concurrency -> {
+                // 仅提供缺省响应，不覆盖业务 expiredUrl/expiredSessionStrategy 或超限拒绝登录策略。
+                if (policy.needsDefaultExpiredStrategy()) {
+                    concurrency.expiredSessionStrategy(event -> event.getResponse().sendError(401, "登录会话已失效"));
+                }
+            });
+        });
         http.securityContext(context -> context.securityContextRepository(repository));
-        http.sessionManagement(session -> session.maximumSessions(properties.getMaxSessions())
-                .maxSessionsPreventsLogin(false).sessionRegistry(registry)
-                .expiredSessionStrategy(event -> event.getResponse().sendError(401, "登录会话已失效")));
         http.with(new Capture(), configurer -> { });
+        configuredHttp = http;
         configured = true;
     }
 
     private final class Capture extends AbstractHttpConfigurer<Capture, HttpSecurity> {
+        @Override public void init(HttpSecurity http) { policy.validate(http); }
+
         @Override public void configure(HttpSecurity http) {
+            policy.validate(http);
             SessionAuthenticationStrategy strategy = http.getSharedObject(SessionAuthenticationStrategy.class);
             if (strategy == null || strategy == SpringSessionSupport.this) {
                 throw new IllegalStateException("未获得原生会话认证策略，不能使用 SpringSessionSupport 替换链内部策略");
@@ -53,6 +68,7 @@ public final class SpringSessionSupport implements SessionAuthenticationStrategy
 
     @Override public void afterSingletonsInstantiated() {
         if (delegate == null) throw new IllegalStateException("已开启统一会话管理，请在业务 SecurityFilterChain 构建前调用 SpringSessionSupport.configure(http)");
+        policy.validate(configuredHttp);
     }
 
     @Override public void onAuthentication(Authentication authentication, HttpServletRequest request, HttpServletResponse response) {

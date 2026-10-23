@@ -15,6 +15,7 @@ JDK 25、Spring Boot 3.5.16、制品 3.0 的自定义 ORM 和工具库。不是 
 - 缓存：[配置](doc/cache/config.md)、[查询 API](doc/cache/query.md)、[业务 API](doc/cache/client.md)、[失效语义](doc/cache/invalidation.md)、[各实现目录](doc/cache/README.md)。
 - 安全：[选型](doc/security/modules.md)、[用户模型](doc/security/user.md)、[JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[Spring Security](doc/security/spring.md)、[上下文](doc/security/context.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md)。
 - 安全扩展：[CryptoCodec 接口加解密](doc/security/crypto-codec.md)、[JwtTokenCodec](doc/security/token-codec.md)、[管理器和 LoginInterceptor](doc/security/extension.md)。
+- 安全原生配置：[配置归属与冲突规则](doc/security/native-config.md)，含 Sa-Token Header / Spring Cookie 登录和原生 Bean 接入案例。
 - 工具：[HTTP](doc/tools/http.md)、[HTTP 执行器规范与替换](doc/tools/http-executor.md)、[反射与克隆](doc/tools/reflection.md)、[其他工具目录](doc/tools/README.md)。
 - 业务开发：[公共实体/PagePo/R](doc/practice/models.md)、[通用 Service](doc/practice/service.md)、[完整 CRUD](doc/practice/crud-example.md)、[Admin RBAC](doc/practice/rbac.md)、[规范](doc/practice/conventions.md)。
 - 运维：[日志](doc/operations/sql-log.md)、[慢操作监控](doc/operations/monitor.md)、[本地库性能报告](doc/operations/local-benchmark.md)。

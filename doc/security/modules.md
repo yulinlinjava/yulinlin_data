@@ -13,6 +13,8 @@
 
 一个项目只选一种登录实现，不混用 `security-jwt`、`security-sa-token`、`security-spring`。这些模块已经包含公共 `security` 的能力。
 
+统一业务接口不等于屏蔽原生框架能力。配置归属、冲突规则及可复制的 YAML/Bean 案例见[原生配置与统一策略](native-config.md)。
+
 同时启用多个内置实现，或注册多个 `ISecurityManager`，启动直接失败，不能用 `@Primary` 绕过。会话管理器 `LoginSessionManager` 也只允许一个。
 
 | 业务需要 | 引入的制品 | 接入要求 |

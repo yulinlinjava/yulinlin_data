@@ -16,6 +16,7 @@ MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换
 - `log` 默认 `false`，只控制真正访问数据库后的成功日志；缓存命中没有执行 SQL，因此不会伪造 SQL 日志。
 - `log-params` 默认 `false`。开启后打印绑定参数，但长值最多保留 `max-param-length` 个字符；字节数组和输入流只记录类型、长度等摘要。
 - `max-param-length` 默认 `256`，必须为正整数。
+- 日期时间参数（`LocalDateTime`、框架 `DateTime`、`Date`/`Timestamp`）在日志中统一显示为 `yyyy-MM-dd HH:mm:ss`，不显示 `T` 或小数秒；只格式化日志，不改变实际绑定对象、数据库精度或时区规则。`Date` 按 JVM 本地时区展示，纯日期/时间类型和普通字符串保持原有格式。
 - `slow-sql-threshold` 默认 `0`（关闭）。配置为 `1s` 后，框架侧耗时达到 1 秒的执行以 `WARN` 输出，即使 `log=false` 也会记录。
 - SQL 异常始终以单条 `ERROR` 输出，包含实际耗时并携带原始堆栈。批量写入按执行组打印一条摘要；摘要列出最多 5 种 SQL 模板及模板总数，不再为每一行打印 INFO。
 

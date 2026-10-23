@@ -4,6 +4,7 @@ import com.yulinlin.data.core.session.SessionExecution;
 import com.yulinlin.data.core.parse.ParseResult;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.transaction.TransactionLog;
+import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.JdbcSessionProperties;
 import com.yulinlin.jdbc.session.AbstractJdbcSession;
 import com.yulinlin.jdbc.session.SqlNode;
@@ -15,7 +16,11 @@ import java.lang.reflect.Array;
 import java.nio.ByteBuffer;
 import java.sql.Blob;
 import java.sql.Clob;
+import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -28,6 +33,9 @@ public final class JdbcExecutionLog {
     private static final int MAX_LOGGED_TEMPLATES = 5;
     private static final int MAX_SQL_LENGTH = 4096;
     private static final int MAX_BATCH_SQL_LENGTH = 1024;
+    // 仅影响日志展示，不替换绑定参数，也不截断实际写入的小数秒。
+    private static final DateTimeFormatter DATE_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT);
 
     private JdbcExecutionLog() {
     }
@@ -157,7 +165,16 @@ public final class JdbcExecutionLog {
         if (value == null) return "null";
         String rendered;
         try {
-            if (value instanceof byte[] bytes) {
+            if (value instanceof LocalDateTime date) {
+                rendered = DATE_TIME_FORMAT.format(date);
+            } else if (value instanceof DateTime date) {
+                rendered = DATE_TIME_FORMAT.format(date.toLocalDateTime());
+            } else if (value instanceof java.sql.Date || value instanceof java.sql.Time) {
+                // DATE / TIME 只有日期或时间，不补出不存在的另一半。
+                rendered = token(value);
+            } else if (value instanceof Date date) {
+                rendered = DATE_TIME_FORMAT.format(new Timestamp(date.getTime()).toLocalDateTime());
+            } else if (value instanceof byte[] bytes) {
                 rendered = "<byte[] length=" + bytes.length + ">";
             } else if (value instanceof ByteBuffer buffer) {
                 rendered = "<" + value.getClass().getSimpleName() + " length=" + buffer.remaining() + ">";

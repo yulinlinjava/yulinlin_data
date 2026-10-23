@@ -16,11 +16,13 @@ public final class MysqlTemporalCoders {
 
     private MysqlTemporalCoders() { }
 
-    /** 保留 java.util.Date 的时间点绑定规则。 */
-    public static final class DateCoder extends AbstractTemporalCoder<Date, Timestamp> {
+    /** 对应 DATETIME：按 JVM 本地时区提取数字，与解码对称，不把 Timestamp 交给驱动换算。 */
+    public static final class DateCoder extends AbstractTemporalCoder<Date, LocalDateTime> {
         public DateCoder() { super(Date.class); }
 
-        @Override protected Timestamp encodeValue(Date value) { return new Timestamp(value.getTime()); }
+        @Override protected LocalDateTime encodeValue(Date value) {
+            return new Timestamp(value.getTime()).toLocalDateTime();
+        }
         @Override protected Date decodeValue(Object value) { return TemporalConversions.toDate(value); }
     }
 

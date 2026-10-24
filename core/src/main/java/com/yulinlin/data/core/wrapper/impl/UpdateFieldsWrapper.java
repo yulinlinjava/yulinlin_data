@@ -6,9 +6,5 @@ public class UpdateFieldsWrapper<E> extends AbstractUpdateFieldsWrapper<E,Update
     public UpdateFieldsWrapper() {
     }
 
-    public UpdateFieldsWrapper(String name) {
-        super(name);
-    }
-
 
 }

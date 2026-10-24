@@ -85,7 +85,6 @@ public class SqlParseManager extends SimpParseManager {
 
 
         this.register(new NilParse());
-        this.register(new NestedParse());
 
 
         this.register(new AvgFieldParse());

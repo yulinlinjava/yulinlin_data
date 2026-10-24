@@ -5,7 +5,6 @@ import com.yulinlin.data.core.parse.IParamsContext;
 import com.yulinlin.data.core.parse.IParse;
 import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.jdbc.sql.parse.AliasUtil;
-import com.yulinlin.jdbc.sql.parse.SqlJsonUtil;
 
 public class AsFieldParse implements IParse<AsField> {
 

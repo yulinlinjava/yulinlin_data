@@ -5,8 +5,4 @@ public class AsFieldListWrapper<E> extends AbstractAsFieldListWrapper<E, AsField
     public AsFieldListWrapper() {
     }
 
-    public AsFieldListWrapper(String name) {
-        super(name);
-    }
-
 }

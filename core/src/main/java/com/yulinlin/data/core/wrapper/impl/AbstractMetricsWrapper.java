@@ -2,7 +2,6 @@ package com.yulinlin.data.core.wrapper.impl;
 
 import com.yulinlin.data.core.node.metrics.*;
 import com.yulinlin.data.core.node.select.FunctionAsField;
-import com.yulinlin.data.core.wrapper.IChildrenWrapper;
 import com.yulinlin.data.core.wrapper.IMetricsWrapper;
 
 import java.util.Collection;
@@ -11,16 +10,12 @@ import java.util.Map;
 
 public abstract class AbstractMetricsWrapper<E, R extends AbstractMetricsWrapper<E,R>
 
-        > extends IChildrenWrapper<R> implements IMetricsWrapper<E,R> {
+        > extends AbstractWrapper<R> implements IMetricsWrapper<E,R> {
 
     private Map<String,FunctionAsField> map = new HashMap<>();
 
 
     public AbstractMetricsWrapper() {
-    }
-
-    public AbstractMetricsWrapper(String name) {
-        super(name);
     }
 
     private R addNode(AbstractMetrics node, String alias){

@@ -14,20 +14,11 @@ import javax.sql.DataSource;
 
 @SpringBootApplication
 
-//@EnableRedisHttpSession
 public class AdminApplication  {
 
 
 
-/*
-	@ConfigurationProperties("oss.datasource") //绑定属性
-	@Bean("ossDataSource")
-	public DataSource ossDataSource() {
-		DruidDataSource druidDataSource = new DruidDataSource();
 
-		return druidDataSource;
-	}
-*/
 
 
 	@ConfigurationProperties("spring.datasource") //绑定属性
@@ -42,22 +33,9 @@ public class AdminApplication  {
 
 
 
-/*	@Bean
-	public EntitySession ossSession(JdbcSessionFactory factory,
-									@Qualifier(value = "ossDataSource")
-											DataSource ossDataSource){
-		JdbcSession jdbcSession = factory.create(ossDataSource, "oss");
-		return jdbcSession;
-	}*/
 
-	/*@Bean
-	public RouterHashAction routerHashAction(){
-		RouterHashAction routerHashAction = new RouterHashAction();
 
-		routerHashAction.add("sys_user","id");
-		return routerHashAction;
-	}
-*/
+
 
 
 

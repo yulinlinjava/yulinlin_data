@@ -207,6 +207,7 @@ yulinlin:
   mysql:
     log: true
     log-params: false
+    log-sql-pretty: true # 默认开启日志 SQL 美化，实际执行 SQL 不变
     max-param-length: 256
     slow-sql-threshold: 1s
     map-underscore-to-camel-case: true
@@ -367,7 +368,7 @@ private String content;
 各数据库模块自己的 `coder` 包提供 `MysqlCoderManager`、`PostgresqlCoderManager`、`H2CoderManager`、`SqliteCoderManager`，均继承 `JdbcCoderManager`，内部注册本模块五种时间类型的编码器。具体时间规则仍分别定义在本模块的 `*TemporalCoders` 中；公共转换复用 `TemporalConversions`，空值/接口适配复用基类。工厂直接使用对应管理器，不传编码器列表，也不注入全局管理器；普通业务无需新增配置。不同数据库的管理器与编码规则独立，修改 H2 编码器不会修改其他模块。
 
 - MySQL、PostgreSQL、H2 各自的编码器使用原生本地时间参数：`java.util.Date` 按 JVM 默认时区提取日期时间数字后编码为 `LocalDateTime`，框架 `DateTime` 编码为其内部 `LocalDateTime`，`LocalDateTime` 原样传给驱动。三者都不向驱动传入 `java.sql.Timestamp`，避免驱动按时间点再转换时区。分别对应 `DATETIME`、`TIMESTAMP WITHOUT TIME ZONE` 和不带时区的 `TIMESTAMP`，不依赖 VARCHAR 的隐式转换；规则目前相同，但实现分别维护。
-- `Date` 读取无时区日期时间时按 JVM 默认时区还原；写入、查询条件、读取使用对称规则。例如 JVM 本地 `2026-10-23 21:12:38` 写入 MySQL `DATETIME` 后仍为 `2026-10-23 21:12:38`，不会因连接使用 UTC 而变成 `13:12:38`。`LocalDate` / `LocalTime` 仍编码为 `java.sql.Date` / `java.sql.Time`，其中 `Time` 保持秒级精度。
+- `Date` 读取无时区日期时间时按 JVM 默认时区还原；写入、查询条件、读取使用对称规则。例如 JVM 本地 `2026-10-23 21:12:38` 写入 MySQL `DATETIME` 后仍为 `2026-10-23 21:12:38`，不会因连接使用 UTC 而变成 `13:12:38`。`LocalDate` 仍编码为 `java.sql.Date`。MySQL / H2 的 `LocalTime` 编码为秒级 `java.sql.Time`；PostgreSQL 则直接绑定 `LocalTime`，保留目标 `time(p)` 列允许的小数秒。
 - SQLite 自己的编码器直接输出 TEXT：`DateTime` / `LocalDateTime` / `Date` 为 `yyyy-MM-dd HH:mm:ss`，`LocalDate` 为 `yyyy-MM-dd`，`LocalTime` 为 `HH:mm:ss`。格式器也定义在 SQLite 模块，保留旧数据的空格分隔、秒级精度；写入和查询条件使用相同规则，日期范围比较不混用带 `T` 的格式。原始参数绑定中的时间对象也调用 SQLite 自己的编码器。
 - JDBC 解码支持 `LocalDateTime`、旧驱动返回的 `Timestamp`，以及空格或 `T` 分隔、可带 1～9 位小数秒的日期时间文本。`DateTime` / `LocalDateTime` 的文本直接解析为本地时间，不经 `Timestamp` 中转；还原为 `Date` 时再按 JVM 本地时区转换。MySQL/PostgreSQL/H2 实际保存的小数秒精度仍由列定义与驱动决定，SQLite 保持秒级存储。
 - core 的 `DateTimeCoder`、JSON 展示，以及 MongoDB/Elasticsearch 的原有时间规则不变。扩展数据库时定义自己的 `CoderManager` 并在内部注册编码器，自行声明工厂时例如传入 `new H2CoderManager()`，参见 [编解码扩展](internal/jdbc.md#编解码)。`SqlParseManager` 仍只负责 SQL 解析，字段编解码沿用 `ICoderManager`。
@@ -603,7 +604,7 @@ ModelInsertWrapper.newInstance("h2", user).execute();
 
 H2 在 Session Bean 初始化时扫描配置包。schema-mode 的含义是：CREATE 创建缺失表、普通列和声明的索引并校验，VALIDATE 只校验且缺失时报错，NONE 完全跳过。自动增量只执行安全的 `ADD COLUMN`：不会自动增加或变更主键，不改已有列类型，也不删除旧列或旧索引。字段改名会被视为新增列，旧数据不会自动搬迁，必须使用版本迁移脚本。
 
-普通字段默认映射为 BOOLEAN、INTEGER、BIGINT、DOUBLE PRECISION 或 CHARACTER VARYING；日期时间字段使用上文列出的 DATE、TIME、TIMESTAMP，`Date` / `DateTime` / `LocalDateTime` 按无时区时间绑定，其中 `Date` 按 JVM 默认时区提取日期时间数字。枚举、BigDecimal/BigInteger、byte[] 与 JSON 对象继续经过公共编码器存为文本；文本数字范围和统计需要显式 CAST。JSON 路径条件当前不自动生成，使用可信的 H2 自定义 SQL。
+普通字段默认映射为 BOOLEAN、INTEGER、BIGINT、DOUBLE PRECISION 或 CHARACTER VARYING；日期时间字段使用上文列出的 DATE、TIME、TIMESTAMP，`Date` / `DateTime` / `LocalDateTime` 按无时区时间绑定，其中 `Date` 按 JVM 默认时区提取日期时间数字。枚举、BigDecimal/BigInteger、byte[] 与 JSON 对象继续经过公共编码器存为文本；文本数字范围和统计需要显式 CAST。所有 JDBC 模块均已移除自动 JSON 路径查询及局部更新，保留整字段编解码；确需路径操作时使用可信的 H2 自定义 SQL，见 [JSON 能力边界](#ai-orm-raw-sql-json-字段与原生-sql)。
 
 H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
 
@@ -647,7 +648,7 @@ H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用
 
 [文档首页](README.md) / [数据源](datasources/README.md)
 
-接入 PostgreSQL 与中文全文检索前置配置。
+接入 PostgreSQL、JSON 整字段存储、聚合与真实数据库回归，以及中文全文检索前置配置。
 
 共同规则：[自动建表与索引](#ai-datasources-schema) · [多数据源与默认组](#ai-datasources-routing) · [SQL 与事务日志](operations/sql-log.md)。
 
@@ -655,6 +656,9 @@ H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用
 ### 本页导航
 
 - [PostgreSQL 接入](#ai-datasources-postgresql-postgresql-接入-1)
+- [JSON 整字段存储](#ai-datasources-postgresql-json-整字段存储)
+- [日期与聚合](#ai-datasources-postgresql-日期与聚合)
+- [运行 PostgreSQL 回归测试](#ai-datasources-postgresql-运行-postgresql-回归测试)
 - [PostgreSQL 中文全文检索](#ai-datasources-postgresql-postgresql-中文全文检索)
 
 <a id="ai-datasources-postgresql-postgresql-接入-1"></a>
@@ -707,9 +711,93 @@ yulinlin:
 
 标识符采用双引号，schema 限定名按段引用；实际列名应与模型映射一致。普通 CRUD 和实体可复用，原始 MySQL SQL、反引号、函数与 DDL 不会被自动翻译。自动 Schema 不负责序列、自增键、外键、分区表或数据迁移。
 
-JSON 读取支持合法 JSON 的路径，例如 `payload->profile->name`；数字/布尔条件按比较值生成 CAST。路径部分更新尚未自动生成 jsonb_set，应整字段替换或写专用 SQL。非法 JSON 和不能转换的值会报错，不是静默跳过。
+JSON 只保留整字段编解码、读取和替换；JDBC Wrapper 不再解析 `payload->profile->name`，也不自动生成 JSON 查询、类型推断或 `jsonb_set`。路径操作请显式编写参数化原生 SQL，具体迁移规则见[JSON 字段与原生 SQL](#ai-orm-raw-sql-json-字段与原生-sql)。
 
 JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream、bytea/oid 等二进制对象；需要保存时应先由明确的编解码策略转成文本，或把文件放到对象存储后只保存地址。原生布尔列保留 false/NULL；除布尔列外结果大多沿用字符串解码，不能推定 timestamptz 等扩展类型完整往返已验证。
+
+<a id="ai-datasources-postgresql-json-整字段存储"></a>
+#### JSON 整字段存储
+
+JSON 数据仍可存储在已有的 `jsonb`、`json` 或文本列中。Map、List、对象继续使用现有 JSON 编解码器，查询读取整个字段，更新替换整个字段；本次不迁移列类型或已有数据。自动 Schema 仍按原有策略处理，**不自动推断为 jsonb**。
+
+下面是使用手工建表的示例实体，保持 `autoSchema=false`（默认）：
+
+```java
+package demo.domain;
+
+import com.yulinlin.common.domain.IdEntity;
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinTable;
+import java.util.Map;
+
+@JoinTable("pg_document_demo")
+public class PgDocument extends IdEntity<PgDocument> {
+    @JoinField(name = "document_data")
+    private Map<String, Object> payloadData;
+
+    public Map<String, Object> getPayloadData() { return payloadData; }
+    public void setPayloadData(Map<String, Object> value) { payloadData = value; }
+}
+```
+
+仅在自己的示例数据库准备表和数据：
+
+```sql
+CREATE TABLE pg_document_demo (
+    id VARCHAR(32) PRIMARY KEY,
+    document_data JSONB
+);
+INSERT INTO pg_document_demo VALUES
+    ('demo-1', '{"profile":{"name":"旧名字"},"enabled":false}');
+```
+
+整字段替换和读取：
+
+```java
+import com.yulinlin.common.model.ModelUpdateWrapper;
+import com.yulinlin.common.model.ModelSelectWrapper;
+import demo.domain.PgDocument;
+import java.util.Map;
+
+int affected = ModelUpdateWrapper.newInstance("postgresql", PgDocument.class)
+        .field("payloadData", Map.of(
+                "profile", Map.of("name", "张三"),
+                "enabled", true))
+        .eq("id", "demo-1")
+        .execute();
+
+PgDocument document = ModelSelectWrapper.newInstance("postgresql", PgDocument.class)
+        .eq("id", "demo-1")
+        .selectOne();
+```
+
+`payloadData` 仍按实体映射转换为 `document_data`，Map 按原来的编码器序列化。普通整字段参数沿用上文 `stringtype=unspecified` 配置，让 PG 根据目标列推断字符串类型；不自动补 JSON CAST。
+
+整字段更新是**替换**，不是 JSON 合并；读取后修改再写回还需处理并发覆盖，不能把它当成路径原子更新。需要数据库端 JSON 查询、局部更新或特定转换时，使用[参数化原生 SQL 示例](#ai-orm-raw-sql-json-字段与原生-sql)。PG 本身的 JSON 能力没有被禁用，仅取消 ORM 的自动翻译层。
+
+<a id="ai-datasources-postgresql-日期与聚合"></a>
+#### 日期与聚合
+
+`Date` 按 JVM 默认时区转换为当地 `LocalDateTime`；`DateTime` / `LocalDateTime` 按日期时间值绑定。搭配 `timestamp without time zone` 列时保持年月日时分秒及列精度允许的小数秒，不因数据库会话时区改变而额外转换。JVM 时区应保持明确且一致；这不是 `timestamptz` / 跨时区瞬时时间的统一策略。
+
+`LocalTime` 直接作为 JDBC 4.2 原生参数传给驱动，不再先转成 `java.sql.Time` 截去小数秒；例如 `13:14:15.123456` 可在 `time(6)` 列往返。最终舍入由驱动和目标列精度决定，不承诺纳秒全部入库；原来已经丢失的小数秒无法恢复。自定义扩展若曾假定编码结果是 `java.sql.Time`，应改为接受 `LocalTime`。读取仍兼容旧 `Time` 和字符串。驱动类型映射见 [pgJDBC 日期时间支持](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)。
+
+数字区间使用 `numeric` 精确取余计算上界，避免 `FLOOR(x / step)` 在高精度边界前先舍入。例如步长为 3，`2.99999999999999999999 → 3`、`3 → 6`、`-3.00000000000000000001 → -3`。步长必须为正整数，NULL 保留；浮点数据自身已有的精度损失不会被修复。日期维度、季度格式、HAVING 和完整边界说明见[统计分析](#ai-orm-analytics)。旧版舍入错误影响的持久化统计结果需要业务重新计算。
+
+<a id="ai-datasources-postgresql-运行-postgresql-回归测试"></a>
+#### 运行 PostgreSQL 回归测试
+
+默认测试包含不需要数据库的解析/日期编码器用例。真实数据库测试须显式提供测试库 URL，否则跳过，不自动连接生产库或安装数据库。本轮在 PostgreSQL 18 执行，不能据此宣称验证了所有 PG 版本或 pg_jieba 插件。
+
+从仓库根目录运行（需 JDK 25、Maven 及可访问的专用测试库）：
+
+```text
+mvn -pl postgresql -am test "-Dtest=Postgresql*Test" "-Dsurefire.failIfNoSpecifiedTests=false" "-Dpg.test.url=jdbc:postgresql://127.0.0.1:5432/orm_test?stringtype=unspecified" "-Dpg.test.user=orm_test"
+```
+
+密码由环境变量 `PG_TEST_PASSWORD` 提供，不写入测试代码或命令参数。账号需有连接和创建临时表权限；用例仅创建连接级临时表，读写使用 `pg_temp` 限定名，连接关闭后清理，不创建或删除业务表。完整 CRUD 沿用上文 URL 的字符串类型推断配置。
+
+覆盖入口：[JDBC API 边界](../jdbc/src/test/java/com/yulinlin/jdbc/sql/JdbcJsonBoundaryTest.java)、[整字段编解码](../jdbc/src/test/java/com/yulinlin/jdbc/coder/JdbcJsonColumnCoderTest.java)、[真实 JSON 整字段/原生 SQL](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlJsonStorageIntegrationTest.java)、[真实聚合与高精度边界](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlAggregationIntegrationTest.java)、[日期、布尔值与 JDBC CRUD/回滚](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlJdbcIntegrationTest.java)。最后一项通过 JDBC 连接验证事务回滚，不代替 Spring 事务传播/多数据源事务专项测试。
 
 <a id="ai-datasources-postgresql-postgresql-中文全文检索"></a>
 #### PostgreSQL 中文全文检索
@@ -745,6 +833,8 @@ MySQL、SQLite、H2 当前不会创建全文索引：`fullText=true` 被忽略�
 ### 本页导航
 
 - [Elasticsearch 结构初始化](#ai-datasources-elasticsearch-elasticsearch-结构初始化)
+- [普通查询计数与分页](#ai-datasources-elasticsearch-普通查询计数与分页)
+- [查询能力边界](#ai-datasources-elasticsearch-查询能力边界)
 
 <a id="ai-datasources-elasticsearch-elasticsearch-结构初始化"></a>
 ### Elasticsearch 结构初始化
@@ -768,6 +858,47 @@ yulinlin:
 ```
 
 模块使用 Elasticsearch Java Client `9.5.4` 和其默认 `Rest5Client`。`CREATE` 会创建缺失索引和基础 Mapping，并给已有索引补充缺失字段；`VALIDATE` 只检查索引、字段和字段类型，不修改结构。普通字符串映射为 `keyword`，`@JoinField(fullText = true)` 或 `textType = text` 映射为 `text`；复杂 JSON 对象保留 Elasticsearch 动态映射。已存在字段类型不一致时不会强制修改，而是要求手工迁移索引。查询调用 `.highlight(field)` 后使用公共标签与片段数，并按 `fragment-delimiter` 合并返回的多个片段到原字段。
+
+<a id="ai-datasources-elasticsearch-普通查询计数与分页"></a>
+### 普通查询计数与分页
+
+普通 `SelectWrapper`、`ModelSelectWrapper.count()` 和 `QueryRequest.count()` 已接通 ES Count API：`CountWrapper` 解析为独立的 `CountRequest`，会话调用原生 `/{index}/_count`，再通过公共 `total` 结果协议返回。不会读取一页 hits 后取数量，也不会使用搜索返回的估算总数。Count API 的文档语义见 [Elasticsearch 官方说明](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-count)。
+
+计数复用索引、WHERE 条件、字段映射与显式 ES 字段元数据；忽略页码、每页条数、排序、投影、高亮和行锁标记，不修改原 Wrapper。没有 WHERE 时统计指定索引中的全部文档；必须明确指定索引，不允许缺失或空索引意外变成全库统计。显式索引通配符仍可使用。
+
+在已配置会话和准备好 `people` 索引的项目中：
+
+```java
+import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.wrapper.impl.SelectWrapper;
+import java.util.Map;
+
+var select = new SelectWrapper<>().table("people").page(2, 20);
+select.fields().field("status");
+select.where().eq("status", "active");
+var request = QueryRequest.newInstance(Map.class, select);
+request.setSession("elasticsearch");
+
+int total = request.count();       // 所有符合条件的文档数量，不是第二页的条数
+var page = request.selectPage();   // 内部自行调用 count，再按原查询执行 search
+```
+
+通常只需调用 `count()` 或 `selectPage()` 中的一个；示例连续调用是展示两种入口。未命中缓存时，`selectPage()` 的计数与列表是两次独立请求，不保证并发写入下属于同一快照。计数仍参与已有的查询缓存、执行监听与错误处理；相同条件不同分页共享逻辑计数缓存，已有缓存一致性规则不变。
+
+统一接口仍返回 `Integer`，有效范围是 `0` 至 `2147483647`；超过范围明确抛错，不截断为负数。ES 请求异常原样传播，失败分片或无效负数结果会报错，不把错误当成 0 或缓存不完整总数。框架不会设置提前终止计数的 `terminate_after`。
+
+**分组计数不在本次支持范围。** `GroupWrapper` 的 count（包括依赖该计数的分组分页入口）明确抛出不支持异常：文档总数、当前返回的桶数都不能代替完整分组数，尤其不能忽略 HAVING。原有分组列表查询、普通 select、投影、排序和高亮实现不变。复杂分组总数请使用原生聚合并由业务明确精度和分页语义。
+
+[ES 计数回归测试](../elasticsearch/src/test/java/com/yulinlin/elasticsearch/EsCountTest.java)使用真实 Java Client 和内存模拟传输层，覆盖请求解析、公开 Session count/page、计数边界、分片失败、异常传播、缓存、监听和原查询保持；不连接外部 ES，不能替代真实集群与权限配置的集成验证。
+
+<a id="ai-datasources-elasticsearch-查询能力边界"></a>
+### 查询能力边界
+
+框架保留普通字段条件与 `and/or/not` 分组，不提供统一或 ES 专属的 nested 查询入口。`NestedNode`、对应 `NestedParse` 和注册已删除，无兼容开关；使用过这些类的项目需要移除调用并重新编译，各模块使用同一版本。
+
+点路径字段仍作为普通字段解析，例如 `.eq("profile.name", "Alice")` 生成普通 term 条件，不会自动包装为 nested 查询，也不能作为旧 `NestedNode` 的等价替代。条件分组只表示布尔组合，不表示数组元素的关联匹配。
+
+确需 nested 查询时，业务直接使用 Elasticsearch 原生客户端并自行维护相应 Mapping 和查询语义；自动配置提供的 `ElasticsearchClient` 仍保留。这类调用直接访问 ES，不经过 ORM 的路由、结果编解码或查询缓存，不能假定享有 Wrapper 的执行行为。本次删除不修改已有索引、Mapping 或文档数据。
 
 ---
 
@@ -1572,6 +1703,7 @@ QueryRequest 和 ExecuteRequest 的参数化原始 SQL。
 - [自定义 SQL 执行](#ai-orm-raw-sql-自定义-sql-执行)
 - [查询列表与单条](#ai-orm-raw-sql-查询列表与单条)
 - [自定义写入](#ai-orm-raw-sql-自定义写入)
+- [JSON 字段与原生 SQL](#ai-orm-raw-sql-json-字段与原生-sql)
 - [占位符与安全](#ai-orm-raw-sql-占位符与安全)
 
 <a id="ai-orm-raw-sql-自定义-sql-执行"></a>
@@ -1626,6 +1758,50 @@ Integer affected = update.execute();
 
 Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数。引入缓存 Provider 后，自定义写 SQL 默认继承 `yulinlin.cache.clear-on-write`；开启时因为无法可靠推导目标表，会在提交成功后清理全部 ORM 查询缓存，也可调用 `update.clearCache(false)` 关闭本次清理。未引入 Provider 时没有查询缓存，因此也不执行这项全量失效判定。
 
+<a id="ai-orm-raw-sql-json-字段与原生-sql"></a>
+#### JSON 字段与原生 SQL
+
+JDBC ORM 的职责是字段映射、参数编解码、SQL 执行和结果映射。Map、List、对象与 JSON 的整字段编解码保留；可以用 `.field("payloadData", value)` 替换整个 JSON 字段，再通过普通实体查询读取。已有列类型、JSON 格式和自动 Schema 策略不因本次调整而改变。
+
+**自动 JSON 路径查询及局部更新已移除，不提供兼容开关。** 这是源码及二进制不兼容变更：
+
+- 删除 `SqlJsonUtil`、MySQL 的 `MysqlJsonUtil`、PG 的 `JsonPath` 和 JSON 更新解析器，以及各方言的 `jsonExtract` 入口。
+- 删除通用 `IConditionWrapper` / `ConditionManager` 的 `nested(...)`、core `Nested` 节点、`IConditionNestedWrapper` 和原路径前缀基类 `IChildrenWrapper`。相关 Wrapper 的带 `String name` 路径前缀构造器和 `getName()` 也删除；无参构造、普通字段、AND/OR/NOT 组合仍保留。
+- 原 `.eq("payload->name", value)`、`.field("payload->name", value)` 等字段名路径语法在 JDBC 解析时直接报错，包括投影、条件、排序、聚合及更新；不会忽略条件、自动降级成整字段操作或产生路径更新 SQL。值中包含 `->` 不受影响。
+- 自定义方言若覆盖过 `NameParse.resolve(name, params, comparisonValue)`，应改为 `resolve(name, params)`；字段解析不再根据比较值推断 JSON 类型。使用过已删除基类的扩展应改为普通 Wrapper / 节点。
+- 所有模块使用同一版本，调用方重新编译；升级时清理旧构建产物，避免已删除的类残留在 JAR。没有依赖旧 API 的普通 CRUD 调用方式不变。
+
+JDBC 自动 JSON 翻译层与通用 nested 入口均已移除；ES 专属的 `NestedNode`、`NestedParse` 和解析器注册也已删除，不保留另一套框架 nested 入口。普通条件与 AND/OR/NOT 分组仍保留；MongoDB 原生点路径查询/更新不变。确需 ES nested 查询时，由业务直接使用 Elasticsearch 原生客户端，框架不提供统一封装，也不会把点路径条件自动改写成 nested 查询。详见 [ES 查询能力边界](#ai-datasources-elasticsearch-查询能力边界)。PG 数字区间和时间精度修复保留。
+
+数据库自身的 JSON 操作仍可通过 `QueryRequest` / `ExecuteRequest` 执行。以下是 **PG 专用**示例，表和实体沿用 [PG JSON 整字段存储](#ai-datasources-postgresql-json-整字段存储)：
+
+```java
+import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.request.ExecuteRequest;
+import com.yulinlin.data.lang.json.JsonUtil;
+import demo.domain.PgDocument;
+import java.util.Map;
+
+var query = QueryRequest.newInstance(
+        "select id, document_data as \"payloadData\" from pg_document_demo "
+        + "where document_data #>> '{profile,name}' = #{name}",
+        Map.of("name", "张三"), PgDocument.class);
+query.setSession("postgresql");
+var rows = query.selectList();
+
+var update = ExecuteRequest.newInstance(
+        "update pg_document_demo "
+        + "set document_data = jsonb_set(document_data, '{profile,name}', "
+        + "CAST(#{jsonValue} AS jsonb), true) where id = #{id}",
+        Map.of("jsonValue", JsonUtil.toJson("李四"), "id", "demo-1"));
+update.setSession("postgresql");
+int affected = update.execute();
+```
+
+这里的路径和 SQL 由开发者明确编写，业务值用 `#{...}` 绑定；不要把前端输入拼接进 SQL，也不要用 `${...}` 传业务值。局部写入的新值显式 JSON 序列化：字符串、数字、对象的 JSON 类型由调用方决定，框架不再猜测。PG 的 `jsonb_set` 不自动补中间父路径，SQL NULL 文档也不自动变为对象；这些由业务和数据库原生规则决定。其他数据库需要自己的 SQL，不进行跨库翻译。
+
+已有可信 `expression(...)`、SQL 元数据表达式入口仍保留；原生表达式应走这些明确入口，不把带 `->` 的 SQL 塞回普通字段名参数。整字段替换不会合并未提供的键；读改写场景需考虑并发覆盖，必要时使用版本条件或原生原子更新。
+
 <a id="ai-orm-raw-sql-占位符与安全"></a>
 #### 占位符与安全
 
@@ -1665,9 +1841,17 @@ SQL Node：where id=?，绑定列表：[7]
 - [注解模型](#ai-orm-analytics-注解模型)
 - [分组求和与日期筛选](#ai-orm-analytics-分组求和与日期筛选)
 - [指标与维度速查](#ai-orm-analytics-指标与维度速查)
+- [聚合类型的含义与结果格式](#ai-orm-analytics-聚合类型的含义与结果格式)
+- [每种类型的注解用法](#ai-orm-analytics-每种类型的注解用法)
+- [每种类型的链式用法](#ai-orm-analytics-每种类型的链式用法)
+- [数字区间的边界](#ai-orm-analytics-数字区间的边界)
+- [H2 的 HAVING 别名处理](#ai-orm-analytics-h2-的-having-别名处理)
+- [数据库差异与当前限制](#ai-orm-analytics-数据库差异与当前限制)
 
 <a id="ai-orm-analytics-统计分析-1"></a>
 ### 统计分析
+
+指标接口只保留 `count`、`distinctCount`、`sum`、`avg`、`min`、`max` 及对应 `field(MetricsEnum, ...)` 入口。原 `IMetricsWrapper.object(...)` 两个重载只是返回 `null` 的占位实现，现已删除；没有实现或接入解析链的 `IConditionObjectWrapper` 同时移除。需要嵌套文档统计时使用目标后端原生能力，不将普通字段聚合当成嵌套聚合。使用过这些占位 API 的调用方需要修改代码并重新编译。
 
 <a id="ai-orm-analytics-注解模型"></a>
 #### 注解模型
@@ -1754,7 +1938,264 @@ var daily = ModelGroupWrapper.newInstance("mysql", MetricsTable.class)
 
 也可在 dateStr 字段增加 `@JoinAggregations(AggregationsEnum.day)`，并保留 JoinField 映射。日期维度生成分组格式字符串；没有该表达式时 dateStr 不自动出现在统计结果里。
 
-MySQL/PostgreSQL/H2 使用各自日期与区间解析器；SQLite 当前不支持这两个自动分组入口，需写 strftime 等专用 SQL。TEXT 日期须统一格式与时区；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
+<a id="ai-orm-analytics-聚合类型的含义与结果格式"></a>
+#### 聚合类型的含义与结果格式
+
+`AggregationsEnum` 决定“按什么维度分组”，`MetricsEnum` 决定“每组计算什么指标”。例如按天分组后求和，需要日期字段上的 `JoinAggregations(day)` 和指标字段上的 `JoinMetrics(sum)`，而不是二选一。
+
+以下以 SQL 数据源 MySQL、PostgreSQL、H2 为主。日期输入示例为 `2026-10-23 21:37:56.123`；格式是分组结果的形状，不是需要传给注解的格式参数。季度存在数据库差异，不应假定各模块输出完全相同。
+
+| 类型 | 含义 | 结果格式 / 类型 | 输入 → 分组结果示例 |
+| --- | --- | --- | --- |
+| `field` | 按字段原值分组，不截断日期、不划数字区间；相等规则由数据库及列的排序规则决定 | 原字段值，Java 属性类型应与字段匹配 | `login` → `login` |
+| `minute` | 按完整年月日和小时中的每一分钟分组，秒及小数秒不参与区分 | 字符串 `yyyy-MM-dd HH:mm:00` | `2026-10-23 21:37:56.123` → `2026-10-23 21:37:00` |
+| `hour` | 按完整年月日中的每个小时分组，不是把不同日期的同一小时合并 | 字符串 `yyyy-MM-dd HH` | `2026-10-23 21:37:56.123` → `2026-10-23 21` |
+| `day` | 按年月日分组，当天的时分秒不参与区分 | 字符串 `yyyy-MM-dd` | `2026-10-23 21:37:56.123` → `2026-10-23` |
+| `month` | 按年月分组，不会把不同年份的同一月份合并 | 字符串 `yyyy-MM` | `2026-10-23 21:37:56.123` → `2026-10` |
+| `quarter` | 按年份和自然季度分组：1–3 月 Q1、4–6 月 Q2、7–9 月 Q3、10–12 月 Q4 | MySQL / H2 为 `yyyy-Qn`；PostgreSQL 为季度首月 `yyyy-MM` | MySQL / H2 → `2026-Q4`；PostgreSQL → `2026-10` |
+| `year` | 按年份分组 | 字符串 `yyyy` | `2026-10-23 21:37:56.123` → `2026` |
+| `interval` | 将数值按指定正整数步长分组，MySQL / PostgreSQL / H2 以区间上界作为分组键 | 数值，不是区间字符串；示例用 `BigDecimal` 接收 | 步长 `10` 时，`12` → `20`，表示 `[10, 20)` |
+
+日期维度建议用 `String` 接收分组键，不要把 `2026-10`、`2026-Q4` 当成完整时间交给 `Date` / `DateTime` 解码。格式化发生在分组查询中，不改变源表保存的时间，也不修改日期编码器。
+
+<a id="ai-orm-analytics-每种类型的注解用法"></a>
+#### 每种类型的注解用法
+
+下面是复用前面 `sta_metrics` 表的只读统计结果模型。它没有预设分组维度；从后面的表格选择一项，把注解加到对应属性上。不要用这个结果模型建表、插入或更新：`bucketEnd` 和 `metrics` 都映射源列 `metrics`，分别接收区间键和组内总和。
+
+```java
+package demo.statistics;
+
+import com.yulinlin.data.core.anno.AggregationsEnum;
+import com.yulinlin.data.core.anno.JoinAggregations;
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinMetrics;
+import com.yulinlin.data.core.anno.JoinTable;
+import com.yulinlin.data.core.anno.MetricsEnum;
+import java.math.BigDecimal;
+import lombok.Data;
+
+@Data
+@JoinTable("sta_metrics")
+public class AggregationRow {
+    private String name;
+
+    @JoinField(name = "crt_time")
+    private String dateStr;
+
+    @JoinField(name = "metrics")
+    private BigDecimal bucketEnd;
+
+    @JoinMetrics(MetricsEnum.sum)
+    private long metrics;
+}
+```
+
+每一行都是一个独立的注解示例，保留该属性原有的 `JoinField` 映射即可：
+
+| 类型 | 在 `AggregationRow` 的哪个属性上添加 | 注解写法 |
+| --- | --- | --- |
+| `field` | `name` | `@JoinAggregations(AggregationsEnum.field)`，也可简写为 `@JoinAggregations` |
+| `minute` | `dateStr` | `@JoinAggregations(AggregationsEnum.minute)` |
+| `hour` | `dateStr` | `@JoinAggregations(AggregationsEnum.hour)` |
+| `day` | `dateStr` | `@JoinAggregations(AggregationsEnum.day)` |
+| `month` | `dateStr` | `@JoinAggregations(AggregationsEnum.month)` |
+| `quarter` | `dateStr` | `@JoinAggregations(AggregationsEnum.quarter)`；使用前检查数据库限制 |
+| `year` | `dateStr` | `@JoinAggregations(AggregationsEnum.year)` |
+| `interval` | `bucketEnd` | `@JoinAggregations(value = AggregationsEnum.interval, interval = 10)` |
+
+例如按天统计时，将 `dateStr` 改为：
+
+```java
+@JoinField(name = "crt_time")
+@JoinAggregations(AggregationsEnum.day)
+private String dateStr;
+```
+
+按数值区间统计时，不给 `dateStr` 加分组注解，改为在 `bucketEnd` 上声明：
+
+```java
+@JoinField(name = "metrics")
+@JoinAggregations(value = AggregationsEnum.interval, interval = 10)
+private BigDecimal bucketEnd;
+```
+
+配置好所选注解后，查询入口相同：
+
+```java
+import com.yulinlin.common.model.ModelGroupWrapper;
+import demo.statistics.AggregationRow;
+
+// "postgresql" 是已配置的数据源名称；请替换为自己的数据源名称。
+// 这里选用支持上述八种分组的 PostgreSQL；换库前请检查下文限制。
+var rows = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .selectList();
+```
+
+`JoinAggregations.value` 默认是 `field`。只有选择 `interval` 时，注解的 `interval` 参数才有意义；省略步长时默认 `5`，不是 `10`。可在不同属性上声明多个维度，例如 `name` 加 `field`、`dateStr` 加 `day`，结果按“名称 + 日期”组合分组。同一属性不要同时声明 `JoinAggregations` 和 `JoinMetrics`，应像 `bucketEnd` / `metrics` 一样使用不同结果属性。
+
+<a id="ai-orm-analytics-每种类型的链式用法"></a>
+#### 每种类型的链式用法
+
+动态选择分组方式时，使用上面**未添加任何 `JoinAggregations`** 的 `AggregationRow`。链式调用会追加分组，不会覆盖模型上的注解；对同一结果别名重复添加分组可能产生重复输出，不能用它来替换已有注解。
+
+下面每条查询分别演示一种类型，按需选择执行。`name` / `dateStr` / `bucketEnd` 是模型属性名，框架通过 `JoinField` 映射到实际列；第二个参数是结果别名，应对应接收结果的 Java 属性。不要把这八种分组同时追加到同一查询。
+
+```java
+import com.yulinlin.common.model.ModelGroupWrapper;
+import demo.statistics.AggregationRow;
+
+// field：按 name 原值分组，metrics 为每组 SUM(metrics)。
+var byField = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().field("name", "name"))
+        .selectList();
+
+// minute：dateStr 示例为 2026-10-23 21:37:00。
+var byMinute = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().minute("dateStr", "dateStr"))
+        .selectList();
+
+// hour：dateStr 示例为 2026-10-23 21。
+var byHour = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().hour("dateStr", "dateStr"))
+        .selectList();
+
+// day：dateStr 示例为 2026-10-23。
+var byDay = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().day("dateStr", "dateStr"))
+        .selectList();
+
+// month：dateStr 示例为 2026-10。
+var byMonth = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().month("dateStr", "dateStr"))
+        .selectList();
+
+// quarter：PostgreSQL 的 dateStr 为 2026-10；MySQL / H2 为 2026-Q4。
+var byQuarter = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().quarter("dateStr", "dateStr"))
+        .selectList();
+
+// year：dateStr 示例为 2026。
+var byYear = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().year("dateStr", "dateStr"))
+        .selectList();
+
+// interval：bucketEnd 为上界，例如原始 metrics=12 落入 [10, 20)，键为 20。
+// MySQL / H2 也按相同的左闭右开规则返回上界键。
+var byInterval = ModelGroupWrapper.newInstance("postgresql", AggregationRow.class)
+        .apply(w -> w.aggregations().interval("bucketEnd", "bucketEnd", 10))
+        .orderByAsc("bucketEnd")
+        .selectList();
+```
+
+`interval` 请使用专用三参数方法 `.interval(name, alias, interval)`；当前 `.field(AggregationsEnum.interval, name, alias)` 重载没有处理 `interval`，不能用它生成数字区间。其他枚举可用对应的具名方法，示例优先采用这种可读性更好的写法。
+
+<a id="ai-orm-analytics-数字区间的边界"></a>
+#### 数字区间的边界
+
+MySQL、PostgreSQL、H2 的区间键遵循以下数学公式。MySQL 直接使用 `FLOOR` 除法表达式；PostgreSQL / H2 使用等价的精确余数表达式，避免定点转换或除法舍入影响边界。
+
+```text
+步长 s > 0
+分组键 upper = (floor(x / s) + 1) * s
+对应区间 [upper - s, upper)
+```
+
+这三个 SQL 模块的分组规则即**左闭右开、键为上界**。不是四舍五入，也不是向上取整 `ceil(x / s) * s`：恰好位于边界的值会进入下一组。步长 `10` 的例子：
+
+| 原始值 x | 所属区间 | 返回的分组键 upper |
+| --- | --- | --- |
+| `-20`、`-10.01` | `[-20, -10)` | `-10` |
+| `-10`、`-1`、`-0.01` | `[-10, 0)` | `0` |
+| `0`、`1`、`9.99` | `[0, 10)` | `10` |
+| `10`、`12`、`19.99` | `[10, 20)` | `20` |
+| `20` | `[20, 30)` | `30` |
+
+例如原始 `metrics` 为 `10`、`12`、`19` 时，区间查询得到一组：`bucketEnd = 20`、`metrics = 41`。前者是区间上界，后者是 `SUM(metrics)`，不是区间内的记录数；需要记录数时另用 `JoinMetrics(count)`。
+
+- 步长必须是正整数。注解默认 `5`；链式方法必须显式传步长。H2 / PostgreSQL 在解析阶段拒绝 `0` 和负数；MySQL 当前没有同样的前置校验，调用方也必须保证为正，不能依赖无效参数的数据库执行结果。
+- 负数使用数学上的向下取整 `floor`，不是 Java 整数除法的向零截断，因此 `-1` 属于 `[-10, 0)`。
+- SQL 中源值 `NULL` 不属于任何数字区间，表达式结果仍为 `NULL`，分组时可能形成单独的空值组；接收属性不要用基本类型强行表示这个空值。需要排除空值时在 `WHERE` 中处理。
+- 结果只包含实际存在记录的组，不会自动补出空区间。需要连续区间时由业务补齐。
+- 数据库中的小数可以参与计算，但步长 API 是 `int`，不支持 `0.5` 等小数步长。边界敏感的金额等数据建议使用 `DECIMAL` / `NUMERIC`；浮点列可能在边界附近存在精度误差。
+- 返回的 JDBC 数值类型由数据库决定，不保证一定是 `Integer`；示例用 `BigDecimal` 接收。源列应使用数值类型，不要把 TEXT 字段的隐式转换当作统一支持。
+
+<a id="ai-orm-analytics-h2-的-having-别名处理"></a>
+#### H2 的 HAVING 别名处理
+
+H2 支持在 Wrapper 的 `having(...)` 中使用结果别名，包括原值分组、日期分组、数字区间键和聚合指标。业务仍使用属性 / 别名，不需要自行拼接数据库表达式。例如使用前面未添加 `JoinAggregations` 的 `AggregationRow`：
+
+```java
+var ranges = ModelGroupWrapper.newInstance("h2", AggregationRow.class)
+        .apply(w -> w.aggregations().interval("bucketEnd", "bucketEnd", 10))
+        .gte("bucketEnd", 0) // WHERE：对源列 metrics 过滤，发生在分组之前。
+        .having(h -> h.gt("bucketEnd", 10).gte("metrics", 40))
+        .orderByAsc("bucketEnd")
+        .selectList();
+```
+
+这里 HAVING 的 `bucketEnd` 是区间上界，`metrics` 是 `SUM(metrics)`；不是直接比较原始行的两个字段。原始 `metrics` 为 `10`、`12`、`19` 时，结果为 `bucketEnd = 20`、`metrics = 41`。
+
+H2 2.3.232 对计算型分组键直接用于 HAVING 的处理存在兼容问题，简单地把别名展开成原表达式也可能报“列必须出现在 GROUP BY 中”。H2 解析器现在按以下规则生成 SQL：
+
+- `GROUP BY` 使用完整分组表达式，避免结果别名与原列同名时误按原列分组。
+- HAVING 中的分组键别名转换为 `MIN(分组表达式)`。分组表达式在同组内取值相同，因此值和 `NULL` 语义保持不变；不会把条件提前到 WHERE。
+- HAVING 中的指标别名还原为原聚合表达式，例如 `SUM(metrics)`、`COUNT(...)`，不会生成 `MIN(SUM(...))` 这类嵌套聚合。
+- 排序继续使用输出别名，分页发生在 HAVING 过滤之后；分组计数也复用相同的 HAVING 规则。
+
+以上转换只针对 H2 自动生成的别名条件，不修改实体属性或源数据，也不改变 MySQL / PostgreSQL / SQLite 的别名策略。手写 `expression(...)` 是目标数据库的原生 SQL，不会自动重写其中的别名。
+
+[H2 HAVING 回归测试](../h2/src/test/java/com/yulinlin/jdbc/h2/parse/group/H2HavingAliasTest.java)在 H2 内存库执行生成的 SQL，覆盖注解与链式入口、全部日期维度、数值区间、原值分组、全部指标类型、原列同名别名、多个分组维度、WHERE / HAVING 区分、嵌套条件、NULL、排序分页、分组计数、参数绑定及请求间隔离。
+
+<a id="ai-orm-analytics-数据库差异与当前限制"></a>
+#### 数据库差异与当前限制
+
+本页描述当前仓库实现，不把已知缺陷描述成正常功能；注解和链式入口最终使用相同解析器，换一种写法不能绕过限制。
+
+| 数据源 | 日期分组 | 数字区间 |
+| --- | --- | --- |
+| MySQL | 支持日期维度；`quarter` 返回 `2026-Q4` | 上界键，左闭右开；步长需由调用方保证大于 0 |
+| PostgreSQL | 支持日期维度；`quarter` 返回季度首月，例如 `2026-10` | 上界键，左闭右开；numeric 精确余数计算，解析时校验正步长 |
+| H2 | 支持日期维度；`quarter` 返回 `2026-Q4` | 上界键，左闭右开；保留十进制余数精度，解析时校验正步长 |
+| SQLite | 当前自动日期分组入口抛出不支持异常，需自行编写 `strftime` 等专用 SQL | 当前自动区间分组入口不支持，需自行编写表达式 |
+| MongoDB | `minute` / `hour` / `day` / `year` 的格式与上表相同；`month` / `quarter` 有下述限制 | 当前未注册 `IntervalGroup` 解析器，不能直接使用此入口 |
+| Elasticsearch | 使用 `date_histogram`；分钟、日、月、年格式与上表相同；小时为 `2026-10-23 21:00:00`，季度为季度首月 `2026-10` | 已生成 `histogram` 请求，但当前结果转换器未展开普通 histogram 桶；不能据此承诺 `selectList()` 返回完整区间结果，也不能套用 SQL 的上界键示例 |
+
+MySQL 的自然季度表达式为：
+
+```sql
+CONCAT(YEAR(crt_time), '-Q', QUARTER(crt_time))
+```
+
+同年 10 月、11 月、12 月合并为 `2026-Q4`；`2026-12-31 23:59:59.999999` 与 `2027-01-01 00:00:00` 分别进入 `2026-Q4`、`2027-Q1`，不同年份不会合并。MySQL 的 `QUARTER` 返回自然季度编号，日期为 `NULL` 时返回 `NULL`，此表达式的整体结果也为 `NULL`。函数语义见 [MySQL 日期函数文档](https://dev.mysql.com/doc/refman/8.4/en/date-and-time-functions.html#function_quarter)。
+
+兼容性注意：旧版 MySQL 季度表达式保留了原月份，未正确合并自然季度。本次修复后的键为 `yyyy-Qn`，依赖旧错误分组键的报表、缓存或持久化统计结果应重新计算；框架不会自动重写已有统计数据。
+
+H2 先将源值和步长都转换为 `DECFLOAT`，再按下式计算。这里的 `r` 是带源值符号的余数，不是数学上的非负模：
+
+```text
+v = CAST(column AS DECFLOAT)
+r = MOD(v, CAST(step AS DECFLOAT))
+upper = v - r + CASE WHEN r < 0 THEN 0 ELSE step END
+```
+
+负数且不在整边界时，去掉负余数已经得到上界；余数为 0 时（包括负整边界、零、正整边界）必须再加一步长。两侧均转为 `DECFLOAT` 是必要的，因为 H2 的 `MOD` 结果类型取决于除数类型，只转换源值仍可能丢失小数余数。这里不使用二进制 `DOUBLE` 或固定小数位截断；类型与函数说明见 [H2 数值类型](https://www.h2database.com/html/datatypes.html#decfloat_type)、[H2 MOD](https://www.h2database.com/html/functions.html#mod)。
+
+旧版 H2 区间表达式的裸 `NUMERIC` 转换和除法会丢失精度。修复后，步长 `10` 时 `-1 → 0`、`9 → 10`、`19 → 20`、`9.99 → 10`、`-10.01 → -10`，并保留 `NULL`。若业务保存了旧计算结果，应重新统计。
+
+PostgreSQL 采用同一余数公式，但 `v = CAST(column AS numeric)`、`r = MOD(v, step)`。旧表达式即使使用 `numeric`，除法也可能先把边界附近的商舍入：步长 `3` 时，`2.99999999999999999999` 曾错误返回 `6`，修复后返回 `3`；恰好 `3` 仍返回 `6`。高精度负数、极大整数和 NULL 同样保留原有数学规则。已有错误统计结果需要重新计算；不会自动修改持久化报表或缓存。
+
+[PostgreSQL 集成测试](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlAggregationIntegrationTest.java)在真实 PostgreSQL 18 上覆盖正负边界、高精度小数、极大整数、600 组固定种子随机数值/步长、六种日期分组、HAVING 别名与源列同名、分页排序及分组计数。运行方式见 [PostgreSQL 回归测试](#ai-datasources-postgresql-运行-postgresql-回归测试)；未提供测试库 URL 时会跳过集成用例。
+
+回归覆盖：[MySQL 季度测试](../mysql/src/test/java/com/yulinlin/jdbc/mysql/parse/group/MysqlQuarterAggregationTest.java)覆盖全部月份、季度切换、跨年和闰日，并比较注解与链式查询；日期边界 SQL 在 H2 MySQL 兼容模式运行，不等同于真实 MySQL 服务集成验证。[H2 区间测试](../h2/src/test/java/com/yulinlin/jdbc/h2/parse/group/H2IntervalAggregationTest.java)在 H2 内存库执行实际生成 SQL，覆盖正负整边界、小数、高精度数值、大整数、不同步长、无效步长、`NULL`、组合查询、分组键排序与指标 HAVING。
+
+H2 的分组键 HAVING 别名兼容问题已修复，使用方式、生成规则与专门的回归测试见上面的 [H2 的 HAVING 别名处理](#ai-orm-analytics-h2-的-having-别名处理)。
+
+MongoDB 当前 `month` 的格式字符串为 `%Y-%m)`，结果多一个右括号，例如 `2026-10)`；`quarter` 仅按 `%Y-%m` 格式化，未截断到季度首月，实际上仍按月份分组。不要将其误认为已经实现自然季度。
+
+以上示例假定日期值已经处于期望的统计时区。日期分组 API 没有统一的时区参数，不负责替所有数据库统一时区；带时区类型、数据库会话时区与存储方式需按具体模块验证。TEXT 日期须统一格式与时区，H2 / PostgreSQL 的当前解析器会转为 `TIMESTAMP`；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
+
+实现核对入口：[注解默认值](../core/src/main/java/com/yulinlin/data/core/anno/JoinAggregations.java)、[链式接口](../core/src/main/java/com/yulinlin/data/core/wrapper/IAggregationsWrapper.java)、[MySQL 日期](../mysql/src/main/java/com/yulinlin/jdbc/mysql/parse/group/DateParse.java)、[MySQL 区间](../mysql/src/main/java/com/yulinlin/jdbc/mysql/parse/group/IntervalParse.java)、[PostgreSQL 日期](../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/parse/group/DateParse.java)、[PostgreSQL 区间](../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/parse/group/IntervalParse.java)、[H2 日期](../h2/src/main/java/com/yulinlin/jdbc/h2/parse/group/DateParse.java)、[H2 区间](../h2/src/main/java/com/yulinlin/jdbc/h2/parse/group/IntervalParse.java)、[SQLite 支持边界](../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/SqliteParseManager.java)、[MongoDB 日期](../mongodb/src/main/java/com/yulinlin/mongodb/parse/group/DateParse.java)、[MongoDB 注册入口](../mongodb/src/main/java/com/yulinlin/mongodb/parse/MongoParseManager.java)、[Elasticsearch 日期](../elasticsearch/src/main/java/com/yulinlin/elasticsearch/parse/group/DateParse.java)、[Elasticsearch 区间](../elasticsearch/src/main/java/com/yulinlin/elasticsearch/parse/group/IntervalParse.java)、[Elasticsearch 结果转换](../elasticsearch/src/main/java/com/yulinlin/elasticsearch/util/AggregationUtil.java)。
 
 ---
 

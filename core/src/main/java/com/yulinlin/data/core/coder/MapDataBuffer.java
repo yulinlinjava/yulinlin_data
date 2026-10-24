@@ -25,30 +25,7 @@ public class MapDataBuffer extends AbstractDataBuffer {
 
     @Override
     public Map<String, Object> toMap() {
-    /*    HashMap<String, Object> map = new HashMap<>();
-        for (Map.Entry<String, Object> entry : this.data.entrySet()) {
-            Object value = entry.getValue();
-            if(value instanceof IDataBuffer){
-                IDataBuffer d = (IDataBuffer)value;
-                map.put(entry.getKey(),d.toMap());
-            }else if(value instanceof Collection){
-              Object val =  ((Collection)value).toArray(new Object[1])[0];
-              if(val instanceof IDataBuffer){
-                  Collection<IDataBuffer> coll = (Collection)value;
-                  List<Map<String, Object>> collect = coll.stream().map(row -> row.toMap()).collect(Collectors.toList());
 
-                  map.put(entry.getKey(),collect);
-              }else {
-                  map.put(entry.getKey(),entry.getValue());
-              }
-
-            }else {
-                map.put(entry.getKey(),entry.getValue());
-            }
-
-
-        }
-*/
         return data;
     }
 

@@ -34,6 +34,7 @@ yulinlin:
     parallel-connections: 1
     auto-server: false
     log: true
+    log-sql-pretty: true
     # RBAC 查询和写入可能包含凭证，禁止打印 SQL 参数。
     log-params: true
     max-param-length: 256

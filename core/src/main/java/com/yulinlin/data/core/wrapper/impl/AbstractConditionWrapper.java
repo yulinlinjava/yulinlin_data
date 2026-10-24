@@ -7,7 +7,7 @@ import com.yulinlin.data.core.node.predicate.And;
 import com.yulinlin.data.core.node.predicate.Not;
 import com.yulinlin.data.core.node.predicate.Or;
 import com.yulinlin.data.core.util.ListUtil;
-import com.yulinlin.data.core.wrapper.IChildrenWrapper;
+import com.yulinlin.data.core.wrapper.IWrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 import com.yulinlin.data.core.node.*;
 import com.yulinlin.data.core.node.base.*;
@@ -22,8 +22,8 @@ import java.util.function.Consumer;
 
 public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrapper<E,R>>
 
-        extends IChildrenWrapper<R>
-        implements IConditionWrapper<E,R>  {
+        extends AbstractWrapper<R>
+        implements IConditionWrapper<E,R>, IWrapper {
 
 
     public static int and = 1;
@@ -40,12 +40,6 @@ public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrap
 
 
     public AbstractConditionWrapper() {
-        init(and);
-    }
-
-    public AbstractConditionWrapper(String name) {
-
-        super(name);
         init(and);
     }
 
@@ -325,12 +319,6 @@ public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrap
     }
 
 
-    @SneakyThrows
-    protected R newInstance(String name){
-        R r =  (R) this.getClass().getConstructor(String.class).newInstance(name);
-        return r;
-    }
-
     @Override
     public R or(Consumer<R> consumer) {
 
@@ -392,14 +380,7 @@ public abstract class AbstractConditionWrapper<E,R extends AbstractConditionWrap
         return (R)this;
     }
 
-/*
-    @Override
-    public R struct(Consumer<R> func) {
-        R r = newInstance(true);
-        func.accept(r);
-        return (R)this;
-    }
-*/
+
 
 
 

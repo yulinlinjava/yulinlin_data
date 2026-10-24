@@ -7,6 +7,7 @@ core 组件、协议和业务边界，修改框架前先读。
 ## 本页导航
 
 - [架构与职责](#架构与职责)
+- [废弃代码清理边界](#废弃代码清理边界)
 
 ## 架构与职责
 
@@ -73,6 +74,17 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 启动 Schema 的 `alter-column-type` 默认关闭，放在 JdbcSessionProperties，由各数据库配置前缀独立绑定。MySQL/PostgreSQL/H2 在初始化时读取实际元数据、检查主键/生成列/外键等限制，再生成改列 SQL；Session 负责连接、DDL 日志和异常传播。VALIDATE 永远不修改，SQLite 不提供自动改类型。默认值和索引无法由数据库安全保留时停止启动，不自动删除重建；多条 DDL 不保证整体回滚，具体限制与人工备份要求见[改列说明](../datasources/schema.md#显式允许修改列类型)。
 
 结构诊断按本次 SchemaMode 与改列开关给出建议：VALIDATE 只校验，主键/索引冲突须人工处理，SQLite 不支持自动改类型。Session 保留 DDL 日志职责，SchemaErrors 只负责诊断文本。不要将驱动原始错误强行翻译或丢弃，也不要将 DDL 失败描述为“已全部回滚”；使用规则见[表结构错误排查](../datasources/schema.md#表结构错误排查)。
+
+## 废弃代码清理边界
+
+清理依据是代码是否有实际行为和接入路径，不能仅凭仓库内没有调用方或类型体为空就删除公开接口。业务扩展可能由外部项目、Spring Bean 或反射接入。
+
+- 已删除整文件注释的 `BufferToBean`、ES `CommandNodeParse` 及失效的注册注释，并清理编解码、Wrapper、工具和 Admin 中被注释的旧实现；这些原本不参与编译或运行。另移除 lang、repository、admin 的 POM 中已注释的旧依赖或打包配置，不改变生效的依赖和打包方式。
+- 已删除未接入任何实现或解析器的 `IConditionObjectWrapper`，以及 `IMetricsWrapper` / `MetricsWrapper` 中只返回 `null` 的 `object(...)` 占位方法。它们没有可用的内置查询功能，但删除仍属于源码/API 不兼容变更；相关调用方须迁移、统一模块版本并重新编译。
+- 保留 `IEntityFilter` 的实体类型匹配、`IEvent` 的默认事件发布、`LoginInterceptor` 的替换协议、`INode` 等标记接口，以及 MySQL 解析兼容类和 `AbstractAnnotationBeanPostProcessor` 继承桥。这些类型不能按“空壳”处理。
+- 抽象执行协议中尚未完善的方法不等于废弃方法。例如 ES `executeCount` 属于会话协议，不能按无用方法删除；现已通过 CountWrapper 解析器和原生 Count API 补齐普通文档计数。分组计数仍明确不支持，边界与回归说明见 [ES 普通查询计数与分页](../datasources/elasticsearch.md#普通查询计数与分页)。
+
+清理回归覆盖：[core API 与扩展保留](../../core/src/test/java/com/yulinlin/data/core/wrapper/CoreApiCleanupTest.java)、[ES 入口边界](../../elasticsearch/src/test/java/com/yulinlin/elasticsearch/EsQueryBoundaryTest.java)、[MongoDB 原生文档条件与更新](../../mongodb/src/test/java/com/yulinlin/mongodb/MongoDocumentCompatibilityTest.java)。构建时应清理已删除类型对应的旧 class 文件，避免被重新打包。
 
 ---
 

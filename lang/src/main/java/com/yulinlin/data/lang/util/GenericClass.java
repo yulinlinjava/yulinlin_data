@@ -56,22 +56,7 @@ public class GenericClass extends BaseGeneric {
      * 转换方法
      * @return
      */
-  /*  @SneakyThrows
-    public  GenericMethod asMethod(String name,Class... types) {
 
-        if(type == null){
-            return null;
-        }
-        try {
-            Method method =  getRawType().getMethod(name,types);
-            return new GenericMethod(this,method);
-        }catch (Exception e){
-
-        }
-        GenericClass p = (GenericClass)prev;
-        return p.asMethod(name,types);
-
-    }*/
 
     public  GenericMethod asMethod(Method method) {
 

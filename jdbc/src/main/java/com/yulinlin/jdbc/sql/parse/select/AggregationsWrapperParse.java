@@ -29,7 +29,7 @@ public class AggregationsWrapperParse implements IParse<AggregationsWrapper> {
             sql.append(" as ");
             sql.append(com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params).alias(selectItem.getAlias()));
             if (params instanceof com.yulinlin.jdbc.sql.SqlParamsContext context) {
-                context.selectExpression(selectItem.getAlias(), expression);
+                context.groupExpression(selectItem.getAlias(), expression);
             }
 
 

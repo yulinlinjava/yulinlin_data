@@ -49,9 +49,29 @@ public class ElasticsearchSession extends AbstractSession  {
         schemaManager.initialize(client, entityClasses, isMapUnderscoreToCamelCase(), mode);
     }
 
+    @SneakyThrows
     @Override
     protected IDataBuffer executeCount(ParseResult request) {
-        return null;
+        if (!(request.getRequest() instanceof CountRequest body)) {
+            throw new IllegalArgumentException("Elasticsearch count 需要 CountRequest");
+        }
+        CountResponse response = client.count(body);
+        if (response.shards().failed().longValue() > 0 || !response.shards().failures().isEmpty()) {
+            throw new IllegalStateException("Elasticsearch count 存在失败分片，拒绝返回不完整总数：failed="
+                    + response.shards().failed());
+        }
+        long total = response.count();
+        if (total < 0) {
+            throw new IllegalStateException("Elasticsearch count 返回了无效的负数：" + total);
+        }
+        // The public ORM count/Page contract is Integer; never silently narrow an ES long.
+        if (total > Integer.MAX_VALUE) {
+            throw new ArithmeticException("Elasticsearch count 超出 Integer 范围：" + total);
+        }
+        IDataBuffer buffer = createDecoderBuffer();
+        // AbstractSession.count reads the total as a string, as JDBC/MongoDB already do.
+        buffer.put("total", Long.toString(total));
+        return buffer;
     }
 
     @Override

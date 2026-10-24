@@ -4,7 +4,6 @@ import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.coder.AbstractTemporalCoder;
 import com.yulinlin.jdbc.coder.TemporalConversions;
 
-import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -48,11 +47,11 @@ public final class PostgresqlTemporalCoders {
         @Override protected LocalDateTime decodeValue(Object value) { return TemporalConversions.toLocalDateTime(value); }
     }
 
-    /** 保留原有 java.sql.Time 的秒级精度。 */
-    public static final class LocalTimeCoder extends AbstractTemporalCoder<LocalTime, Time> {
+    /** JDBC 4.2 原生 TIME 参数，不先转 java.sql.Time 丢失小数秒。 */
+    public static final class LocalTimeCoder extends AbstractTemporalCoder<LocalTime, LocalTime> {
         public LocalTimeCoder() { super(LocalTime.class); }
 
-        @Override protected Time encodeValue(LocalTime value) { return Time.valueOf(value); }
+        @Override protected LocalTime encodeValue(LocalTime value) { return value; }
         @Override protected LocalTime decodeValue(Object value) { return TemporalConversions.toLocalTime(value); }
     }
 }

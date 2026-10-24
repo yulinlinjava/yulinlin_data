@@ -2,14 +2,14 @@ package com.yulinlin.data.core.wrapper.impl;
 
 import com.yulinlin.data.core.node.select.AsField;
 import com.yulinlin.data.core.wrapper.IAsFieldListWrapper;
-import com.yulinlin.data.core.wrapper.IChildrenWrapper;
+import com.yulinlin.data.core.wrapper.IWrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-public abstract class AbstractAsFieldListWrapper<E,R extends AbstractAsFieldListWrapper<E,R>> extends IChildrenWrapper<R> implements IAsFieldListWrapper<E,R> {
+public abstract class AbstractAsFieldListWrapper<E,R extends AbstractAsFieldListWrapper<E,R>> extends AbstractWrapper<R> implements IAsFieldListWrapper<E,R>, IWrapper {
 
 
 
@@ -17,10 +17,6 @@ public abstract class AbstractAsFieldListWrapper<E,R extends AbstractAsFieldList
 
 
     public AbstractAsFieldListWrapper() {
-    }
-
-    public AbstractAsFieldListWrapper(String name) {
-        super(name);
     }
 
 

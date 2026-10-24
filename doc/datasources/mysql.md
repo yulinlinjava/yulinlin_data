@@ -41,6 +41,7 @@ yulinlin:
   mysql:
     log: true
     log-params: false
+    log-sql-pretty: true # 默认开启日志 SQL 美化，实际执行 SQL 不变
     max-param-length: 256
     slow-sql-threshold: 1s
     map-underscore-to-camel-case: true

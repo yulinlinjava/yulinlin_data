@@ -20,7 +20,6 @@ public interface IConditionWrapper<E,R extends IConditionWrapper<E,R>>  extends 
     R condition(Object name, ConditionEnum condition, Object value);
 
     //自定义条件表达式
-    //R expression(String name, Object... params);
 
     R expression(String name, Map<String,Object> data);
 
@@ -74,11 +73,6 @@ public interface IConditionWrapper<E,R extends IConditionWrapper<E,R>>  extends 
     R struct();
 
 
-    R nested(String key);
-
-    R nested(String key,Consumer<R> consumer);
-
-/*    R struct(Consumer<R> func);*/
 
 
     R eq(LambdaPropertyFunction<E> name, Object value);

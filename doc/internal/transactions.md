@@ -67,7 +67,7 @@
 
 已移除无人调用的 `ConnectionUtil` 旧事务入口及其第二套 ThreadLocal，也移除了旧 `ConnectionPool` 类型和 `getJdbcConnection/getConnections/isSpringManaged/clear` 兼容方法。外部若直接依赖这些内部接口，需要迁移；普通 Wrapper、RouteSession、`@Transactional` 和配置用法不变。
 
-回归用例位于 [admin/JdbcTransactionResourcesTest](../../admin/src/test/java/com/yulinlin/admin/jdbc/JdbcTransactionResourcesTest.java)，覆盖双事务扩容等待、已有连接复用、晚到连接关闭、收尾拒绝借用和提交失败清理。本次仅编写用例并静态核对，未编译或运行。
+实现入口：[JdbcTransactionResources](../../jdbc/src/main/java/com/yulinlin/jdbc/session/JdbcTransactionResources.java)。原文引用的 `admin/JdbcTransactionResourcesTest` 已不在当前仓库中，不能再据此宣称已有回归覆盖；双事务扩容等待、已有连接复用、晚到连接关闭、收尾拒绝借用和提交失败清理仍应作为后续事务测试清单。本次只修正文档引用，未新增或运行事务资源测试。
 
 ---
 

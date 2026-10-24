@@ -18,7 +18,7 @@
 
 ### 解析器注册
 
-SqlParseManager 复用 CRUD/条件/JOIN/聚合；它不是天然兼容所有数据库的标准 SQL 层。默认 JSON 和分页带 MySQL 风格，日期/区间需要模块自己注册。
+SqlParseManager 复用 CRUD/条件/JOIN/聚合；它不是天然兼容所有数据库的标准 SQL 层。默认分页带 MySQL 风格，日期/区间需要模块自己注册。JSON 仅保留整字段编解码，不再通过字段名解析 JSON 路径；JSON 操作使用目标数据库的参数化原生 SQL。
 
 当前 PostgreSQL 的注册方式：
 
@@ -171,7 +171,7 @@ public class MydbAutoConfiguration {
 }
 ```
 
-需要专用 Session 时使用 `new JdbcSessionFactory("jdbc:mydb:", MydbSession::new, properties, new MydbCoderManager())`，由 Session 构造安装解析器，工厂直接安装编解码管理器。公共的 log、log-params、max-param-length、slow-sql-threshold、map-underscore-to-camel-case、schema-mode、schema-packages、parallel-connections 与 execute-batch-size 由 MydbProperties 继承并绑定在 yulinlin.mydb 下；同类某个 Session 需要例外配置时使用三参数 create 重载。前缀和 supportsJdbcUrl 仅保留兼容信息，不做自动类型校验。
+需要专用 Session 时使用 `new JdbcSessionFactory("jdbc:mydb:", MydbSession::new, properties, new MydbCoderManager())`，由 Session 构造安装解析器，工厂直接安装编解码管理器。公共的 log、log-params、log-sql-pretty、max-param-length、slow-sql-threshold、map-underscore-to-camel-case、schema-mode、schema-packages、parallel-connections 与 execute-batch-size 由 MydbProperties 继承并绑定在 yulinlin.mydb 下；同类某个 Session 需要例外配置时使用三参数 create 重载。前缀和 supportsJdbcUrl 仅保留兼容信息，不做自动类型校验。
 
 资源声明文件 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 写入：
 
@@ -243,7 +243,7 @@ public JdbcSessionFactory h2SessionFactory(H2Properties properties) {
 
 某个数据库需要调整时间规则时，只修改本模块具体编码器；例如修改 `H2TemporalCoders.DateTimeCoder` 不会改变 MySQL/PostgreSQL/SQLite 的编码器。额外自定义类型可以在对应 CoderManager 子类的 `init()` 调用 `super.init()` 后注册。注意父类构造时就会调用 init，不要在其中读取尚未初始化的子类字段；依赖构造参数的编码器可在子类构造函数的 super 调用完成后注册。公共转换工具修改仍需考虑所有调用者，不应加入数据库专属分支。
 
-MySQL/PostgreSQL/H2 当前各自将 `Date` / `DateTime` / `LocalDateTime` 编码为 `LocalDateTime`。其中 Date 按 JVM 默认时区提取本地日期时间，与读取无时区列时的还原规则对称。公共 JdbcSession 使用 `setObject`，不要再包成 `Timestamp` 或统一指定 `Types.TIMESTAMP`；MySQL 驱动需要据 Java 类型选择本地 DATETIME 语义。LocalDate/LocalTime 保留 java.sql.Date/Time 编码，其中 Time 仍为秒级精度。SQLite 自己定义固定文本格式：日期时间 `yyyy-MM-dd HH:mm:ss`、日期 `yyyy-MM-dd`、时间 `HH:mm:ss`；格式器保留在 SQLite 模块。`SqliteSession.bindValue` 为直接传入的时间对象调用 `SqliteTemporalCoders.toTextValue`，复用本模块的编码实现。其他模块直接传给 JDBC 的原始参数不会自动经过编码器；使用框架的字段或条件参数编码入口才能应用上述规则。
+MySQL/PostgreSQL/H2 当前各自将 `Date` / `DateTime` / `LocalDateTime` 编码为 `LocalDateTime`。其中 Date 按 JVM 默认时区提取本地日期时间，与读取无时区列时的还原规则对称。公共 JdbcSession 使用 `setObject`，不要再包成 `Timestamp` 或统一指定 `Types.TIMESTAMP`；MySQL 驱动需要据 Java 类型选择本地 DATETIME 语义。LocalDate 保留 java.sql.Date 编码；MySQL/H2 的 LocalTime 仍编码为秒级 java.sql.Time，PostgreSQL 则直接绑定 LocalTime，避免在驱动绑定前丢失小数秒，最终精度由目标列决定。SQLite 自己定义固定文本格式：日期时间 `yyyy-MM-dd HH:mm:ss`、日期 `yyyy-MM-dd`、时间 `HH:mm:ss`；格式器保留在 SQLite 模块。`SqliteSession.bindValue` 为直接传入的时间对象调用 `SqliteTemporalCoders.toTextValue`，复用本模块的编码实现。其他模块直接传给 JDBC 的原始参数不会自动经过编码器；使用框架的字段或条件参数编码入口才能应用上述规则。
 
 共享转换支持本地时间对象、旧驱动 Timestamp，以及空格/T 分隔、带 0～9 位小数秒的日期时间文本；Field/Class 两个 decode 入口一致，也允许直接传入 null。本地时间文本直接解析为 LocalDateTime，不绕经 JVM 默认时区；只有还原为 Date 时才按 JVM 默认时区转成时间点。多实例应统一 JVM 时区，不带时区列不能保存夏令时回拨的原始偏移。core 的 DateTimeCoder、非 JDBC 后端、JSON 日期展示和自动 Schema 类型不变，也不自动迁移历史偏移数据。手工建成 MySQL TIMESTAMP 或其他带时区列仍受数据库时区规则影响，不在“数字不变”的保证范围内。发布时 core、jdbc 与所用数据库模块一起更新，因为 JDBC 注册依赖 core 新增的 replaceCoder；特殊类型要把编码值、驱动参数类型、目标列和读回格式一起验证。
 

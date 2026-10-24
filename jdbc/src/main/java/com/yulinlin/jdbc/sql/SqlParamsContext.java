@@ -16,6 +16,7 @@ public final class SqlParamsContext implements IParamsContext {
     private final NameParse nameParse;
     private AliasContent aliases;
     private Map<String, String> expressions;
+    private Map<String, String> groupExpressions;
     private Map<String, Object> attributes;
 
     public SqlParamsContext(IParamsContext delegate, SqlParseManager parseManager) {
@@ -38,8 +39,18 @@ public final class SqlParamsContext implements IParamsContext {
     public void selectExpression(String alias, String expression) {
         if (expressions == null) expressions = new HashMap<>();
         expressions.put(alias, expression);
+        if (groupExpressions != null) groupExpressions.remove(alias);
     }
     public String selectExpression(String alias) { return expressions == null ? null : expressions.get(alias); }
+    /** Marks a selected grouping key separately from aggregate metrics, within this request only. */
+    public void groupExpression(String alias, String expression) {
+        selectExpression(alias, expression);
+        if (groupExpressions == null) groupExpressions = new HashMap<>();
+        groupExpressions.put(alias, expression);
+    }
+    public String groupExpression(String alias) {
+        return groupExpressions == null ? null : groupExpressions.get(alias);
+    }
     public Object attribute(String key) { return attributes == null ? null : attributes.get(key); }
     public void attribute(String key, Object value) {
         if (attributes == null) attributes = new HashMap<>();

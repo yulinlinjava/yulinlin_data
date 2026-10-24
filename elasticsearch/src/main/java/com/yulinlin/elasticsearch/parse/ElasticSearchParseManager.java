@@ -24,14 +24,11 @@ public class ElasticSearchParseManager extends SimpParseManager  {
 
     protected void init(){
 
-      //this.register(new CommandNodeParse());
-
         this.register(new EsInsertFieldsParse());
         this.register(new EsUpdateFieldsParse());
 
 
         this.register(new EsConditionWrapperParse());
-        this.register(new NestedParse());
         this.register(new EqParse());
         this.register(new NeParse());
         this.register(new GteParse());
@@ -72,6 +69,7 @@ public class ElasticSearchParseManager extends SimpParseManager  {
         this.register(new EsInsertWrapperParse());
 
         this.register(new EsSelectWrapperParse());
+        this.register(new EsCountWrapperParse());
 
         this.register(new EsUpdateWrapperParse());
 

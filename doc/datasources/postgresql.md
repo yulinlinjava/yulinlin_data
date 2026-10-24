@@ -2,13 +2,16 @@
 
 [文档首页](../README.md) / [数据源](README.md)
 
-接入 PostgreSQL 与中文全文检索前置配置。
+接入 PostgreSQL、JSON 整字段存储、聚合与真实数据库回归，以及中文全文检索前置配置。
 
 共同规则：[自动建表与索引](schema.md) · [多数据源与默认组](routing.md) · [SQL 与事务日志](../operations/sql-log.md)。
 
 ## 本页导航
 
 - [PostgreSQL 接入](#postgresql-接入-1)
+- [JSON 整字段存储](#json-整字段存储)
+- [日期与聚合](#日期与聚合)
+- [运行 PostgreSQL 回归测试](#运行-postgresql-回归测试)
 - [PostgreSQL 中文全文检索](#postgresql-中文全文检索)
 
 ## PostgreSQL 接入
@@ -60,9 +63,90 @@ yulinlin:
 
 标识符采用双引号，schema 限定名按段引用；实际列名应与模型映射一致。普通 CRUD 和实体可复用，原始 MySQL SQL、反引号、函数与 DDL 不会被自动翻译。自动 Schema 不负责序列、自增键、外键、分区表或数据迁移。
 
-JSON 读取支持合法 JSON 的路径，例如 `payload->profile->name`；数字/布尔条件按比较值生成 CAST。路径部分更新尚未自动生成 jsonb_set，应整字段替换或写专用 SQL。非法 JSON 和不能转换的值会报错，不是静默跳过。
+JSON 只保留整字段编解码、读取和替换；JDBC Wrapper 不再解析 `payload->profile->name`，也不自动生成 JSON 查询、类型推断或 `jsonb_set`。路径操作请显式编写参数化原生 SQL，具体迁移规则见[JSON 字段与原生 SQL](../orm/raw-sql.md#json-字段与原生-sql)。
 
 JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream、bytea/oid 等二进制对象；需要保存时应先由明确的编解码策略转成文本，或把文件放到对象存储后只保存地址。原生布尔列保留 false/NULL；除布尔列外结果大多沿用字符串解码，不能推定 timestamptz 等扩展类型完整往返已验证。
+
+### JSON 整字段存储
+
+JSON 数据仍可存储在已有的 `jsonb`、`json` 或文本列中。Map、List、对象继续使用现有 JSON 编解码器，查询读取整个字段，更新替换整个字段；本次不迁移列类型或已有数据。自动 Schema 仍按原有策略处理，**不自动推断为 jsonb**。
+
+下面是使用手工建表的示例实体，保持 `autoSchema=false`（默认）：
+
+```java
+package demo.domain;
+
+import com.yulinlin.common.domain.IdEntity;
+import com.yulinlin.data.core.anno.JoinField;
+import com.yulinlin.data.core.anno.JoinTable;
+import java.util.Map;
+
+@JoinTable("pg_document_demo")
+public class PgDocument extends IdEntity<PgDocument> {
+    @JoinField(name = "document_data")
+    private Map<String, Object> payloadData;
+
+    public Map<String, Object> getPayloadData() { return payloadData; }
+    public void setPayloadData(Map<String, Object> value) { payloadData = value; }
+}
+```
+
+仅在自己的示例数据库准备表和数据：
+
+```sql
+CREATE TABLE pg_document_demo (
+    id VARCHAR(32) PRIMARY KEY,
+    document_data JSONB
+);
+INSERT INTO pg_document_demo VALUES
+    ('demo-1', '{"profile":{"name":"旧名字"},"enabled":false}');
+```
+
+整字段替换和读取：
+
+```java
+import com.yulinlin.common.model.ModelUpdateWrapper;
+import com.yulinlin.common.model.ModelSelectWrapper;
+import demo.domain.PgDocument;
+import java.util.Map;
+
+int affected = ModelUpdateWrapper.newInstance("postgresql", PgDocument.class)
+        .field("payloadData", Map.of(
+                "profile", Map.of("name", "张三"),
+                "enabled", true))
+        .eq("id", "demo-1")
+        .execute();
+
+PgDocument document = ModelSelectWrapper.newInstance("postgresql", PgDocument.class)
+        .eq("id", "demo-1")
+        .selectOne();
+```
+
+`payloadData` 仍按实体映射转换为 `document_data`，Map 按原来的编码器序列化。普通整字段参数沿用上文 `stringtype=unspecified` 配置，让 PG 根据目标列推断字符串类型；不自动补 JSON CAST。
+
+整字段更新是**替换**，不是 JSON 合并；读取后修改再写回还需处理并发覆盖，不能把它当成路径原子更新。需要数据库端 JSON 查询、局部更新或特定转换时，使用[参数化原生 SQL 示例](../orm/raw-sql.md#json-字段与原生-sql)。PG 本身的 JSON 能力没有被禁用，仅取消 ORM 的自动翻译层。
+
+### 日期与聚合
+
+`Date` 按 JVM 默认时区转换为当地 `LocalDateTime`；`DateTime` / `LocalDateTime` 按日期时间值绑定。搭配 `timestamp without time zone` 列时保持年月日时分秒及列精度允许的小数秒，不因数据库会话时区改变而额外转换。JVM 时区应保持明确且一致；这不是 `timestamptz` / 跨时区瞬时时间的统一策略。
+
+`LocalTime` 直接作为 JDBC 4.2 原生参数传给驱动，不再先转成 `java.sql.Time` 截去小数秒；例如 `13:14:15.123456` 可在 `time(6)` 列往返。最终舍入由驱动和目标列精度决定，不承诺纳秒全部入库；原来已经丢失的小数秒无法恢复。自定义扩展若曾假定编码结果是 `java.sql.Time`，应改为接受 `LocalTime`。读取仍兼容旧 `Time` 和字符串。驱动类型映射见 [pgJDBC 日期时间支持](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)。
+
+数字区间使用 `numeric` 精确取余计算上界，避免 `FLOOR(x / step)` 在高精度边界前先舍入。例如步长为 3，`2.99999999999999999999 → 3`、`3 → 6`、`-3.00000000000000000001 → -3`。步长必须为正整数，NULL 保留；浮点数据自身已有的精度损失不会被修复。日期维度、季度格式、HAVING 和完整边界说明见[统计分析](../orm/analytics.md)。旧版舍入错误影响的持久化统计结果需要业务重新计算。
+
+### 运行 PostgreSQL 回归测试
+
+默认测试包含不需要数据库的解析/日期编码器用例。真实数据库测试须显式提供测试库 URL，否则跳过，不自动连接生产库或安装数据库。本轮在 PostgreSQL 18 执行，不能据此宣称验证了所有 PG 版本或 pg_jieba 插件。
+
+从仓库根目录运行（需 JDK 25、Maven 及可访问的专用测试库）：
+
+```text
+mvn -pl postgresql -am test "-Dtest=Postgresql*Test" "-Dsurefire.failIfNoSpecifiedTests=false" "-Dpg.test.url=jdbc:postgresql://127.0.0.1:5432/orm_test?stringtype=unspecified" "-Dpg.test.user=orm_test"
+```
+
+密码由环境变量 `PG_TEST_PASSWORD` 提供，不写入测试代码或命令参数。账号需有连接和创建临时表权限；用例仅创建连接级临时表，读写使用 `pg_temp` 限定名，连接关闭后清理，不创建或删除业务表。完整 CRUD 沿用上文 URL 的字符串类型推断配置。
+
+覆盖入口：[JDBC API 边界](../../jdbc/src/test/java/com/yulinlin/jdbc/sql/JdbcJsonBoundaryTest.java)、[整字段编解码](../../jdbc/src/test/java/com/yulinlin/jdbc/coder/JdbcJsonColumnCoderTest.java)、[真实 JSON 整字段/原生 SQL](../../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlJsonStorageIntegrationTest.java)、[真实聚合与高精度边界](../../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlAggregationIntegrationTest.java)、[日期、布尔值与 JDBC CRUD/回滚](../../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlJdbcIntegrationTest.java)。最后一项通过 JDBC 连接验证事务回滚，不代替 Spring 事务传播/多数据源事务专项测试。
 
 ### PostgreSQL 中文全文检索
 

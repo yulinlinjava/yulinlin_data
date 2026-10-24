@@ -50,16 +50,7 @@ public abstract class AbstractUpdateWrapper<E,
         return (R)this;
     }
 
-    /*   @Override
-    public <S extends IUpdateFieldsWrapper<E, S>> IUpdateFieldsWrapper<E, S> fields() {
-        return columns;
-    }
 
-    @Override
-    public <S extends IUpdateFieldsWrapper<E, S>> R fields(Consumer<IUpdateFieldsWrapper<E, S>> func) {
-        func.accept(columns);
-        return (R)this;
-    }*/
 
 
 

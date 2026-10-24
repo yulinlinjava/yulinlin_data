@@ -5,9 +5,5 @@ public class AggregationsWrapper<E> extends AbstractAggregationsWrapper<E,Aggreg
     public AggregationsWrapper() {
     }
 
-    public AggregationsWrapper(String name) {
-        super(name);
-    }
-
 
 }

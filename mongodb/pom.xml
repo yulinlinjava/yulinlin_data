@@ -14,6 +14,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>com.yulinlin</groupId>
             <artifactId>core</artifactId>
             <version>${yulinlin.version}</version>

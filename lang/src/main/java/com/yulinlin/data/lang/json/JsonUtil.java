@@ -116,13 +116,7 @@ public class JsonUtil {
     }
 
 
-/*
-    public static <T> T parseByClass(String json,Class f) {
-        ParameterizedType type = (ParameterizedType)  f.getGenericSuperclass();
-        return  parseParameterizedType(json,type);
-    }
 
-*/
 
 
 

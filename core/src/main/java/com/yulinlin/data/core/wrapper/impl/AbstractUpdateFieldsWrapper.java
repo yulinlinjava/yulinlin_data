@@ -15,10 +15,6 @@ public abstract class AbstractUpdateFieldsWrapper<E,R extends AbstractUpdateFiel
     public AbstractUpdateFieldsWrapper() {
     }
 
-    public AbstractUpdateFieldsWrapper(String name) {
-        super(name);
-    }
-
 
     @Override
     public R inc(String name, Number value) {

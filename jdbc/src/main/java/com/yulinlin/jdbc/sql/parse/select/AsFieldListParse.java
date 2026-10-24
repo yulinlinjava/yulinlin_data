@@ -5,37 +5,14 @@ import com.yulinlin.data.core.parse.IParamsContext;
 import com.yulinlin.data.core.parse.IParse;
 import com.yulinlin.data.core.parse.IParseManager;
 import com.yulinlin.data.core.wrapper.impl.AsFieldListWrapper;
-import com.yulinlin.jdbc.sql.parse.SqlJsonUtil;
 
-import java.util.Collection;
+import java.util.StringJoiner;
 
 public class AsFieldListParse implements IParse<AsFieldListWrapper> {
-
-
-
-        @Override
-    public String parse(AsFieldListWrapper condition, IParamsContext params, IParseManager parseManager) {
-            SqlJsonUtil.push(condition);
-            StringBuffer sql = new StringBuffer();
-            Collection<INode> list = condition.getList();
-
-
-
-            try {
-                for (INode node : list) {
-                    if (sql.length() > 0) {
-                        sql.append(" , ");
-                    }
-                    Object sqlTel = parseManager.parse(node, params);
-                    sql.append(sqlTel);
-                }
-            }finally {
-                SqlJsonUtil.pop();
-            }
-
-
-
-
-            return sql.toString();
+    @Override
+    public String parse(AsFieldListWrapper fields, IParamsContext params, IParseManager manager) {
+        StringJoiner sql = new StringJoiner(" , ");
+        for (Object item : fields.getList()) sql.add(String.valueOf(manager.parse((INode) item, params)));
+        return sql.toString();
     }
 }

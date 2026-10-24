@@ -16,7 +16,6 @@ public interface IFieldsWrapper<E,R extends IFieldsWrapper<E,R>> extends IMetaNo
 
     R field(LambdaPropertyFunction<E> name, Object value) ;
 
-    //MetaWrapper meta(String name);
 
 
 

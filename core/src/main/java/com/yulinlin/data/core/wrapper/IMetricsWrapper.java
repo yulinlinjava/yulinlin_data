@@ -46,12 +46,5 @@ public interface IMetricsWrapper<E,R extends IMetricsWrapper<E,R>> extends IMeta
      R max(String  name, String alias);
 
 
-   //子对象查询
-   <N,NR extends IMetricsWrapper<N,NR>> NR object(String name);
-
-
-   //子对象查询
-   <N,NR extends IMetricsWrapper<N,NR>> NR  object(String name,Class<N> clazz);
-
     
 }

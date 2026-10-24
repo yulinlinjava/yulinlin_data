@@ -21,11 +21,7 @@ public class JoinTransactionAop {
 
     @Around("aop()")
     public Object doAroundAdvice(ProceedingJoinPoint pjp) throws Throwable {
-     /*   MethodSignature methodSignature = (MethodSignature) pjp.getSignature();
-        JoinTransaction joinTransaction = methodSignature.getMethod().getAnnotation(JoinTransaction.class);
-        if(joinTransaction == null){
-            joinTransaction = pjp.getTarget().getClass().getAnnotation(JoinTransaction.class);
-        }*/
+
 
         SessionUtil.route().startTransaction();
         Object val = null;

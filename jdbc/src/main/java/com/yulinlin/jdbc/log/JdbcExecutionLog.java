@@ -107,8 +107,10 @@ public final class JdbcExecutionLog {
     private static String singleMessage(String event, long elapsedMs, ParseResult result, EntitySession session,
                                  JdbcSessionProperties properties) {
         SqlNode node = sqlNode(result);
+        boolean pretty = isSqlPrettyEnabled(properties);
         StringBuilder message = base(event, elapsedMs, result, session)
-                .append("\nSQL=").append(quoteSql(node == null ? null : node.getSql()));
+                .append("\nSQL=").append(formatSql(node == null ? null : node.getSql(),
+                        MAX_SQL_LENGTH, pretty, pretty ? identifierQuote(session) : 0));
         appendParams(message, node, properties);
         return message.toString();
     }
@@ -118,7 +120,8 @@ public final class JdbcExecutionLog {
         List<ParseResult> results = execution.requests();
         ParseResult sampleResult = firstResult(results);
         SqlNode sample = sqlNode(sampleResult);
-        SqlTemplateSummary templates = sqlTemplates(results);
+        boolean pretty = isSqlPrettyEnabled(properties);
+        SqlTemplateSummary templates = sqlTemplates(results, pretty, pretty ? identifierQuote(execution.session()) : 0);
         StringBuilder message = base(event, execution.elapsedMillis(), sampleResult, execution.session());
         // 使用原始纳秒计算分摊值，避免先截断为毫秒造成小批次平均值失真。
         if (execution.error() == null && !results.isEmpty()) {
@@ -193,17 +196,34 @@ public final class JdbcExecutionLog {
         return truncate(rendered, maxLength);
     }
 
-    private static String quoteSql(String sql) {
-        return quoteSql(sql, MAX_SQL_LENGTH);
+    private static boolean isSqlPrettyEnabled(JdbcSessionProperties properties) {
+        return properties == null || properties.isLogSqlPretty();
     }
 
-    private static String quoteSql(String sql, int maxLength) {
-        if (sql == null) return "\"<unknown>\"";
-        return '"' + truncate(singleLine(sql), maxLength)
-                .replace("\\", "\\\\").replace("\"", "\\\"") + '"';
+    private static char identifierQuote(EntitySession session) {
+        // 使用当前解析器的引用规则，避免把 MySQL 的双引号字符串误当成标识符。
+        try {
+            if (session instanceof AbstractJdbcSession jdbc
+                    && jdbc.getParseManager() instanceof com.yulinlin.jdbc.sql.SqlParseManager parser) {
+                String alias = parser.nameParse().selectAlias("sql_log_identifier");
+                if ("\"sql_log_identifier\"".equals(alias)) return '"';
+                if ("`sql_log_identifier`".equals(alias)) return '`';
+            }
+        } catch (RuntimeException ignored) {
+            // 自定义解析器无法提供规则时保留引用，不影响日志或执行。
+        }
+        return 0;
     }
 
-    private static SqlTemplateSummary sqlTemplates(List<ParseResult> results) {
+    private static String formatSql(String sql, int maxLength, boolean pretty, char identifierQuote) {
+        if (pretty) {
+            return truncate(sql == null ? "<unknown>" : SqlLogFormatter.readable(sql, identifierQuote), maxLength);
+        }
+        String rendered = sql == null ? "<unknown>" : truncate(singleLine(sql), maxLength);
+        return '"' + rendered.replace("\\", "\\\\").replace("\"", "\\\"") + '"';
+    }
+
+    private static SqlTemplateSummary sqlTemplates(List<ParseResult> results, boolean pretty, char identifierQuote) {
         if (results == null || results.isEmpty()) return new SqlTemplateSummary(0, "[]");
         Set<String> unique = new java.util.LinkedHashSet<>();
         for (ParseResult result : results) {
@@ -214,10 +234,11 @@ public final class JdbcExecutionLog {
         int index = 0;
         for (String sql : unique) {
             if (index++ == MAX_LOGGED_TEMPLATES) break;
-            sqls.add(quoteSql(sql, MAX_BATCH_SQL_LENGTH));
+            sqls.add(formatSql(sql, MAX_BATCH_SQL_LENGTH, pretty, identifierQuote));
         }
         if (unique.size() > MAX_LOGGED_TEMPLATES) {
-            sqls.add("\"...(+" + (unique.size() - MAX_LOGGED_TEMPLATES) + ")\"");
+            sqls.add(formatSql("...(+" + (unique.size() - MAX_LOGGED_TEMPLATES) + ")",
+                    MAX_BATCH_SQL_LENGTH, pretty, identifierQuote));
         }
         return new SqlTemplateSummary(unique.size(), sqls.toString());
     }

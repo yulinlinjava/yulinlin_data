@@ -11,6 +11,7 @@ QueryRequest 和 ExecuteRequest 的参数化原始 SQL。
 - [自定义 SQL 执行](#自定义-sql-执行)
 - [查询列表与单条](#查询列表与单条)
 - [自定义写入](#自定义写入)
+- [JSON 字段与原生 SQL](#json-字段与原生-sql)
 - [占位符与安全](#占位符与安全)
 
 ## 自定义 SQL 执行
@@ -61,6 +62,49 @@ Integer affected = update.execute();
 此入口走通用 update 执行路径，命令 ParseType 同为 update；不根据 SQL 首词猜测 INSERT/DELETE 类型。适用于后端支持的写语句，不作为返回查询结果的入口。DDL、驱动批量改写、受影响行数等行为仍由目标数据库/驱动决定。
 
 Request 可以复用事务上下文，但可变请求对象不能跨线程共享。原始查询 SQL 可以参与缓存，Key 会包含 SQL 与带类型参数。引入缓存 Provider 后，自定义写 SQL 默认继承 `yulinlin.cache.clear-on-write`；开启时因为无法可靠推导目标表，会在提交成功后清理全部 ORM 查询缓存，也可调用 `update.clearCache(false)` 关闭本次清理。未引入 Provider 时没有查询缓存，因此也不执行这项全量失效判定。
+
+### JSON 字段与原生 SQL
+
+JDBC ORM 的职责是字段映射、参数编解码、SQL 执行和结果映射。Map、List、对象与 JSON 的整字段编解码保留；可以用 `.field("payloadData", value)` 替换整个 JSON 字段，再通过普通实体查询读取。已有列类型、JSON 格式和自动 Schema 策略不因本次调整而改变。
+
+**自动 JSON 路径查询及局部更新已移除，不提供兼容开关。** 这是源码及二进制不兼容变更：
+
+- 删除 `SqlJsonUtil`、MySQL 的 `MysqlJsonUtil`、PG 的 `JsonPath` 和 JSON 更新解析器，以及各方言的 `jsonExtract` 入口。
+- 删除通用 `IConditionWrapper` / `ConditionManager` 的 `nested(...)`、core `Nested` 节点、`IConditionNestedWrapper` 和原路径前缀基类 `IChildrenWrapper`。相关 Wrapper 的带 `String name` 路径前缀构造器和 `getName()` 也删除；无参构造、普通字段、AND/OR/NOT 组合仍保留。
+- 原 `.eq("payload->name", value)`、`.field("payload->name", value)` 等字段名路径语法在 JDBC 解析时直接报错，包括投影、条件、排序、聚合及更新；不会忽略条件、自动降级成整字段操作或产生路径更新 SQL。值中包含 `->` 不受影响。
+- 自定义方言若覆盖过 `NameParse.resolve(name, params, comparisonValue)`，应改为 `resolve(name, params)`；字段解析不再根据比较值推断 JSON 类型。使用过已删除基类的扩展应改为普通 Wrapper / 节点。
+- 所有模块使用同一版本，调用方重新编译；升级时清理旧构建产物，避免已删除的类残留在 JAR。没有依赖旧 API 的普通 CRUD 调用方式不变。
+
+JDBC 自动 JSON 翻译层与通用 nested 入口均已移除；ES 专属的 `NestedNode`、`NestedParse` 和解析器注册也已删除，不保留另一套框架 nested 入口。普通条件与 AND/OR/NOT 分组仍保留；MongoDB 原生点路径查询/更新不变。确需 ES nested 查询时，由业务直接使用 Elasticsearch 原生客户端，框架不提供统一封装，也不会把点路径条件自动改写成 nested 查询。详见 [ES 查询能力边界](../datasources/elasticsearch.md#查询能力边界)。PG 数字区间和时间精度修复保留。
+
+数据库自身的 JSON 操作仍可通过 `QueryRequest` / `ExecuteRequest` 执行。以下是 **PG 专用**示例，表和实体沿用 [PG JSON 整字段存储](../datasources/postgresql.md#json-整字段存储)：
+
+```java
+import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.request.ExecuteRequest;
+import com.yulinlin.data.lang.json.JsonUtil;
+import demo.domain.PgDocument;
+import java.util.Map;
+
+var query = QueryRequest.newInstance(
+        "select id, document_data as \"payloadData\" from pg_document_demo "
+        + "where document_data #>> '{profile,name}' = #{name}",
+        Map.of("name", "张三"), PgDocument.class);
+query.setSession("postgresql");
+var rows = query.selectList();
+
+var update = ExecuteRequest.newInstance(
+        "update pg_document_demo "
+        + "set document_data = jsonb_set(document_data, '{profile,name}', "
+        + "CAST(#{jsonValue} AS jsonb), true) where id = #{id}",
+        Map.of("jsonValue", JsonUtil.toJson("李四"), "id", "demo-1"));
+update.setSession("postgresql");
+int affected = update.execute();
+```
+
+这里的路径和 SQL 由开发者明确编写，业务值用 `#{...}` 绑定；不要把前端输入拼接进 SQL，也不要用 `${...}` 传业务值。局部写入的新值显式 JSON 序列化：字符串、数字、对象的 JSON 类型由调用方决定，框架不再猜测。PG 的 `jsonb_set` 不自动补中间父路径，SQL NULL 文档也不自动变为对象；这些由业务和数据库原生规则决定。其他数据库需要自己的 SQL，不进行跨库翻译。
+
+已有可信 `expression(...)`、SQL 元数据表达式入口仍保留；原生表达式应走这些明确入口，不把带 `->` 的 SQL 塞回普通字段名参数。整字段替换不会合并未提供的键；读改写场景需考虑并发覆盖，必要时使用版本条件或原生原子更新。
 
 ### 占位符与安全
 

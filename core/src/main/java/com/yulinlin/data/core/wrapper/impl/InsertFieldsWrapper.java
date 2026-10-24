@@ -9,10 +9,6 @@ public class InsertFieldsWrapper<E>
     public InsertFieldsWrapper() {
     }
 
-    public InsertFieldsWrapper(String name) {
-        super(name);
-    }
-
 
 
 

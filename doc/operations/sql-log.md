@@ -15,6 +15,7 @@ MySQL、PostgreSQL、SQLite 和 H2 都继承同一组日志配置，前缀替换
 
 - `log` 默认 `false`，只控制真正访问数据库后的成功日志；缓存命中没有执行 SQL，因此不会伪造 SQL 日志。
 - `log-params` 默认 `false`。开启后打印绑定参数，但长值最多保留 `max-param-length` 个字符；字节数组和输入流只记录类型、长度等摘要。
+- `log-sql-pretty` 默认 `true`，对打印出来的 SQL 做人类可读美化：不添加外层引号和额外转义，省略简单标识符的引用符，整理字符串外的多余空格及逗号、括号间距。设为 `false` 恢复原来的带引号、转义展示。普通、批量、慢查询、失败日志均生效；只处理日志副本，不修改执行 SQL、参数或编解码。只保留此开关，旧的 `log-sql-escape` 配置应移除。
 - `max-param-length` 默认 `256`，必须为正整数。
 - 日期时间参数（`LocalDateTime`、框架 `DateTime`、`Date`/`Timestamp`）在日志中统一显示为 `yyyy-MM-dd HH:mm:ss`，不显示 `T` 或小数秒；只格式化日志，不改变实际绑定对象、数据库精度或时区规则。`Date` 按 JVM 本地时区展示，纯日期/时间类型和普通字符串保持原有格式。
 - `slow-sql-threshold` 默认 `0`（关闭）。配置为 `1s` 后，框架侧耗时达到 1 秒的执行以 `WARN` 输出，即使 `log=false` 也会记录。
@@ -32,6 +33,26 @@ SQL=["insert into ..."]
 ```
 
 普通、批量、慢操作和失败 SQL 日志统一分行：首行摘要，下一行 SQL，开启 log-params 时再输出一行参数；仍是一次 logger 调用，不拆为多个日志事件。参数只在 log-params 开启时输出；批量仍仅取首个请求的参数，最多 20 项并限制每项长度，标签统一为“参数”，不代表打印整个批次所有值。并行拆组时各组单独计时，不能将各组耗时相加当作请求总耗时；此处不额外输出请求汇总日志。
+
+控制台默认开启可读 SQL，例如使用 H2：
+
+```yaml
+yulinlin:
+  h2: # 按实际模块替换为 mysql / postgresql / sqlite
+    log: true
+    log-sql-pretty: true # 默认 true；false 恢复原来的转义展示
+```
+
+```text
+# log-sql-pretty: true（默认）
+SQL=insert into user_info (date, upt_time, id, crt_time) values (?, ?, ?, ?)
+# log-sql-pretty: false
+SQL="insert into \"user_info\" ( \"date\" , \"upt_time\" , \"id\" , \"crt_time\" ) values ( ? , ? , ? , ? )"
+```
+
+标识符引用规则来自当前 Session 的 SQL 解析器，例如 MySQL 的反引号、H2/PostgreSQL 的双引号。仅省略字母/下划线起始、后续为字母/数字/下划线/美元符号的简单名称引用；带空格、点号或转义引用符的复杂名称仍保留。字符串、JSON、注释、美元引用内容不会被当成标识符删引号；未知引用规则保守保留。美化后的 SQL 仅用于阅读，省略引用后可能改变关键字或大小写语义，不能替代原始可执行 SQL。
+
+批量仍使用 `SQL=[...]` 展示去重后的受限模板列表。两个模式都会保留日志单行化、控制字符处理和长度截断；美化时字符串和注释中的换行等控制字符用可见的 `\n`、`\r`、`\t` 或 Unicode 转义表示，普通内容及空格保留。该开关不会开启成功日志或参数日志，不会将参数值拼进 SQL，也不会改变外部 JSON 日志编码器自身的转义行为。框架格式化的是 logger 消息，因此控制台和订阅该 logger 的文件日志会看到同一展示格式；不改变日志 appender 配置。
 
 耗时是应用侧观察值，可能包含获取连接、JDBC 驱动、参数绑定和结果读取，并不等同于数据库服务器内部的纯执行时间。写入成功日志在 JDBC 执行返回后打印，不代表外层事务已经提交；事务结果应查看下面的事务诊断日志。查询缓存的 `HIT/MISS/REFRESH/BYPASS` 使用 `com.yulinlin.data.cache.QueryCache` 的 DEBUG 日志；延迟写队列刷新摘要使用 `com.yulinlin.data.core.queue.WriteQueueManager` 的 DEBUG 日志。需要排查缓存时可临时提高对应 logger 级别，或者使用 `.cache(CacheMode.REFRESH)` 强制访问数据库。
 

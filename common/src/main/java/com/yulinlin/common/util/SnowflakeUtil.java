@@ -7,20 +7,7 @@ import com.yulinlin.data.lang.util.Snowflake;
 public class SnowflakeUtil {
 
 
-/*    private static  String codes="";
 
-    static {
-
-        for(int i = 'A';i<='Z';i++){
-            codes+=(char)i;
-        }
-        for(int i = 'a';i<='z';i++){
-            codes+=(char)i;
-        }
-        for(int i = 0;i<=9;i++){
-            codes+=i;
-        }
-    }*/
 
     private  static Snowflake snowflake;
 

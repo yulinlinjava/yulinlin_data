@@ -12,6 +12,8 @@ public class JdbcSessionProperties extends EntitySessionProperties {
     private int executeBatchSize = 256;
     /** Whether bound parameters are included in SQL logs. Disabled by default to avoid leaking data. */
     private boolean logParams;
+    /** 仅美化日志 SQL：简化标识符引号和空格，不添加展示转义；不修改执行 SQL。 */
+    private boolean logSqlPretty = true;
     /** Maximum number of characters retained for one logged parameter. */
     private int maxParamLength = 256;
     /** SQL duration at which one WARN is emitted; zero disables slow-SQL logging. */
@@ -50,6 +52,10 @@ public class JdbcSessionProperties extends EntitySessionProperties {
     public void setLogParams(boolean logParams) {
         this.logParams = logParams;
     }
+
+    public boolean isLogSqlPretty() { return logSqlPretty; }
+
+    public void setLogSqlPretty(boolean logSqlPretty) { this.logSqlPretty = logSqlPretty; }
 
     public int getMaxParamLength() {
         return maxParamLength;

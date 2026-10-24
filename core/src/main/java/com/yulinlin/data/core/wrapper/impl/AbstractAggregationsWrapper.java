@@ -6,7 +6,6 @@ import com.yulinlin.data.core.node.group.DateGroup;
 import com.yulinlin.data.core.node.group.IntervalGroup;
 import com.yulinlin.data.core.node.select.GroupAsField;
 import com.yulinlin.data.core.wrapper.IAggregationsWrapper;
-import com.yulinlin.data.core.wrapper.IChildrenWrapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,15 +13,11 @@ import java.util.List;
 public abstract class AbstractAggregationsWrapper<E,
         R extends AbstractAggregationsWrapper<E,R>
         
-        > extends IChildrenWrapper<R> implements IAggregationsWrapper<E,R> {
+        > extends AbstractWrapper<R> implements IAggregationsWrapper<E,R> {
 
     private List<GroupAsField> list = new ArrayList<>();
 
     public AbstractAggregationsWrapper() {
-    }
-
-    public AbstractAggregationsWrapper(String name) {
-        super(name);
     }
 
     private R addNode(IGroupNode node, String alias){

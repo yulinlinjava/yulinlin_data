@@ -40,7 +40,7 @@ AbstractSession 完成一次执行并固定耗时
 
 JDBC SQL 日志的展示键统一中文（事务ID、数据源、节点、操作、总耗时、操作数量、影响行数、SQL模板数、SQL、参数），内部 ParseResult.transactionId 和监控字段不改名。成功批次按 elapsedNanos 计算平均每条耗时，毫秒三位小数、固定小数点；分母用操作节点数而非影响行数，空批次不计算，失败不展示平均值与影响行数。总耗时沿用整数毫秒显示，低于 1ms 时可显示 0ms，但平均值仍从纳秒换算。参数展示仍受开关和截断限制，批量取首条参数，不改成全量输出。只有实际输出日志时才格式化平均值。SQL 文本采集规则需迁移，监控不依赖日志文本，无需改接口字段。
 
-SQL 日志在同一个日志事件中换行展示摘要、SQL、参数，不拆成三次 logger 调用。SQL 和参数值内部仍规范化为单行并保留截断限制，只有框架添加展示换行；关闭 log-params 不输出参数行。采集文本日志的平台需按日志头配置多行合并，monitor 仍读取执行事件，不解析控制台文本。
+SQL 日志在同一个日志事件中换行展示摘要、SQL、参数，不拆成三次 logger 调用。SQL 和参数值内部仍处理为单行并保留截断限制，只有框架添加展示换行；关闭 log-params 不输出参数行。JdbcSessionProperties.logSqlPretty 默认 true，单条及批量 SQL 仅在日志副本上调用 SqlLogFormatter，按当前 NameParse.selectAlias 的引用规则省略简单标识符引用，整理字符串外空格，不额外包装/转义。词法保护单引号字符串、非标识符双引号字符串、注释、美元引用和复杂名称；控制字符可见化。未知/异常的引用规则保守保留，不影响执行。false 恢复旧的外层双引号和转义展示；不再提供 logSqlEscape。SqlNode、参数及 JDBC 执行路径不读取此开关；美化结果只用于阅读，不保证可直接执行。采集文本日志的平台需按日志头配置多行合并，monitor 仍读取执行事件，不解析控制台文本。外部 JSON encoder 自身的转义不受该开关控制。
 
 JdbcSessionFactory、ElasticSearchFactory、MongoFactory 通过 ObjectProvider 收集排序后的监听器，在 create 时调用 `setExecutionListeners`。没有实现时为空列表，Session 不依赖 monitor 启动；关闭 SQL 日志不会关闭监控。当前内置 monitor 只消费 SqlNode，ES/MongoDB 不自动成为 SQL 监控数据；其他监听器可自己识别类型。
 

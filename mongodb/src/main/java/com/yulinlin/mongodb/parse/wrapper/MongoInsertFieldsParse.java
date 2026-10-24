@@ -36,12 +36,7 @@ public class MongoInsertFieldsParse implements IParse<InsertFieldsWrapper<?>> {
 
 
 
-   /*     for (MongoInsertFieldsWrapper c : condition.getChildren()) {
-            Object value = parseManager.parse(c,params);
-            String key =c.getName();
-            document.append(key,BsonUtil.toBsonValue(value));
-        }
-*/
+
         return document;
 
 

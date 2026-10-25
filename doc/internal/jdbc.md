@@ -251,9 +251,21 @@ public JdbcSessionFactory h2SessionFactory(H2Properties properties) {
 
 某个数据库需要调整时间规则时，只修改本模块具体编码器；例如修改 `H2TemporalCoders.DateTimeCoder` 不会改变 MySQL/PostgreSQL/SQLite 的编码器。额外自定义类型可以在对应 CoderManager 子类的 `init()` 调用 `super.init()` 后注册。注意父类构造时就会调用 init，不要在其中读取尚未初始化的子类字段；依赖构造参数的编码器可在子类构造函数的 super 调用完成后注册。公共转换工具修改仍需考虑所有调用者，不应加入数据库专属分支。
 
-MySQL/PostgreSQL/H2 当前各自将 `Date` / `DateTime` / `LocalDateTime` 编码为 `LocalDateTime`。其中 Date 按 JVM 默认时区提取本地日期时间，与读取无时区列时的还原规则对称。公共 JdbcSession 使用 `setObject`，不要再包成 `Timestamp` 或统一指定 `Types.TIMESTAMP`；MySQL 驱动需要据 Java 类型选择本地 DATETIME 语义。LocalDate 保留 java.sql.Date 编码；MySQL/H2 的 LocalTime 仍编码为秒级 java.sql.Time，PostgreSQL 则直接绑定 LocalTime，避免在驱动绑定前丢失小数秒，最终精度由目标列决定。SQLite 自己定义固定文本格式：日期时间 `yyyy-MM-dd HH:mm:ss`、日期 `yyyy-MM-dd`、时间 `HH:mm:ss`；格式器保留在 SQLite 模块。`SqliteSession.bindValue` 为直接传入的时间对象调用 `SqliteTemporalCoders.toTextValue`，复用本模块的编码实现。其他模块直接传给 JDBC 的原始参数不会自动经过编码器；使用框架的字段或条件参数编码入口才能应用上述规则。
+MySQL/PostgreSQL/H2 当前各自将 `Date` / `DateTime` / `LocalDateTime` 编码为 `LocalDateTime`。其中 Date 按 JVM 默认时区提取本地日期时间，与读取无时区列时的还原规则对称。公共 JdbcSession 使用 `setObject`，不要再包成 `Timestamp` 或统一指定 `Types.TIMESTAMP`；MySQL 驱动需要据 Java 类型选择本地 DATETIME 语义。三个模块的 LocalDate / LocalTime 也统一为原值直接绑定，避免提前引入日期时区转换或丢失时间小数秒，最终精度由驱动和目标列决定。解码继续支持旧 java.sql.Date / Time、字符串与 NULL，自定义扩展不能再强制把编码结果转为旧 JDBC 日期/时间类型。
+
+SQLite 保留自身固定文本存储适配：日期时间 `yyyy-MM-dd HH:mm:ss`、日期 `yyyy-MM-dd`、时间 `HH:mm:ss`，仍为秒级精度，不自动转换历史字段或修改格式；格式器保留在 SQLite 模块。`SqliteSession.bindValue` 为直接传入的时间对象调用 `SqliteTemporalCoders.toTextValue`，复用本模块的编码实现。公共 JdbcCoderManager 的默认时间文本规则和非 JDBC 后端不变，Oracle 当前没有独立实现，不新增原生日期绑定承诺。其他模块直接传给 JDBC 的原始参数不会自动经过编码器；使用框架的字段或条件参数编码入口才能应用上述规则。
+
+统一的 Java 参数契约如下，字段写入、更新与条件参数均适用：
+
+| Java 类型 | MySQL / H2 / PostgreSQL 编码类型 | SQLite 编码类型 |
+| --- | --- | --- |
+| Date / DateTime / LocalDateTime | LocalDateTime | 固定日期时间文本，精确到秒 |
+| LocalDate | LocalDate | `yyyy-MM-dd` 文本 |
+| LocalTime | LocalTime，编码阶段保留小数秒 | `HH:mm:ss` 文本 |
 
 共享转换支持本地时间对象、旧驱动 Timestamp，以及空格/T 分隔、带 0～9 位小数秒的日期时间文本；Field/Class 两个 decode 入口一致，也允许直接传入 null。本地时间文本直接解析为 LocalDateTime，不绕经 JVM 默认时区；只有还原为 Date 时才按 JVM 默认时区转成时间点。多实例应统一 JVM 时区，不带时区列不能保存夏令时回拨的原始偏移。core 的 DateTimeCoder、非 JDBC 后端、JSON 日期展示和自动 Schema 类型不变，也不自动迁移历史偏移数据。手工建成 MySQL TIMESTAMP 或其他带时区列仍受数据库时区规则影响，不在“数字不变”的保证范围内。发布时 core、jdbc 与所用数据库模块一起更新，因为 JDBC 注册依赖 core 新增的 replaceCoder；特殊类型要把编码值、驱动参数类型、目标列和读回格式一起验证。
+
+MySQL 的 Date/DateTime 一致性由 [MysqlDateCoderTest](../../mysql/src/test/java/com/yulinlin/jdbc/mysql/coder/MysqlDateCoderTest.java) 覆盖，包含 GMT 连接时区与 `preserveInstants` 开关组合。修改编码器时应保留这些回归断言，确保实体字段和条件参数都输出 LocalDateTime；使用示例及 DATETIME/TIMESTAMP 边界见 [MySQL 日期时间编码](../datasources/mysql.md#日期时间编码)。
 
 驱动接口依据：[MySQL 时间语义](https://dev.mysql.com/doc/connector-j/en/connector-j-time-instants.html)、[PostgreSQL JDBC 4.2 时间映射](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)、[H2 PreparedStatement 参数绑定](https://h2database.com/javadoc/org/h2/jdbc/JdbcPreparedStatement.html)。原生类型支持不代替业务项目的列类型、时区和往返验证。
 

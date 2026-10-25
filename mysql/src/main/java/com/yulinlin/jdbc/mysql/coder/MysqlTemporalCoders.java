@@ -4,7 +4,6 @@ import com.yulinlin.data.lang.util.DateTime;
 import com.yulinlin.jdbc.coder.AbstractTemporalCoder;
 import com.yulinlin.jdbc.coder.TemporalConversions;
 
-import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -16,11 +15,13 @@ public final class MysqlTemporalCoders {
 
     private MysqlTemporalCoders() { }
 
-    /** 保留 java.util.Date 的时间点绑定规则。 */
-    public static final class DateCoder extends AbstractTemporalCoder<Date, Timestamp> {
+    /** 对应 DATETIME：按 JVM 本地时区提取数字，与 DateTime 及解码规则一致。 */
+    public static final class DateCoder extends AbstractTemporalCoder<Date, LocalDateTime> {
         public DateCoder() { super(Date.class); }
 
-        @Override protected Timestamp encodeValue(Date value) { return new Timestamp(value.getTime()); }
+        @Override protected LocalDateTime encodeValue(Date value) {
+            return new Timestamp(value.getTime()).toLocalDateTime();
+        }
         @Override protected Date decodeValue(Object value) { return TemporalConversions.toDate(value); }
     }
 
@@ -32,10 +33,10 @@ public final class MysqlTemporalCoders {
         @Override protected DateTime decodeValue(Object value) { return TemporalConversions.toDateTime(value); }
     }
 
-    public static final class LocalDateCoder extends AbstractTemporalCoder<LocalDate, java.sql.Date> {
+    public static final class LocalDateCoder extends AbstractTemporalCoder<LocalDate, LocalDate> {
         public LocalDateCoder() { super(LocalDate.class); }
 
-        @Override protected java.sql.Date encodeValue(LocalDate value) { return java.sql.Date.valueOf(value); }
+        @Override protected LocalDate encodeValue(LocalDate value) { return value; }
         @Override protected LocalDate decodeValue(Object value) { return TemporalConversions.toLocalDate(value); }
     }
 
@@ -46,11 +47,11 @@ public final class MysqlTemporalCoders {
         @Override protected LocalDateTime decodeValue(Object value) { return TemporalConversions.toLocalDateTime(value); }
     }
 
-    /** 保留原有 java.sql.Time 的秒级精度。 */
-    public static final class LocalTimeCoder extends AbstractTemporalCoder<LocalTime, Time> {
+    /** JDBC 4.2 原生 TIME 参数，避免在绑定前丢失小数秒。 */
+    public static final class LocalTimeCoder extends AbstractTemporalCoder<LocalTime, LocalTime> {
         public LocalTimeCoder() { super(LocalTime.class); }
 
-        @Override protected Time encodeValue(LocalTime value) { return Time.valueOf(value); }
+        @Override protected LocalTime encodeValue(LocalTime value) { return value; }
         @Override protected LocalTime decodeValue(Object value) { return TemporalConversions.toLocalTime(value); }
     }
 }

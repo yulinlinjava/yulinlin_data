@@ -46,6 +46,8 @@ yulinlin:
 
 启动时创建父目录与文件，启用 WAL、外键约束和单连接池。SQLite 的 `schema-mode` 默认 `CREATE`：递归扫描 `schema-packages` 并创建缺失结构；`VALIDATE` 只校验；`NONE` 完全跳过扫描。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
 
+日期时间沿用 SQLite 的固定 TEXT 适配：Date / DateTime / LocalDateTime 编码为 `yyyy-MM-dd HH:mm:ss`，LocalDate 为 `yyyy-MM-dd`，LocalTime 为 `HH:mm:ss`。Date 按 JVM 默认时区提取本地数字；原生参数绑定的兜底也使用相同格式。该模块保留秒级精度与历史存储格式，不随 MySQL/H2/PG 的原生 Java 时间参数统一而改变；类型契约见 [JDBC 编解码](../internal/jdbc.md#编解码)。
+
 ---
 
 下一步：返回[数据源主题目录](README.md)按需选择相关专题。

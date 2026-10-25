@@ -69,13 +69,16 @@ class MysqlDateCoderTest {
         var context = new SimpParamsContext(RequestType.select, Map.of(), buffer, Object.class, true);
         String key = context.putGetKey(date);
         assertEquals(LOCAL, buffer.toMap().get(key.substring(2, key.length() - 1)));
+        String dateTimeKey = context.putGetKey(DateTime.date(date));
+        assertEquals(LOCAL, buffer.toMap().get(dateTimeKey.substring(2, dateTimeKey.length() - 1)));
         assertNull(coder.encode(null, null, null));
         assertNull(coder.decode(null, Date.class, null));
+        assertNull(new MysqlTemporalCoders.DateTimeCoder().encode(null, null, null));
     }
 
     // Real Connector/J encoders, no database/network. Exercise text and server-prepared binary formats.
     @ParameterizedTest
-    @CsvSource({"UTC,true", "UTC,false", "Asia/Tokyo,true", "Asia/Tokyo,false"})
+    @CsvSource({"GMT,true", "GMT,false", "UTC,true", "UTC,false", "Asia/Tokyo,true", "Asia/Tokyo,false"})
     void mysqlDriverKeepsNumbersDespiteDifferentConnectionTimeZone(String connectionZone, boolean preserveInstants) {
         TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
         var properties = new DefaultPropertySet();

@@ -33,10 +33,10 @@ public final class PostgresqlTemporalCoders {
         @Override protected DateTime decodeValue(Object value) { return TemporalConversions.toDateTime(value); }
     }
 
-    public static final class LocalDateCoder extends AbstractTemporalCoder<LocalDate, java.sql.Date> {
+    public static final class LocalDateCoder extends AbstractTemporalCoder<LocalDate, LocalDate> {
         public LocalDateCoder() { super(LocalDate.class); }
 
-        @Override protected java.sql.Date encodeValue(LocalDate value) { return java.sql.Date.valueOf(value); }
+        @Override protected LocalDate encodeValue(LocalDate value) { return value; }
         @Override protected LocalDate decodeValue(Object value) { return TemporalConversions.toLocalDate(value); }
     }
 

@@ -137,9 +137,11 @@ PgDocument document = ModelSelectWrapper.newInstance("postgresql", PgDocument.cl
 
 ### 日期与聚合
 
-`Date` 按 JVM 默认时区转换为当地 `LocalDateTime`；`DateTime` / `LocalDateTime` 按日期时间值绑定。搭配 `timestamp without time zone` 列时保持年月日时分秒及列精度允许的小数秒，不因数据库会话时区改变而额外转换。JVM 时区应保持明确且一致；这不是 `timestamptz` / 跨时区瞬时时间的统一策略。
+`Date` 按 JVM 默认时区转换为当地 `LocalDateTime`；框架 `DateTime` 直接取内部 `LocalDateTime`，`LocalDateTime` 本身原值传递。实体字段和条件参数统一编码为 `LocalDateTime`，经 JDBC `setObject` 绑定。搭配 `timestamp without time zone` 列时保持年月日时分秒及列精度允许的小数秒，不因数据库会话时区改变而额外转换。读取为 Date 时仍按 JVM 默认时区还原，读取为 DateTime 时直接保留本地数字。JVM 时区应保持明确且一致；这不是 `timestamptz` / 跨时区瞬时时间的统一策略，也不会修正历史偏移数据。
 
-`LocalTime` 直接作为 JDBC 4.2 原生参数传给驱动，不再先转成 `java.sql.Time` 截去小数秒；例如 `13:14:15.123456` 可在 `time(6)` 列往返。最终舍入由驱动和目标列精度决定，不承诺纳秒全部入库；原来已经丢失的小数秒无法恢复。自定义扩展若曾假定编码结果是 `java.sql.Time`，应改为接受 `LocalTime`。读取仍兼容旧 `Time` 和字符串。驱动类型映射见 [pgJDBC 日期时间支持](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)。
+[日期编码器测试](../../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlDateCoderTest.java) 检查字段与条件参数类型、解码及小数秒；[真实 JDBC 测试](../../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlJdbcIntegrationTest.java) 覆盖三个 JVM 时区与三个数据库会话时区的组合，写入后再次切换数据库时区，验证条件查询和读回数字一致，并验证 DateTime 在 `timestamp(6)` 列的微秒更新与查询。
+
+`LocalDate` / `LocalTime` 与 MySQL、H2 统一，直接作为 JDBC 4.2 原生参数传给驱动，分别绑定 DATE / TIME，不再先转成 `java.sql.Date` / `java.sql.Time`；例如闰日 `2000-02-29` 保持日期数字，`13:14:15.123456` 可在 `time(6)` 列往返。最终舍入由驱动和目标列精度决定，不承诺纳秒全部入库；原来已经丢失的小数秒无法恢复。自定义扩展若曾假定编码结果是旧 JDBC 日期/时间类型，应改为接受 `LocalDate` / `LocalTime`。读取仍兼容旧 `java.sql.Date`、`Time`、字符串和 NULL。[纯日期测试](../../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlLocalDateCoderTest.java) 验证原生字段和条件值、旧值解码；上面的真实 JDBC 用例同时覆盖纯日期/时间条件查询。驱动类型映射见 [pgJDBC 日期时间支持](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)。
 
 数字区间使用 `numeric` 精确取余计算上界，避免 `FLOOR(x / step)` 在高精度边界前先舍入。例如步长为 3，`2.99999999999999999999 → 3`、`3 → 6`、`-3.00000000000000000001 → -3`。步长必须为正整数，NULL 保留；浮点数据自身已有的精度损失不会被修复。日期维度、季度格式、HAVING 和完整边界说明见[统计分析](../orm/analytics.md)。旧版舍入错误影响的持久化统计结果需要业务重新计算。
 

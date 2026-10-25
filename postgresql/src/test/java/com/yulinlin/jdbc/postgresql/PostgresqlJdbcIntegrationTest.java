@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.postgresql.ds.PGSimpleDataSource;
 
 import java.math.BigDecimal;
@@ -29,11 +29,15 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "pg.test.url", matches = "jdbc:postgresql:.*")
 class PostgresqlJdbcIntegrationTest {
     @ParameterizedTest
-    @ValueSource(strings = {"UTC", "Asia/Shanghai", "America/New_York"})
+    @CsvSource({"Asia/Shanghai,UTC", "Asia/Shanghai,Asia/Shanghai", "Asia/Shanghai,America/New_York",
+            "UTC,UTC", "UTC,Asia/Shanghai", "UTC,America/New_York",
+            "America/New_York,UTC", "America/New_York,Asia/Shanghai", "America/New_York,America/New_York"})
     @ResourceLock("java.util.TimeZone.default")
-    void timestampWithoutTimeZonePreservesDateAndDateTimeDigits(String databaseZone) throws Exception {
+    void timestampWithoutTimeZonePreservesDateAndDateTimeDigits(String jvmZone, String databaseZone) throws Exception {
         TimeZone original = TimeZone.getDefault();
-        TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+        TimeZone.setDefault(TimeZone.getTimeZone(jvmZone));
+        var session = new PostgresqlSession(new PGSimpleDataSource());
+        session.setCoderManager(new PostgresqlCoderManager());
         try (var connection = connect()) {
             var local = LocalDateTime.of(2026, 10, 23, 21, 12, 38, 123_000_000);
             Date date = DateTime.date(local).toDate();
@@ -50,15 +54,22 @@ class PostgresqlJdbcIntegrationTest {
             try (var statement = prepare(connection, sql(insert, RequestType.insert))) {
                 assertEquals(1, statement.executeUpdate());
             }
-            var session = new PostgresqlSession(new PGSimpleDataSource());
-            session.setCoderManager(new PostgresqlCoderManager());
             var select = new SelectWrapper<>().table("pg_temp.temporal_samples");
             select.fields().field("pay_time", "payTime").field("eventTime").field("birthday")
                     .field("alarm").field("enabled");
-            var rows = session.executeSelectNode(connection, sql(select, RequestType.select));
+            select.where().eq("pay_time", date).eq("eventTime", DateTime.date(local))
+                    .eq("birthday", birthday).eq("alarm", alarm);
+            var selectSql = sql(select, RequestType.select);
+            assertEquals(List.of(local, local, birthday, alarm), selectSql.getList());
+            // Changing the server session zone must not affect timestamp-without-time-zone values.
+            try (var statement = connection.createStatement()) {
+                statement.execute("SET TIME ZONE '" + (databaseZone.equals("UTC") ? "Asia/Tokyo" : "UTC") + "'");
+            }
+            var rows = session.executeSelectNode(connection, selectSql);
             assertEquals(1, rows.size());
             var row = rows.getFirst();
             assertEquals(local, row.getObject("eventTime", LocalDateTime.class));
+            assertEquals(local, row.getObject("payTime", LocalDateTime.class));
             assertEquals(date, row.getObject("payTime", Date.class));
             DateTime decoded = row.getObject("eventTime", DateTime.class);
             assertEquals(date, decoded.toDate());
@@ -70,7 +81,22 @@ class PostgresqlJdbcIntegrationTest {
             }
             assertNull(session.executeSelectNode(connection, sql(select, RequestType.select))
                     .getFirst().getObject("enabled", Boolean.class));
+            var precise = local.withNano(123_456_000);
+            var update = new UpdateWrapper<>().table("pg_temp.temporal_samples");
+            update.fields().field("eventTime", DateTime.date(precise));
+            update.where().eq("pay_time", date);
+            try (var statement = prepare(connection, sql(update, RequestType.update))) {
+                assertEquals(1, statement.executeUpdate());
+            }
+            var preciseSelect = new SelectWrapper<>().table("pg_temp.temporal_samples");
+            preciseSelect.fields().field("eventTime");
+            preciseSelect.where().eq("eventTime", DateTime.date(precise));
+            var preciseRows = session.executeSelectNode(connection, sql(preciseSelect, RequestType.select));
+            assertEquals(1, preciseRows.size());
+            DateTime preciseDecoded = preciseRows.getFirst().getObject("eventTime", DateTime.class);
+            assertEquals(precise, preciseDecoded.toLocalDateTime());
         } finally {
+            session.getThreadPoolExecutor().shutdownNow();
             TimeZone.setDefault(original);
         }
     }

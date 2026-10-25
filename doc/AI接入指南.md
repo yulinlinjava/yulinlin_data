@@ -174,6 +174,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 ### 本页导航
 
 - [MySQL 接入](#ai-datasources-mysql-mysql-接入-1)
+- [日期时间编码](#ai-datasources-mysql-日期时间编码)
 - [索引选择与 useIndex](#ai-datasources-mysql-索引选择与-useindex)
 
 <a id="ai-datasources-mysql-mysql-接入-1"></a>
@@ -220,6 +221,44 @@ yulinlin:
 ```
 
 正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。为兼容已有生产项目，`schema-mode` 默认 `NONE`；不需要框架管理结构时删除整个 `yulinlin.mysql` 段并由迁移脚本准备表。设为 `CREATE` 后，启动时递归扫描 `schema-packages`，创建缺失的表、普通列和声明索引，并校验已有结构；`VALIDATE` 只校验，缺失直接阻止启动。完整实体与 CRUD 见 [ORM 开发](orm/README.md)。
+
+<a id="ai-datasources-mysql-日期时间编码"></a>
+### 日期时间编码
+
+MySQL 模块将 `java.util.Date`、框架 `com.yulinlin.data.lang.util.DateTime` 和 `java.time.LocalDateTime` 统一编码为 **LocalDateTime**，由 JDBC `setObject` 绑定，使用 DATETIME 的本地日期时间语义。实体字段和查询条件参数使用相同规则，无需新增配置。
+
+| Java 类型 | 编码规则 |
+| --- | --- |
+| `Date` | 按 JVM 默认时区提取年月日时分秒，保留毫秒 |
+| 框架 `DateTime` | 直接取内部 LocalDateTime，保留小数秒 |
+| `LocalDateTime` | 原值传递 |
+| `LocalDate` | 原值传递，直接绑定 DATE |
+| `LocalTime` | 原值传递，直接绑定 TIME；编码器保留小数秒 |
+
+例如应用 JVM 使用 `Asia/Shanghai`，同一个本地时间的两种表示：
+
+```java
+import com.yulinlin.data.lang.util.DateTime;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.Date;
+
+LocalDateTime local = LocalDateTime.of(2026, 10, 23, 21, 12, 38, 123_000_000);
+Date payTime = Date.from(local.atZone(ZoneId.systemDefault()).toInstant());
+DateTime crtTime = DateTime.date(local);
+// 将 payTime / crtTime 赋给实体字段，或作为 Wrapper 条件值。
+// 两者都会编码为 LocalDateTime：2026-10-23T21:12:38.123。
+```
+
+即使 JDBC URL 使用 `serverTimezone=GMT`，这两种值也按相同的本地日期时间数字传入驱动。编码器输出的是有类型的时间值，不格式化为字符串；日志中的 `T` 是 LocalDateTime 的显示形式。DATETIME 列的小数秒精度决定最终存储精度，例如保留上述毫秒需使用 `DATETIME(3)` 或更高精度，见 [MySQL 小数秒精度](https://dev.mysql.com/doc/refman/8.4/en/fractional-seconds.html)。
+
+读取 DATETIME 到 Date 时，仍按 JVM 默认时区将本地数字还原为时间点；应用各实例应使用一致的 JVM 时区。这里“保持数字不变”针对 DATETIME，手工建立的 TIMESTAMP 列仍受数据库会话时区规则影响，见 [MySQL 时间语义](https://dev.mysql.com/doc/connector-j/en/connector-j-time-instants.html)。历史已写入的偏移数据不会自动修正。
+
+回归测试见 [MysqlDateCoderTest](../mysql/src/test/java/com/yulinlin/jdbc/mysql/coder/MysqlDateCoderTest.java)：覆盖不同 JVM 时区、Date/DateTime 一致性、字段与条件参数，以及 GMT/UTC/东京连接时区下驱动的文本和二进制编码。测试使用真实 Connector/J 编码器，无需连接业务数据库；完整注册和解码规则见 [JDBC 编解码](internal/jdbc.md#编解码)。
+
+纯日期和纯时间与 H2、PG 统一采用 JDBC 4.2 的 `LocalDate` / `LocalTime`，字段和查询条件都不会先转成 `java.sql.Date` / `java.sql.Time`。例如 `LocalTime.parse("13:14:15.123456")` 可向 `TIME(6)` 列传递完整微秒；普通 `TIME` 默认不保留小数秒。编码器保留 Java 值中的纳秒，MySQL 驱动和列最多处理六位小数秒，最终舍入由驱动配置和列精度决定；若显式设置 `sendFractionalSeconds=false`，驱动仍会去掉小数秒。框架不覆盖这些原生选项，不自动修改列精度或修复历史丢失的数据。
+
+`LocalTime` 表示一天中的时间，不用于映射 MySQL TIME 的负数或超过 24 小时的时长。原有整秒值、NULL 和旧 `java.sql.Date` / `Time` 解码继续兼容；自定义扩展若强制将编码值转成这两个旧 JDBC 类型，需要改为接受 `LocalDate` / `LocalTime`。[纯日期与时间测试](../mysql/src/test/java/com/yulinlin/jdbc/mysql/coder/MysqlLocalTemporalCoderTest.java) 覆盖字段、条件、旧值读取、闰日及驱动文本/二进制编码。
 
 <a id="ai-datasources-mysql-索引选择与-useindex"></a>
 ### 索引选择与 useIndex
@@ -288,6 +327,8 @@ yulinlin:
 ```
 
 启动时创建父目录与文件，启用 WAL、外键约束和单连接池。SQLite 的 `schema-mode` 默认 `CREATE`：递归扫描 `schema-packages` 并创建缺失结构；`VALIDATE` 只校验；`NONE` 完全跳过扫描。file 仅接受本地路径，不接受 JDBC URL、内存数据库或 file URI；空路径会报错。文件应放在可写的本地持久化目录，而不是 classpath 或网络共享盘。
+
+日期时间沿用 SQLite 的固定 TEXT 适配：Date / DateTime / LocalDateTime 编码为 `yyyy-MM-dd HH:mm:ss`，LocalDate 为 `yyyy-MM-dd`，LocalTime 为 `HH:mm:ss`。Date 按 JVM 默认时区提取本地数字；原生参数绑定的兜底也使用相同格式。该模块保留秒级精度与历史存储格式，不随 MySQL/H2/PG 的原生 Java 时间参数统一而改变；类型契约见 [JDBC 编解码](internal/jdbc.md#编解码)。
 
 ---
 
@@ -621,6 +662,12 @@ H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连
 
 H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 parallel-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
 
+`Date` 和框架 `DateTime` 的字段值、条件参数都统一编码为 `LocalDateTime`，通过 JDBC `setObject` 绑定无时区 `TIMESTAMP`。读取后，Date 按 JVM 默认时区还原，DateTime 直接保留本地日期时间。不同应用实例仍需统一 JVM 时区；手工创建的 `TIMESTAMP WITH TIME ZONE` 列不适用这套数字保留规则。Date 保留毫秒，DateTime 的小数秒由列精度决定；历史偏移数据不会自动修改。
+
+[H2 日期回归测试](../h2/src/test/java/com/yulinlin/jdbc/h2/coder/H2DateCoderTest.java) 在三个 JVM 时区与三个数据库时区的组合下，执行批量写入、切换数据库时区后按 Date/DateTime 条件查询并解码，同时验证 `TIMESTAMP(6)` 小数秒。测试使用独立 H2 内存库。
+
+纯日期 `LocalDate` 和纯时间 `LocalTime` 也直接通过 JDBC 4.2 绑定 DATE / TIME，与 MySQL、PG 采用相同 Java 参数类型。LocalTime 在编码阶段保留小数秒，最终精度由列定义决定：`TIME(6)` 可保留微秒，`TIME(9)` 可保留纳秒，默认 TIME 的精度为秒，详见 [H2 TIME 类型](https://h2database.github.io/html/datatypes.html#time_type)。已有整秒值、NULL 和旧 `java.sql.Date` / `Time` 解码继续兼容，不自动修改列精度；自定义扩展应接受新的原生参数类型。[纯日期与时间回归](../h2/src/test/java/com/yulinlin/jdbc/h2/coder/H2LocalTemporalCoderTest.java) 覆盖默认/MYSQL 模式下的写入、更新、条件查询、闰日、小数秒、舍入和 NULL。
+
 <a id="ai-datasources-h2-单次查询索引提示"></a>
 ### 单次查询索引提示
 
@@ -903,9 +950,11 @@ PgDocument document = ModelSelectWrapper.newInstance("postgresql", PgDocument.cl
 <a id="ai-datasources-postgresql-日期与聚合"></a>
 #### 日期与聚合
 
-`Date` 按 JVM 默认时区转换为当地 `LocalDateTime`；`DateTime` / `LocalDateTime` 按日期时间值绑定。搭配 `timestamp without time zone` 列时保持年月日时分秒及列精度允许的小数秒，不因数据库会话时区改变而额外转换。JVM 时区应保持明确且一致；这不是 `timestamptz` / 跨时区瞬时时间的统一策略。
+`Date` 按 JVM 默认时区转换为当地 `LocalDateTime`；框架 `DateTime` 直接取内部 `LocalDateTime`，`LocalDateTime` 本身原值传递。实体字段和条件参数统一编码为 `LocalDateTime`，经 JDBC `setObject` 绑定。搭配 `timestamp without time zone` 列时保持年月日时分秒及列精度允许的小数秒，不因数据库会话时区改变而额外转换。读取为 Date 时仍按 JVM 默认时区还原，读取为 DateTime 时直接保留本地数字。JVM 时区应保持明确且一致；这不是 `timestamptz` / 跨时区瞬时时间的统一策略，也不会修正历史偏移数据。
 
-`LocalTime` 直接作为 JDBC 4.2 原生参数传给驱动，不再先转成 `java.sql.Time` 截去小数秒；例如 `13:14:15.123456` 可在 `time(6)` 列往返。最终舍入由驱动和目标列精度决定，不承诺纳秒全部入库；原来已经丢失的小数秒无法恢复。自定义扩展若曾假定编码结果是 `java.sql.Time`，应改为接受 `LocalTime`。读取仍兼容旧 `Time` 和字符串。驱动类型映射见 [pgJDBC 日期时间支持](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)。
+[日期编码器测试](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlDateCoderTest.java) 检查字段与条件参数类型、解码及小数秒；[真实 JDBC 测试](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/PostgresqlJdbcIntegrationTest.java) 覆盖三个 JVM 时区与三个数据库会话时区的组合，写入后再次切换数据库时区，验证条件查询和读回数字一致，并验证 DateTime 在 `timestamp(6)` 列的微秒更新与查询。
+
+`LocalDate` / `LocalTime` 与 MySQL、H2 统一，直接作为 JDBC 4.2 原生参数传给驱动，分别绑定 DATE / TIME，不再先转成 `java.sql.Date` / `java.sql.Time`；例如闰日 `2000-02-29` 保持日期数字，`13:14:15.123456` 可在 `time(6)` 列往返。最终舍入由驱动和目标列精度决定，不承诺纳秒全部入库；原来已经丢失的小数秒无法恢复。自定义扩展若曾假定编码结果是旧 JDBC 日期/时间类型，应改为接受 `LocalDate` / `LocalTime`。读取仍兼容旧 `java.sql.Date`、`Time`、字符串和 NULL。[纯日期测试](../postgresql/src/test/java/com/yulinlin/jdbc/postgresql/coder/PostgresqlLocalDateCoderTest.java) 验证原生字段和条件值、旧值解码；上面的真实 JDBC 用例同时覆盖纯日期/时间条件查询。驱动类型映射见 [pgJDBC 日期时间支持](https://jdbc.postgresql.org/documentation/query/#using-java-8-date-and-time-classes)。
 
 数字区间使用 `numeric` 精确取余计算上界，避免 `FLOOR(x / step)` 在高精度边界前先舍入。例如步长为 3，`2.99999999999999999999 → 3`、`3 → 6`、`-3.00000000000000000001 → -3`。步长必须为正整数，NULL 保留；浮点数据自身已有的精度损失不会被修复。日期维度、季度格式、HAVING 和完整边界说明见[统计分析](#ai-orm-analytics)。旧版舍入错误影响的持久化统计结果需要业务重新计算。
 

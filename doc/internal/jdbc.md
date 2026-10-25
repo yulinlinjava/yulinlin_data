@@ -18,6 +18,14 @@
 
 ### 解析器注册
 
+执行计划通过 QueryRequest / Model Wrapper 的 `explain()` 和 `explainCount()` 进入 RouteSession，复用查询前过滤、路由与事务资源。EntitySession 默认拒绝诊断；H2Session、MysqlSession、PostgresqlSession 显式启用普通 `EXPLAIN`。JdbcSession 在 `parseQueryNode` 生成实际查询 SQL 后，只给新的 SqlNode 加前缀并复制已编码参数，不重新插值参数，不修改原节点。count 仍使用现有 CountWrapper 解析器：普通 SelectWrapper 直接生成 `select count(1) as total from ...`，复用 FROM/JOIN/WHERE 解析；GroupWrapper 保留子查询以统计分组数和应用 HAVING。两种计数都忽略列表的排序与分页，不改变原 Wrapper、参数绑定顺序和逻辑缓存键。两种诊断入口共用同一执行实现。
+
+JDBC 查询和诊断共用 `withQueryConnection` 管理连接；诊断通过 `executeOperation` 产生 `ParseType.explain` 的日志和事件，保留失败传播与资源释放。结果直接按 JDBC 列标签和 `getObject` 读取到有序 Map，保留 NULL，不经过实体解码、代理、业务 after 过滤器或缓存。原生 CommandNode、自定义 Wrapper 和写节点不会被这个便利入口自动包装；原生 SQL 仍可显式写 EXPLAIN。使用说明见[查看执行计划](../orm/query.md#查看执行计划)。
+
+显式索引提示由 core 的不可变 `QueryIndexHint` 绑定表名、别名和去重后的索引名，保存在 QueryRequest 上；BaseModelSelectWrapper / BaseModelGroupWrapper 只提供链式委托。`copy` 与过滤器执行选项继承同步传递，目标改变时拒绝。AbstractSession 的 query 解析入口复用 `createParamsContext`，因此 JDBC 仍按原流程编码 root 参数；非空提示调用 IParseManager 的三参数 parse，默认忽略提示并委托旧二参数解析，无提示查询不变。自定义 Session 如覆盖查询解析，应同时审查 `parseQueryNode` / `createParamsContext`，保留原有安全过滤；后端可以按需适配这项优化。
+
+SqlParseManager 通过 NameParse.useIndex 方言能力生成片段；默认返回空字符串时直接按原查询解析。非空片段使用独立 SqlParamsContext 绑定到目标 Store 的对象身份。StoreParse 在表名/别名后追加片段，不替换已生成 SQL，也不影响其他表；方言提供片段但未经过目标表解析时仍明确报错。内置实现采用仅 H2 生效的策略；MySQL、PostgreSQL 等其他 JDBC 方言和非 JDBC 后端忽略合法提示，不自动映射 MySQL 原生索引提示或 PG 插件。非法名称和请求目标改变的校验独立于后端能力，仍然报错。count 解析同一目标 Store：普通 count 的提示直接跟随物理表名/别名，分组 count 的提示位于子查询内的物理表后，不会追加到临时表别名后。缓存键额外纳入不可变提示（包括忽略提示的后端）；无提示键不变、count 原有忽略分页/排序的规则不变。使用及边界见 [H2 索引提示](../datasources/h2.md#单次查询索引提示)。
+
 SqlParseManager 复用 CRUD/条件/JOIN/聚合；它不是天然兼容所有数据库的标准 SQL 层。默认分页带 MySQL 风格，日期/区间需要模块自己注册。JSON 仅保留整字段编解码，不再通过字段名解析 JSON 路径；JSON 操作使用目标数据库的参数化原生 SQL。
 
 当前 PostgreSQL 的注册方式：

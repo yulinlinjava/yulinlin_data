@@ -203,7 +203,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
             RequestType requestType,
             Object root, INode node, Class clazz){
-        SimpParamsContext context = new SimpParamsContext(requestType,root,coderManager.createEncoderBuffer(),clazz,isMapUnderscoreToCamelCase());
+        SimpParamsContext context = createParamsContext(requestType, root, clazz);
 
         ParseResult result = (ParseResult) parseManager.parse(node,context);
 
@@ -211,6 +211,21 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
     }
 
 
+
+    protected SimpParamsContext createParamsContext(RequestType type, Object root, Class<?> sourceClass) {
+        return new SimpParamsContext(type, root, coderManager.createEncoderBuffer(),
+                sourceClass, isMapUnderscoreToCamelCase());
+    }
+
+    protected ParseResult parseQueryNode(RequestType type, QueryRequest<?> request, INode node) {
+        if (request.getIndexHint() == null) {
+            // Preserve existing parser/session extension paths for every unhinted query.
+            return parseNode(type, request.getRoot(), node, request.getFromClass());
+        }
+        request.getIndexHint().target(node);
+        var context = createParamsContext(type, request.getRoot(), request.getFromClass());
+        return (ParseResult) parseManager.parse(node, context, request.getIndexHint());
+    }
 
     protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results){
         // The threshold is checked against the whole request, not each worker's share.
@@ -259,9 +274,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
             countWrapper = new CountWrapper(request.getWrapper());
         }
 
-        ParseResult result = parseNode(
-                RequestType.count,
-                request.getRoot(),countWrapper,request.getFromClass());
+        ParseResult result = parseQueryNode(RequestType.count, request, countWrapper);
 
 
         Supplier<Integer> dataLoader = () -> {
@@ -389,7 +402,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
         CacheKey cacheKey = OrmCacheKeyFactory.query(
                 group(), cluster(), getClass(), request.getEntityClass(),
-                request.getFromClass(), result.getType(), request.getWrapper());
+                request.getFromClass(), result.getType(), request.getWrapper(), request.getIndexHint());
         Set<CacheNamespace> namespaces = CacheNamespaceResolver.resolve(
                 getClass(), group(), request.getFromClass(), request.getWrapper(),
                 request.getCacheNamespaces());
@@ -450,9 +463,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
 
 
-            ParseResult result = parseNode(
-                    RequestType.select,
-                    request.getRoot(), request.getWrapper(),request.getFromClass());
+            ParseResult result = parseQueryNode(RequestType.select, request, request.getWrapper());
 
 
 
@@ -499,9 +510,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     @Override
     public <E> List<E> group(QueryRequest<E> request) {
-        ParseResult result = parseNode(
-                RequestType.group,
-                request.getRoot(), request.getWrapper(),request.getFromClass());
+        ParseResult result = parseQueryNode(RequestType.group, request, request.getWrapper());
 
 
         Supplier<List<E>> dataLoader = () -> {

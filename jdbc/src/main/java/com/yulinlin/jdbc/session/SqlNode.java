@@ -51,6 +51,12 @@ public class SqlNode  {
         this.sql = sql;
     }
 
+    /** Already-encoded parameters for a derived diagnostic command; no second interpolation. */
+    SqlNode(String sql, List<Object> parameters) {
+        this.sql = sql;
+        this.list = parameters == null ? new ArrayList<>() : new ArrayList<>(parameters);
+    }
+
 
 
     private String equalityKey;

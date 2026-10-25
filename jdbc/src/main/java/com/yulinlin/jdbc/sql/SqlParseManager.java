@@ -22,6 +22,23 @@ import com.yulinlin.jdbc.sql.parse.wrapper.UpdateFieldsParse;
 
 public class SqlParseManager extends SimpParseManager {
 
+    @Override
+    public Object parse(com.yulinlin.data.core.node.INode node,
+                        com.yulinlin.data.core.parse.IParamsContext params,
+                        com.yulinlin.data.core.request.QueryIndexHint indexHint) {
+        if (indexHint == null) return parse(node, params);
+        var target = indexHint.target(node);
+        String clause = nameParse().useIndex(indexHint.indexes());
+        if (clause.isBlank()) return parse(node, params);
+        var context = new SqlParamsContext(params, this);
+        context.indexHint(target, clause);
+        Object result = parse(node, context);
+        if (!context.indexHintApplied()) {
+            throw new UnsupportedOperationException("当前解析路径不支持 useIndex 索引提示，提示未应用到目标表");
+        }
+        return result;
+    }
+
     public com.yulinlin.jdbc.sql.parse.NameParse nameParse() {
         return (com.yulinlin.jdbc.sql.parse.NameParse) parseMap.get(com.yulinlin.data.core.node.AbstractMetaNode.class);
     }

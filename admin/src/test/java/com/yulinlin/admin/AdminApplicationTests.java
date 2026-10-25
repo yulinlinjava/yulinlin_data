@@ -43,10 +43,11 @@ public class AdminApplicationTests {
     public void go() throws Exception{
 
 
-        UserInfoEntity userInfoEntity = new UserInfoEntity();
+        int count = ModelSelectWrapper.newInstance(UserInfoEntity.class)
+                .count();
 
-        userInfoEntity.setDate(new Date());
-        userInfoEntity.createInsertWrapper().execute();
+        List<UserInfoEntity> userInfoEntities = ModelSelectWrapper.newInstance(UserInfoEntity.class).selectList();
+
 
         int a = 0;
   /*      number.setId("1");

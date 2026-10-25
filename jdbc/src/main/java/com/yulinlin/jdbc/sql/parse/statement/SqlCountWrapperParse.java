@@ -66,7 +66,7 @@ public class SqlCountWrapperParse implements IParse<CountWrapper> {
 
 
 
-        String sql="select 1";
+        String sql="select count(1) as total";
 
         sql +=" from "+ parseManager
                 .parse(condition.getFrom(),params);
@@ -76,8 +76,6 @@ public class SqlCountWrapperParse implements IParse<CountWrapper> {
             sql+=" where " +whereSql;
         }
 
-
-        sql =  "select count(1) as total from ( "+ sql+" ) temp";
 
         SqlNode node =   new SqlNode(sql,params.getDataBuffer());
 

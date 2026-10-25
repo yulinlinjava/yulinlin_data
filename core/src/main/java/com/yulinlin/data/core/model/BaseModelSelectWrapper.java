@@ -39,10 +39,22 @@ public class BaseModelSelectWrapper<E,
     }
 
 
+    /** Per-query index candidates: applied by H2; MySQL, PostgreSQL and other built-in backends ignore valid hints. */
+    public R useIndex(String... indexNames) {
+        request.useIndex(indexNames);
+        return (R) this;
+    }
+
     public R apply(Consumer<ISelectWrapper<E,?,W,?>>  func){
         func.accept(wrapper);
         return (R)this;
     }
+
+    /** Returns native execution-plan rows without fetching entities or using the query cache. */
+    public List<Map<String, Object>> explain() { return request.explain(); }
+
+    /** Returns the plan of the derived count, without pagination or ordering. */
+    public List<Map<String, Object>> explainCount() { return request.explainCount(); }
 
     private void init(String session, Object model){
         if (model instanceof Class){

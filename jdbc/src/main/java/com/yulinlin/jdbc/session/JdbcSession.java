@@ -4,6 +4,11 @@ import com.yulinlin.data.core.cache.CacheKey;
 import com.yulinlin.data.core.coder.IDataBuffer;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.parse.ParseResult;
+import com.yulinlin.data.core.parse.ParseType;
+import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.wrapper.impl.CountWrapper;
+import com.yulinlin.data.core.wrapper.impl.GroupWrapper;
+import com.yulinlin.data.core.wrapper.impl.SelectWrapper;
 import com.yulinlin.data.core.session.RequestType;
 import com.yulinlin.data.core.session.TransactionSession;
 import com.yulinlin.data.core.session.SessionExecution;
@@ -29,6 +34,59 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
     public JdbcSession(DataSource dataSource) {
         super(dataSource);
         setParseManager(new com.yulinlin.jdbc.sql.SqlParseManager());
+    }
+
+    /** Explicit dialect capability, independent of whether USE INDEX is implemented. */
+    protected String explainPrefix() {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " 不支持 explain");
+    }
+
+    @Override
+    public List<Map<String, Object>> explain(QueryRequest<?> request) {
+        return explain(request, false);
+    }
+
+    @Override
+    public List<Map<String, Object>> explainCount(QueryRequest<?> request) {
+        return explain(request, true);
+    }
+
+    private List<Map<String, Object>> explain(QueryRequest<?> request, boolean count) {
+        String prefix = explainPrefix();
+        INode node = request.getWrapper();
+        INode source = node instanceof CountWrapper wrapper ? wrapper.getWrapper() : node;
+        if (source == null || (source.getClass() != SelectWrapper.class && source.getClass() != GroupWrapper.class)) {
+            throw new UnsupportedOperationException("explain 仅支持内置 SELECT/GROUP 查询及其 count；原生 SQL 请显式编写 EXPLAIN");
+        }
+        if (count && !(node instanceof CountWrapper)) node = new CountWrapper(node);
+        RequestType type = node instanceof CountWrapper ? RequestType.count
+                : node instanceof GroupWrapper ? RequestType.group : RequestType.select;
+        ParseResult query = parseQueryNode(type, request, node);
+        SqlNode querySql = (SqlNode) query.getRequest();
+        SqlNode planSql = new SqlNode(prefix + querySql.getSql(), querySql.getList());
+        ParseResult plan = new ParseResult(ParseType.explain, planSql, query.getContext());
+        return executeOperation(() -> {
+            beforeExecute(request);
+            return withQueryConnection(connection -> executeExplainNode(connection, planSql));
+        }, plan);
+    }
+
+    /** Preserve JDBC values, nulls, labels and row order without entity mapping or decoding. */
+    protected List<Map<String, Object>> executeExplainNode(Connection connection, SqlNode node) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(node.getSql())) {
+            for (int i = 0; i < node.getList().size(); i++) bindValue(statement, i + 1, node.getList().get(i));
+            try (ResultSet rows = statement.executeQuery()) {
+                ResultSetMetaData metadata = rows.getMetaData();
+                int columns = metadata.getColumnCount();
+                List<Map<String, Object>> result = new ArrayList<>();
+                while (rows.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int i = 1; i <= columns; i++) row.put(metadata.getColumnLabel(i), rows.getObject(i));
+                    result.add(row);
+                }
+                return result;
+            }
+        }
     }
 
     /** Keeps schema logging and execution in the owning Session. */

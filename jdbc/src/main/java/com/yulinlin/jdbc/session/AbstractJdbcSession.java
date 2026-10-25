@@ -60,6 +60,11 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     protected ParseResult parseNode(
             RequestType requestType,
             Object root, INode node, Class clazz) {
+        return (ParseResult) parseSql(node, createParamsContext(requestType, root, clazz));
+    }
+
+    @Override
+    protected SimpParamsContext createParamsContext(RequestType requestType, Object root, Class<?> clazz) {
         if(root == null){
             root = new HashMap<>();
         }
@@ -81,8 +86,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
 
 
-        ParseResult result = (ParseResult) parseSql(node, context);
-        return result;
+        return context;
     }
 
     @Override
@@ -193,17 +197,26 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     @Override
     protected List<IDataBuffer> executeSelect(ParseResult request) {
         SqlNode sqlNode = (SqlNode)request.getRequest();
+        return withQueryConnection(connection -> executeSelectNode(connection, sqlNode));
+    }
 
+    @FunctionalInterface
+    protected interface QueryConnectionWork<T> {
+        T apply(Connection connection) throws Exception;
+    }
 
+    /** Queries and diagnostics share the same transaction resource and connection lifetime. */
+    @lombok.SneakyThrows
+    protected final <T> T withQueryConnection(QueryConnectionWork<T> work) {
         JdbcTransactionResources resources = isOpenTransaction() ? transactionConnections() : null;
         if (resources == null) {
             try (Connection connection = dataSource.getConnection()) {
-                return executeSelectNode(connection, sqlNode);
+                return work.apply(connection);
             }
         }
         Connection connection = resources.getConnection();
         try {
-            return executeSelectNode(connection, sqlNode);
+            return work.apply(connection);
         } finally {
             resources.releaseConnection(connection);
         }

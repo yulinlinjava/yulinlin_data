@@ -17,6 +17,10 @@ public enum RequestType {
 
         group,
 
+        explain,
+
+        explainCount,
+
 
 
 

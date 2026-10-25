@@ -18,6 +18,26 @@ public final class SqlParamsContext implements IParamsContext {
     private Map<String, String> expressions;
     private Map<String, String> groupExpressions;
     private Map<String, Object> attributes;
+    private com.yulinlin.data.core.node.from.Store indexHintTarget;
+    private String indexHintClause;
+    private boolean indexHintApplied;
+
+    public void indexHint(com.yulinlin.data.core.node.from.Store target, String clause) {
+        indexHintTarget = java.util.Objects.requireNonNull(target, "target");
+        if (clause == null || clause.isBlank()) {
+            throw new IllegalArgumentException("索引提示方言不能返回空 SQL");
+        }
+        indexHintClause = clause;
+    }
+
+    /** Identity comparison prevents hints from leaking onto other tables/subqueries. */
+    public String indexHintClause(com.yulinlin.data.core.node.from.Store table) {
+        if (table != indexHintTarget) return "";
+        indexHintApplied = true;
+        return indexHintClause;
+    }
+
+    public boolean indexHintApplied() { return indexHintApplied; }
 
     public SqlParamsContext(IParamsContext delegate, SqlParseManager parseManager) {
         this.delegate = java.util.Objects.requireNonNull(delegate, "delegate");

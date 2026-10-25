@@ -13,6 +13,12 @@
     <dependencies>
         <dependency>
             <groupId>com.yulinlin</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
             <artifactId>jdbc</artifactId>
             <version>${project.version}</version>
         </dependency>

@@ -15,6 +15,19 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class MongoDocumentCompatibilityTest {
     @Test
+    void indexHintsAreIgnoredWithoutChangingTheMongoCommand() {
+        var wrapper = new com.yulinlin.data.core.wrapper.impl.SelectWrapper<>().table("people");
+        wrapper.where().eq("name", "Alice");
+        var request = com.yulinlin.data.core.request.QueryRequest.newInstance(Map.class, wrapper)
+                .useIndex("idx_people_name");
+        var parser = new MongoParseManager();
+        var plain = (com.yulinlin.data.core.parse.ParseResult) parser.parse(wrapper, context(RequestType.select));
+        var hinted = (com.yulinlin.data.core.parse.ParseResult) parser.parse(wrapper, context(RequestType.select), request.getIndexHint());
+        assertEquals(plain.getRequest(), hinted.getRequest());
+        assertFalse(((BsonDocument) hinted.getRequest()).containsKey("hint"));
+    }
+
+    @Test
     void dottedDocumentPredicatesRemainNativeMongoFilters() {
         var context = context(RequestType.select);
         var filter = (BsonDocument) new MongoParseManager().parse(new Eq("profile.name", "Alice"), context);

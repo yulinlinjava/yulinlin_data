@@ -9,6 +9,7 @@
 ## 本页导航
 
 - [PostgreSQL 接入](#postgresql-接入-1)
+- [索引选择与 useIndex](#索引选择与-useindex)
 - [JSON 整字段存储](#json-整字段存储)
 - [日期与聚合](#日期与聚合)
 - [运行 PostgreSQL 回归测试](#运行-postgresql-回归测试)
@@ -66,6 +67,14 @@ yulinlin:
 JSON 只保留整字段编解码、读取和替换；JDBC Wrapper 不再解析 `payload->profile->name`，也不自动生成 JSON 查询、类型推断或 `jsonb_set`。路径操作请显式编写参数化原生 SQL，具体迁移规则见[JSON 字段与原生 SQL](../orm/raw-sql.md#json-字段与原生-sql)。
 
 JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream、bytea/oid 等二进制对象；需要保存时应先由明确的编解码策略转成文本，或把文件放到对象存储后只保存地址。原生布尔列保留 false/NULL；除布尔列外结果大多沿用字符串解码，不能推定 timestamptz 等扩展类型完整往返已验证。
+
+### 索引选择与 useIndex
+
+查看自动选择的执行计划可调用 `query.explain()`；查看分页总数的计划使用 `query.explainCount()`。两者返回数据库原生计划行，只执行普通 EXPLAIN，不启用 ANALYZE，不依赖 PG 扩展，详见[查看执行计划](../orm/query.md#查看执行计划)。
+
+PostgreSQL 模块由数据库优化器自动选择索引。统一查询 API 的 `.useIndex("idx_name")` **只对 H2 生效**；PG 接受合法提示并忽略，不因调用此方法或提示中的索引不存在而报错。框架不为此接入 `pg_hint_plan`，也不修改数据库的优化器设置。
+
+普通查询、分组、分页及派生 count 均遵循这一规则，生成的 SQL 和绑定参数与未指定提示时一致。业务仍需建立合适的索引；`@JoinIndex` 的声明、创建与校验规则不变。非法参数和真实数据库错误仍按原规则处理；完整用法、请求复制及缓存行为见 [H2 索引提示](h2.md#单次查询索引提示)。
 
 ### JSON 整字段存储
 

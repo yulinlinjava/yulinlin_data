@@ -13,6 +13,9 @@ import java.util.List;
 
 /** Shared JDBC execution with PostgreSQL parsers and driver-specific value handling. */
 public class PostgresqlSession extends JdbcSession {
+    @Override
+    protected String explainPrefix() { return "EXPLAIN "; }
+
     private final PostgresqlSchemaManager schemaManager = new PostgresqlSchemaManager();
     private volatile SchemaMode schemaMode = SchemaMode.NONE;
     private volatile boolean alterColumnType;

@@ -15,12 +15,14 @@ public class StoreParse implements IParse<Store> {
     public String parse(Store condition, IParamsContext params, IParseManager parseManager) {
         var names = com.yulinlin.jdbc.sql.SqlParamsContext.nameParse(params);
         String table = names.reference(params.parse(condition.getName()).toString());
+        String hint = params instanceof com.yulinlin.jdbc.sql.SqlParamsContext sql
+                ? sql.indexHintClause(condition) : "";
       if(AliasUtil.supportAlias(params)){
           if(condition.getAlias() != null){
 
-              return table +" " +names.alias(condition.getAlias());
+              return table +" " +names.alias(condition.getAlias()) + hint;
           }
       }
-        return table;
+        return table + hint;
     }
 }

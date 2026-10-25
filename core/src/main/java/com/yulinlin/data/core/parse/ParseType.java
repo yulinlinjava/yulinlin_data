@@ -15,6 +15,8 @@ public enum ParseType {
 
         group,
 
+        explain,
+
 
 
 

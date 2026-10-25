@@ -15,6 +15,12 @@ public interface IParseManager {
      */
     Object parse(INode node,IParamsContext params);
 
+    /** Optional dialect optimization; unadapted backends keep their normal query path. */
+    default Object parse(INode node, IParamsContext params,
+                         com.yulinlin.data.core.request.QueryIndexHint indexHint) {
+        return parse(node, params);
+    }
+
 
 
 }

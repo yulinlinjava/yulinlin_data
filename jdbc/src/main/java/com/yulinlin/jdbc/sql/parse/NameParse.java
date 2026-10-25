@@ -43,6 +43,10 @@ public class NameParse implements IParse<AbstractMetaNode> {
     }
 
     public String reference(String name) { return name; }
+    /** Optional dialect clause; an empty result leaves index selection to the database. */
+    public String useIndex(java.util.List<String> indexes) {
+        return "";
+    }
     public String alias(String name) { return name; }
     public String selectAlias(String name) { return "`" + name.replace("`", "``") + "`"; }
     public String groupReference(String name, String expression) { return alias(name); }

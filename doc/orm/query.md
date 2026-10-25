@@ -9,6 +9,8 @@
 ## 本页导航
 
 - [查询条件与结果组织](#查询条件与结果组织)
+- [计数与分页总数](#计数与分页总数)
+- [查看执行计划](#查看执行计划)
 - [查询条件对象](#查询条件对象)
 
 ## 查询条件与结果组织
@@ -36,8 +38,71 @@ var users = query.selectList();
 | selectOne | 无结果返回 null；取第一条，不自动保证唯一 |
 | selectList / count | 列表 / 计数 |
 | selectPage(page, size) | 数据库分页，调用前校验页码和大小 |
+| useIndex("idx_name", ...) | 仅 H2 生效，支持普通/分组查询、分页及派生 count；MySQL、PostgreSQL 等其他后端忽略合法提示、不报不支持错误，继续由数据库自动选择索引，详见 [H2 索引提示](../datasources/h2.md#单次查询索引提示) |
+| explain() / explainCount() | H2、MySQL、PG 的普通 EXPLAIN：分别查看当前查询和派生 count 的原生计划，详见[查看执行计划](#查看执行计划) |
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
+
+### 计数与分页总数
+
+JDBC 普通查询的 `count()` 和 `selectPage()` 总数直接使用 `COUNT(1)`，保留原来的 FROM、JOIN/ON 和 WHERE，不再额外包装一层 `SELECT 1` 子查询。例如对 DemoUser 按状态计数，SQL 结构如下（省略方言的标识符引号）：
+
+```sql
+SELECT COUNT(1) AS total FROM ai_demo_user WHERE status = ?
+```
+
+统计的是满足条件的结果行数：投影字段为 NULL 的行也计入；JOIN 产生的重复行照常计入，不自动按实体主键去重。没有匹配行返回 0。列表的投影、ORDER BY、分页和行锁不带入 count；调用 count 不修改原查询，随后仍可正常查询列表。参数仍按原顺序绑定，原有请求复制、计数缓存和 SQL 日志规则保持不变。
+
+分组查询的 `count()` 统计通过 HAVING 的分组数，继续保留子查询、分组表达式与聚合指标。例如按状态分组并筛选人数的结构为：
+
+```sql
+SELECT COUNT(1) AS total FROM (
+    SELECT status, COUNT(1) AS users
+    FROM ai_demo_user
+    GROUP BY status
+    HAVING COUNT(1) > ?
+) temp
+```
+
+分组 count 同样不带列表的排序和分页。`explainCount()` 复用同一计数解析：普通查询解释直接 COUNT，分组查询解释保留子查询的 COUNT；执行计划与实际计数 SQL 保持一致。这是 SQL 生成的局部简化，实际性能取决于数据库的执行计划。
+
+### 查看执行计划
+
+`ModelSelectWrapper`、`ModelGroupWrapper` 和 `QueryRequest` 提供 `explain()`、`explainCount()`，返回 `List<Map<String, Object>>`。**H2、MySQL、PostgreSQL 支持这两个入口，均只发送普通 `EXPLAIN`，不启用 `ANALYZE`。** 其他内置后端明确报不支持，不会回退执行原查询。
+
+下面沿用 [DemoUser 模型](entity.md)；把组名改为 `h2` 或 `postgresql` 即可查看对应数据源的计划：
+
+```java
+import com.yulinlin.common.model.ModelSelectWrapper;
+import demo.domain.DemoUser;
+import java.util.List;
+import java.util.Map;
+
+var query = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+        .eq("status", 1)
+        .orderByAsc("id")
+        .page(2, 20);
+
+List<Map<String, Object>> listPlan = query.explain();
+List<Map<String, Object>> countPlan = query.explainCount();
+```
+
+两个调用分别发送一条诊断命令，可以独立使用：
+
+| 方法 | 查看哪条 SQL | 保留的查询内容 |
+| --- | --- | --- |
+| `explain()` | 当前列表或分组查询 | 字段映射、WHERE、JOIN、GROUP BY、HAVING、排序和已设置的分页 |
+| `explainCount()` | 与 `count()` / `selectPage()` 相同的计数 SQL | 普通查询直接 COUNT，保留 FROM、JOIN/ON、WHERE；分组查询保留子查询及 GROUP BY/HAVING、统计分组数；不带原列表的排序和分页 |
+
+`count()` 返回总数，`explainCount()` 返回计算该总数的计划。`explain()` 不自动执行分页 count；查看分页的两条 SQL 时分别调用两个入口。已经包装为 `CountWrapper` 的请求不会再叠加一层 count。诊断不会把原请求改成 EXPLAIN，请求随后仍可正常调用 `selectList()`、`count()` 等。
+
+返回值保留数据库报告的列标签、行顺序、JDBC `getObject` 值及 NULL。H2 通常返回 `PLAN` / `plan` 文本列，PG 普通格式通常返回多行 `QUERY PLAN`；MySQL 结果受服务器默认 EXPLAIN 格式影响。框架不统一扫描量、成本或计划树，不对计划应用实体映射或日期/金额等业务解码。
+
+执行流程复用数据源路由、事务中的节点/连接选择、查询前 `IFilterManager.before`、字段映射、root 参数编码和参数绑定。过滤器替换请求后，诊断使用替换后的条件；H2 的 `useIndex` 保留在计划 SQL 中，MySQL、PG 仍忽略它。计划是诊断数据，不经过业务结果 `IFilterManager.after`、实体代理、懒加载或自动更新，也不要求因实体自动更新而额外开启事务。
+
+每次调用直接读取数据库计划，**绕过 ORM 查询缓存**，即使原请求设置了 `.cache()`；原请求的缓存选项保持不变。SQL 日志、慢 SQL 监控和执行监听记录实际的 `EXPLAIN ...`，操作类型为 `explain`。日志参数展示仍遵循原有配置。
+
+这两个便利入口接受内置 SelectWrapper / GroupWrapper 及其 CountWrapper；不自动包装原生 CommandNode、写操作或自定义 Wrapper。需要解释原生 SQL 时，直接通过[原生 SQL 入口](raw-sql.md)显式编写普通 EXPLAIN 并使用参数绑定。数据库权限、缺失索引等错误正常传播。普通 EXPLAIN 提供计划，不代表实测耗时或实际扫描量；`EXPLAIN ANALYZE` 会执行被分析语句，不在本接口范围内。
 
 ### 查询条件对象
 

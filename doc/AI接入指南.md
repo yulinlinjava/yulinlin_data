@@ -174,6 +174,7 @@ JPA 的关联、懒加载和脏检查是内置能力，应当获得明显加分�
 ### 本页导航
 
 - [MySQL 接入](#ai-datasources-mysql-mysql-接入-1)
+- [索引选择与 useIndex](#ai-datasources-mysql-索引选择与-useindex)
 
 <a id="ai-datasources-mysql-mysql-接入-1"></a>
 ### MySQL 接入
@@ -219,6 +220,15 @@ yulinlin:
 ```
 
 正常 Boot 自动配置链下无需框架启用注解。mysql 模块创建 `mysqlSessionFactory` 和 `mysqlSession`，默认 group 为 `mysql`。为兼容已有生产项目，`schema-mode` 默认 `NONE`；不需要框架管理结构时删除整个 `yulinlin.mysql` 段并由迁移脚本准备表。设为 `CREATE` 后，启动时递归扫描 `schema-packages`，创建缺失的表、普通列和声明索引，并校验已有结构；`VALIDATE` 只校验，缺失直接阻止启动。完整实体与 CRUD 见 [ORM 开发](orm/README.md)。
+
+<a id="ai-datasources-mysql-索引选择与-useindex"></a>
+### 索引选择与 useIndex
+
+查看自动选择的执行计划可调用 `query.explain()`；查看分页总数的计划使用 `query.explainCount()`。两者返回数据库原生计划行，只执行普通 EXPLAIN，不启用 ANALYZE，详见[查看执行计划](#ai-orm-query-查看执行计划)。
+
+MySQL 模块由数据库优化器自动选择索引。统一查询 API 的 `.useIndex("idx_name")` **只对 H2 生效**；MySQL 接受合法提示并忽略，不生成 `USE INDEX` 或 `FORCE INDEX`，不因调用此方法或提示中的索引不存在而报错。这是框架的兼容策略。
+
+普通查询、分组、分页及派生 count 均遵循这一规则，生成的 SQL 和绑定参数与未指定提示时一致。业务仍需建立合适的索引；`@JoinIndex` 的声明、创建与校验规则不变。非法参数和真实数据库错误仍按原规则处理；完整用法、请求复制及缓存行为见 [H2 索引提示](#ai-datasources-h2-单次查询索引提示)。
 
 ---
 
@@ -544,6 +554,7 @@ public class VideoComment {
 ### 本页导航
 
 - [H2 接入](#ai-datasources-h2-h2-接入-1)
+- [单次查询索引提示](#ai-datasources-h2-单次查询索引提示)
 
 <a id="ai-datasources-h2-h2-接入-1"></a>
 ### H2 接入
@@ -610,6 +621,110 @@ H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连
 
 H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 parallel-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
 
+<a id="ai-datasources-h2-单次查询索引提示"></a>
+### 单次查询索引提示
+
+`ModelSelectWrapper`、`ModelGroupWrapper` 和 `QueryRequest` 支持 `.useIndex(String... indexNames)`。框架采用 **仅 H2 生效，其他后端兼容忽略** 的策略：
+
+| 后端 | 合法 useIndex 提示的行为 |
+| --- | --- |
+| H2 | 在目标表后生成 `USE INDEX`，供优化器选择候选索引 |
+| MySQL | 忽略提示，不生成 `USE INDEX` / `FORCE INDEX`，由数据库自动选择索引 |
+| PostgreSQL | 忽略提示，由数据库自动选择索引，不接入 `pg_hint_plan` |
+| SQLite、Oracle、MongoDB、ES 等其他内置后端 | 忽略提示，保留原有查询行为 |
+
+这项策略统一适用于普通查询、分组、分页及派生 count。MySQL、PG 等后端不会因合法提示报“不支持”错误；忽略提示后，生成的 SQL / 请求和绑定参数与未指定提示时一致。非法名称、空参数或请求目标改变仍按统一规则校验，真实数据库错误仍正常传播。提示属于可选优化，不保证跨数据库生效。没调用此方法时生成 SQL、参数绑定、查询缓存规则与原有行为不变。
+
+`@JoinIndex` 仍只负责索引结构声明与维护，`useIndex` 不创建索引、不改变统计信息或全局配置。传入数据库中的**实际索引名**，不是 Java 属性或列名；框架生成的超长索引名带哈希后缀，不要自行拼接猜测。H2 实际应用提示时，索引不存在仍保留数据库错误，不静默回退，也不在每次查询前额外查询索引元数据；忽略提示的后端不校验索引是否存在。
+
+<a id="ai-datasources-h2-普通查询"></a>
+#### 普通查询
+
+假设已通过 Schema 或迁移创建 `idx_demo_user_status` 索引，以下为业务方法体片段：
+
+```java
+var query = ModelSelectWrapper.newInstance("h2", DemoUser.class)
+        .useIndex("idx_demo_user_status")
+        .eq("status", 1)
+        .orderByAsc("id");
+var users = query.selectList();
+var first = query.selectOne();
+int total = query.count();
+var page = query.selectPage(2, 20);
+```
+
+各行展示不同查询入口，实际按需调用。分页的列表 SQL 和 count SQL 都保留提示；count 不受当前页码和每页条数限制。普通 count 直接生成 `SELECT COUNT(1) AS total FROM 表 USE INDEX (...) WHERE ...`；分组 count 保留子查询，提示仍跟随子查询内的物理表。`explainCount()` 使用同一 SQL，详见[计数与分页总数](#ai-orm-query-计数与分页总数)。
+
+<a id="ai-datasources-h2-多指标分钟聚合"></a>
+#### 多指标分钟聚合
+
+模型使用真实时间字段过滤，用另一个属性接收分钟分组键。以下只读投影不声明 `autoSchema=true`，不用于建表或写入；字段需提供 getter/setter（示例使用 Lombok）。
+
+```java
+import com.yulinlin.data.core.anno.*;
+import java.time.LocalDateTime;
+import lombok.Data;
+
+@Data
+@JoinTable("metric_minute_v2")
+public class MetricMinuteSum {
+    private String projectCode;
+    @JoinAggregations private String metricCode;
+    private String collectionKind;
+    @JoinField(name = "minute_at") private LocalDateTime sourceTime;
+    @JoinAggregations(AggregationsEnum.minute)
+    @JoinField(name = "minute_at") private String bucket;
+    @JoinMetrics(MetricsEnum.max) private Integer incomplete;
+    @JoinMetrics(MetricsEnum.sum) private Double amount;
+}
+```
+
+```java
+import com.yulinlin.common.model.ModelGroupWrapper;
+import java.time.LocalDateTime;
+import java.util.List;
+
+var query = ModelGroupWrapper.newInstance("h2", MetricMinuteSum.class)
+        .useIndex("idx_metric_minute_v2_project_code_minute_at")
+        .eq("projectCode", "123")
+        .gte("sourceTime", LocalDateTime.of(2026, 10, 24, 11, 0))
+        .lt("sourceTime", LocalDateTime.of(2026, 10, 24, 12, 0))
+        .in("metricCode", List.of("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"))
+        .eq("collectionKind", "API")
+        .cache(false);
+query.getRequest().autoUpdate(false);
+var rows = query.selectList();
+long groups = query.count(); // 分组数，不是匹配的原始行数；保留 HAVING
+var page = query.page(1, 20).selectPage();
+```
+
+提示生成在对应物理表引用之后（有别名则在别名之后），例如：
+
+```sql
+FROM "metric_minute_v2" USE INDEX ("idx_metric_minute_v2_project_code_minute_at")
+WHERE "project_code" = ? AND "minute_at" >= ? AND "minute_at" < ?
+```
+
+单指标分支可以不调用 `useIndex`，继续让数据库选路。框架不会根据 IN 数量、注解或报表类型自动强制某个索引。
+
+<a id="ai-datasources-h2-边界复制和缓存"></a>
+#### 边界、复制和缓存
+
+需要比较提示前后的计划时，在同一个查询上分别调用 `query.explain()`、`query.useIndex("idx_name").explain()`；分页总数计划使用 `query.explainCount()`。这些入口只执行普通 EXPLAIN，返回原生计划行并绕过查询缓存，详见[查看执行计划](#ai-orm-query-查看执行计划)。
+
+- 第一阶段只支持内置单表 SelectWrapper / GroupWrapper 及其 count，允许明确的表别名和 schema 限定表名；JOIN、原生 SQL、自定义 Wrapper、缺失表名和动态模板表名均不支持提示。原生 SQL 内容不会被自动重写。INSERT / UPDATE / DELETE 不提供此入口。
+- 索引名只接受单个标识符：字母或下划线开头，后续可含字母、数字、下划线和 `$`；不接受点号、空白、引号、注释或 SQL 片段。不应直接传入前端提供的索引名。空参数、null、空名称直接报参数错误；重复名称去重，多次调用以最后一次为准。
+- 底层入口是 `QueryRequest.newInstance(Model.class, wrapper).useIndex("idx_name")`。提示是请求的不可变选项，不修改共享 Wrapper；两个请求复用同一 Wrapper，不会互相改变索引提示。
+- `QueryRequest.copy(newWrapper)` 和过滤器的 `inheritExecutionOptions` 保留提示及其目标表。新请求必须仍指向相同表名及别名，否则明确报错；过滤器原地改表或加 JOIN 也会在执行前被拒绝。过滤器同表替换时继承调用方提示，不能偷偷覆盖调用者的选择。
+- 无提示、不同提示使用不同查询/计数缓存键（包括忽略提示的后端）；相同提示和 WHERE 条件的普通 count 仍跨分页复用缓存。事务内继续绕过查询缓存。缓存命中不执行数据库查询，也不会再验证索引存在或产生后端执行事件；验证索引计划时使用 `.cache(false)`。
+- H2 的 SQL 日志、执行监听和慢 SQL 监控可看到提示；忽略提示的后端仍展示原有查询。`log-sql-pretty` 只改变日志展示，不删除 JDBC 实际执行 SQL 中的引号或提示。条件仍参数绑定，结果编解码、NULL、SUM/MAX、时间边界和事务资源管理不变。
+
+H2 的 `USE INDEX` 限制候选索引，**不是保证一定使用索引，也不是 MySQL 的 FORCE INDEX**；优化器仍可能选择全表扫描，见 [H2 官方说明](https://h2database.com/html/performance.html)。应在代表性数据上比较参数化 `EXPLAIN ANALYZE` 的实际索引、扫描量和结果一致性，而非承诺固定耗时或提速倍数。该命令会实际执行查询，不应对业务库运行造数或改统计信息的测试脚本。
+
+回归测试：[不可变提示、复制与缓存键](../core/src/test/java/com/yulinlin/data/core/request/QueryIndexHintTest.java)、[H2 实际查询、分组、分页、count、过滤器与日志](../h2/src/test/java/com/yulinlin/jdbc/h2/H2UseIndexTest.java)。测试使用独立内存数据库，不读取或修改业务数据库；模拟数据不能保证重现业务库的坏执行计划。
+
+计数结果还统一处理 H2 默认大写标识符模式下的 `TOTAL` 标签；它与小写模式都返回框架的 `total` 协议，不改其他查询列名或生成 SQL。2026-10-25 在 H2 2.3.232 的独立内存库运行业务方提供的 518,400 行模拟脚本：默认计划扫描 518,401 次，指定项目＋时间索引后扫描 2,929 次，实际匹配 2,880 行；空时间窗分别扫描 518,401 / 1 次。这是该模拟数据的独立观测，不是对业务库的复测或固定性能承诺。自动化回归另外使用 38,400 行模拟数据，核对模型生成 SQL 的指定索引计划、扫描范围及聚合结果一致性，不要求默认优化器一定选错索引。
+
 ---
 
 下一步：返回[数据源主题目录](datasources/README.md)按需选择相关专题。
@@ -656,6 +771,7 @@ H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用
 ### 本页导航
 
 - [PostgreSQL 接入](#ai-datasources-postgresql-postgresql-接入-1)
+- [索引选择与 useIndex](#ai-datasources-postgresql-索引选择与-useindex)
 - [JSON 整字段存储](#ai-datasources-postgresql-json-整字段存储)
 - [日期与聚合](#ai-datasources-postgresql-日期与聚合)
 - [运行 PostgreSQL 回归测试](#ai-datasources-postgresql-运行-postgresql-回归测试)
@@ -714,6 +830,15 @@ yulinlin:
 JSON 只保留整字段编解码、读取和替换；JDBC Wrapper 不再解析 `payload->profile->name`，也不自动生成 JSON 查询、类型推断或 `jsonb_set`。路径操作请显式编写参数化原生 SQL，具体迁移规则见[JSON 字段与原生 SQL](#ai-orm-raw-sql-json-字段与原生-sql)。
 
 JDBC 参数统一使用 `setObject`，业务参数不应直接携带 InputStream、bytea/oid 等二进制对象；需要保存时应先由明确的编解码策略转成文本，或把文件放到对象存储后只保存地址。原生布尔列保留 false/NULL；除布尔列外结果大多沿用字符串解码，不能推定 timestamptz 等扩展类型完整往返已验证。
+
+<a id="ai-datasources-postgresql-索引选择与-useindex"></a>
+#### 索引选择与 useIndex
+
+查看自动选择的执行计划可调用 `query.explain()`；查看分页总数的计划使用 `query.explainCount()`。两者返回数据库原生计划行，只执行普通 EXPLAIN，不启用 ANALYZE，不依赖 PG 扩展，详见[查看执行计划](#ai-orm-query-查看执行计划)。
+
+PostgreSQL 模块由数据库优化器自动选择索引。统一查询 API 的 `.useIndex("idx_name")` **只对 H2 生效**；PG 接受合法提示并忽略，不因调用此方法或提示中的索引不存在而报错。框架不为此接入 `pg_hint_plan`，也不修改数据库的优化器设置。
+
+普通查询、分组、分页及派生 count 均遵循这一规则，生成的 SQL 和绑定参数与未指定提示时一致。业务仍需建立合适的索引；`@JoinIndex` 的声明、创建与校验规则不变。非法参数和真实数据库错误仍按原规则处理；完整用法、请求复制及缓存行为见 [H2 索引提示](#ai-datasources-h2-单次查询索引提示)。
 
 <a id="ai-datasources-postgresql-json-整字段存储"></a>
 #### JSON 整字段存储
@@ -1473,6 +1598,8 @@ int affected = ModelUpdateWrapper.newInstance("mysql", patch)
 ### 本页导航
 
 - [查询条件与结果组织](#ai-orm-query-查询条件与结果组织)
+- [计数与分页总数](#ai-orm-query-计数与分页总数)
+- [查看执行计划](#ai-orm-query-查看执行计划)
 - [查询条件对象](#ai-orm-query-查询条件对象)
 
 <a id="ai-orm-query-查询条件与结果组织"></a>
@@ -1501,8 +1628,73 @@ var users = query.selectList();
 | selectOne | 无结果返回 null；取第一条，不自动保证唯一 |
 | selectList / count | 列表 / 计数 |
 | selectPage(page, size) | 数据库分页，调用前校验页码和大小 |
+| useIndex("idx_name", ...) | 仅 H2 生效，支持普通/分组查询、分页及派生 count；MySQL、PostgreSQL 等其他后端忽略合法提示、不报不支持错误，继续由数据库自动选择索引，详见 [H2 索引提示](#ai-datasources-h2-单次查询索引提示) |
+| explain() / explainCount() | H2、MySQL、PG 的普通 EXPLAIN：分别查看当前查询和派生 count 的原生计划，详见[查看执行计划](#ai-orm-query-查看执行计划) |
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
+
+<a id="ai-orm-query-计数与分页总数"></a>
+#### 计数与分页总数
+
+JDBC 普通查询的 `count()` 和 `selectPage()` 总数直接使用 `COUNT(1)`，保留原来的 FROM、JOIN/ON 和 WHERE，不再额外包装一层 `SELECT 1` 子查询。例如对 DemoUser 按状态计数，SQL 结构如下（省略方言的标识符引号）：
+
+```sql
+SELECT COUNT(1) AS total FROM ai_demo_user WHERE status = ?
+```
+
+统计的是满足条件的结果行数：投影字段为 NULL 的行也计入；JOIN 产生的重复行照常计入，不自动按实体主键去重。没有匹配行返回 0。列表的投影、ORDER BY、分页和行锁不带入 count；调用 count 不修改原查询，随后仍可正常查询列表。参数仍按原顺序绑定，原有请求复制、计数缓存和 SQL 日志规则保持不变。
+
+分组查询的 `count()` 统计通过 HAVING 的分组数，继续保留子查询、分组表达式与聚合指标。例如按状态分组并筛选人数的结构为：
+
+```sql
+SELECT COUNT(1) AS total FROM (
+    SELECT status, COUNT(1) AS users
+    FROM ai_demo_user
+    GROUP BY status
+    HAVING COUNT(1) > ?
+) temp
+```
+
+分组 count 同样不带列表的排序和分页。`explainCount()` 复用同一计数解析：普通查询解释直接 COUNT，分组查询解释保留子查询的 COUNT；执行计划与实际计数 SQL 保持一致。这是 SQL 生成的局部简化，实际性能取决于数据库的执行计划。
+
+<a id="ai-orm-query-查看执行计划"></a>
+#### 查看执行计划
+
+`ModelSelectWrapper`、`ModelGroupWrapper` 和 `QueryRequest` 提供 `explain()`、`explainCount()`，返回 `List<Map<String, Object>>`。**H2、MySQL、PostgreSQL 支持这两个入口，均只发送普通 `EXPLAIN`，不启用 `ANALYZE`。** 其他内置后端明确报不支持，不会回退执行原查询。
+
+下面沿用 [DemoUser 模型](#ai-orm-entity)；把组名改为 `h2` 或 `postgresql` 即可查看对应数据源的计划：
+
+```java
+import com.yulinlin.common.model.ModelSelectWrapper;
+import demo.domain.DemoUser;
+import java.util.List;
+import java.util.Map;
+
+var query = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+        .eq("status", 1)
+        .orderByAsc("id")
+        .page(2, 20);
+
+List<Map<String, Object>> listPlan = query.explain();
+List<Map<String, Object>> countPlan = query.explainCount();
+```
+
+两个调用分别发送一条诊断命令，可以独立使用：
+
+| 方法 | 查看哪条 SQL | 保留的查询内容 |
+| --- | --- | --- |
+| `explain()` | 当前列表或分组查询 | 字段映射、WHERE、JOIN、GROUP BY、HAVING、排序和已设置的分页 |
+| `explainCount()` | 与 `count()` / `selectPage()` 相同的计数 SQL | 普通查询直接 COUNT，保留 FROM、JOIN/ON、WHERE；分组查询保留子查询及 GROUP BY/HAVING、统计分组数；不带原列表的排序和分页 |
+
+`count()` 返回总数，`explainCount()` 返回计算该总数的计划。`explain()` 不自动执行分页 count；查看分页的两条 SQL 时分别调用两个入口。已经包装为 `CountWrapper` 的请求不会再叠加一层 count。诊断不会把原请求改成 EXPLAIN，请求随后仍可正常调用 `selectList()`、`count()` 等。
+
+返回值保留数据库报告的列标签、行顺序、JDBC `getObject` 值及 NULL。H2 通常返回 `PLAN` / `plan` 文本列，PG 普通格式通常返回多行 `QUERY PLAN`；MySQL 结果受服务器默认 EXPLAIN 格式影响。框架不统一扫描量、成本或计划树，不对计划应用实体映射或日期/金额等业务解码。
+
+执行流程复用数据源路由、事务中的节点/连接选择、查询前 `IFilterManager.before`、字段映射、root 参数编码和参数绑定。过滤器替换请求后，诊断使用替换后的条件；H2 的 `useIndex` 保留在计划 SQL 中，MySQL、PG 仍忽略它。计划是诊断数据，不经过业务结果 `IFilterManager.after`、实体代理、懒加载或自动更新，也不要求因实体自动更新而额外开启事务。
+
+每次调用直接读取数据库计划，**绕过 ORM 查询缓存**，即使原请求设置了 `.cache()`；原请求的缓存选项保持不变。SQL 日志、慢 SQL 监控和执行监听记录实际的 `EXPLAIN ...`，操作类型为 `explain`。日志参数展示仍遵循原有配置。
+
+这两个便利入口接受内置 SelectWrapper / GroupWrapper 及其 CountWrapper；不自动包装原生 CommandNode、写操作或自定义 Wrapper。需要解释原生 SQL 时，直接通过[原生 SQL 入口](#ai-orm-raw-sql)显式编写普通 EXPLAIN 并使用参数绑定。数据库权限、缺失索引等错误正常传播。普通 EXPLAIN 提供计划，不代表实测耗时或实际扫描量；`EXPLAIN ANALYZE` 会执行被分析语句，不在本接口范围内。
 
 <a id="ai-orm-query-查询条件对象"></a>
 #### 查询条件对象

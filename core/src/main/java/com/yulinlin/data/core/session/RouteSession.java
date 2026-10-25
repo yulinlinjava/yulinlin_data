@@ -344,7 +344,8 @@ public class RouteSession extends RegisterSession implements TransactionSession 
         try {
             prepared = before(req);
             QueryRequest<?> request = (QueryRequest<?>) prepared.request();
-            if (requestType != RequestType.count && proxyService != null
+            boolean diagnostic = requestType == RequestType.explain || requestType == RequestType.explainCount;
+            if (!diagnostic && requestType != RequestType.count && proxyService != null
                     && proxyService.requiresTransaction(request) && !isOpenTransaction())
                 throw new NoticeException("Entity auto-update query requires an active transaction. 请开启事务。");
             EntitySession session = prepared.session();
@@ -353,8 +354,12 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 case page -> session.page((QueryRequest) request);
                 case group -> session.group((QueryRequest) request);
                 case count -> session.count((QueryRequest) request);
+                case explain -> session.explain(request);
+                case explainCount -> session.explainCount(request);
                 default -> throw new IllegalArgumentException("Not a query: " + requestType);
             };
+            // Plans retain native rows; entity-result filters and proxies do not apply to diagnostics.
+            if (diagnostic) return (E) data;
             Class<?> expectedType = requestType == RequestType.page ? Page.class
                     : requestType == RequestType.count ? Integer.class : List.class;
             return (E) after(session, request, data, expectedType);
@@ -389,6 +394,14 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     public <E> Page<E> page(QueryRequest<E> request) {
         return executeList(request,RequestType.page);
+    }
+
+    public List<Map<String, Object>> explain(QueryRequest<?> request) {
+        return executeList(request, RequestType.explain);
+    }
+
+    public List<Map<String, Object>> explainCount(QueryRequest<?> request) {
+        return executeList(request, RequestType.explainCount);
     }
 
     public <E> List<E> select(QueryRequest<E> request) {

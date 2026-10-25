@@ -37,5 +37,14 @@ public interface EntitySession extends LoadBalanceNode,TransactionSession {
 
     <E> List<E> group(QueryRequest<E> request );
 
+    /** Diagnostics are opt-in; unsupported backends must never execute the original query instead. */
+    default List<java.util.Map<String, Object>> explain(QueryRequest<?> request) {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " 不支持 explain");
+    }
+
+    default List<java.util.Map<String, Object>> explainCount(QueryRequest<?> request) {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " 不支持 explainCount");
+    }
+
 
 }

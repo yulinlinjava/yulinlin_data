@@ -11,6 +11,9 @@ import java.util.List;
 
 /** Shared JDBC execution with H2 SQL and startup schema initialization. */
 public class H2Session extends JdbcSession {
+    @Override
+    protected String explainPrefix() { return "EXPLAIN "; }
+
     private final H2SchemaManager schemaManager = new H2SchemaManager();
     private volatile DataSource schemaDataSource;
     private volatile SchemaMode schemaMode = SchemaMode.CREATE;
@@ -21,6 +24,15 @@ public class H2Session extends JdbcSession {
         schemaDataSource = dataSource instanceof H2DataSource h2
                 ? h2.directDataSource() : dataSource;
         setParseManager(new H2ParseManager());
+    }
+
+    @Override
+    protected com.yulinlin.data.core.coder.IDataBuffer executeCount(com.yulinlin.data.core.parse.ParseResult request) {
+        var result = super.executeCount(request);
+        // H2's default identifier mode uppercases the unquoted internal "total" alias.
+        // Normalize only the count protocol, without changing query SQL or user column labels.
+        if (result.getObject("total") == null) result.put("total", result.getObject("TOTAL"));
+        return result;
     }
 
     void configure(H2Properties properties, DataSource schemaDataSource) {

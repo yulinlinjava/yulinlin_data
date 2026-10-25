@@ -15,6 +15,9 @@ public class NameParse extends com.yulinlin.jdbc.sql.parse.NameParse {
 
     @Override public String alias(String name) { return "\"" + name.replace("\"", "\"\"") + "\""; }
     @Override public String selectAlias(String name) { return alias(name); }
+    @Override public String useIndex(java.util.List<String> indexes) {
+        return indexes.stream().map(this::alias).collect(Collectors.joining(", ", " USE INDEX (", ")"));
+    }
     @Override public String groupReference(String name, String expression) {
         // A selected alias may also be an input column; group by the actual expression.
         return expression == null ? alias(name) : expression;

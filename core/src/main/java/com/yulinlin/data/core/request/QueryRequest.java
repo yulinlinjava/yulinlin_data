@@ -21,6 +21,18 @@ public class QueryRequest<E> extends BaseRequest<E> {
     /** Null inherits the current @JoinSync/global policy; otherwise this request overrides it. */
     private Boolean autoUpdate;
 
+    private QueryIndexHint indexHint;
+
+    /** Per-query index candidates; backends without an adapter ignore the hint. */
+    public QueryRequest<E> useIndex(String... indexNames) {
+        indexHint = QueryIndexHint.of(wrapper, indexNames);
+        return this;
+    }
+
+    public QueryIndexHint getIndexHint() {
+        return indexHint;
+    }
+
 
 
     private QueryRequest(Class entityClass, INode wrapper) {
@@ -34,7 +46,9 @@ public class QueryRequest<E> extends BaseRequest<E> {
     }
 
     public QueryRequest copy(INode wrapper){
+        if (indexHint != null) indexHint.target(wrapper);
         QueryRequest request =  new QueryRequest(this.getEntityClass(),this.getFromClass(),wrapper);
+        request.indexHint = indexHint;
         request.setRoot(getRoot());
         request.setSession(getSession());
         request.setCluster(getCluster());
@@ -48,6 +62,10 @@ public class QueryRequest<E> extends BaseRequest<E> {
     /** 过滤器替换节点时保留调用者的路由、缓存、参数与代理选项；实体映射由新请求明确描述。 */
     public void inheritExecutionOptions(QueryRequest<?> source) {
         if (source == null || source == this) return;
+        if (source.indexHint != null) {
+            source.indexHint.target(wrapper);
+            indexHint = source.indexHint;
+        }
         if (source.getCacheMode() != CacheMode.NONE) {
             setCacheMode(source.getCacheMode());
             setCacheTtl(source.getCacheTtl());
@@ -116,6 +134,16 @@ public class QueryRequest<E> extends BaseRequest<E> {
 
 
     //查询
+    /** Ordinary EXPLAIN of this query, retaining its pagination; returns native plan rows. */
+    public List<Map<String, Object>> explain() {
+        return SessionUtil.route().explain(this);
+    }
+
+    /** Ordinary EXPLAIN of the same derived count used by count()/selectPage(). */
+    public List<Map<String, Object>> explainCount() {
+        return SessionUtil.route().explainCount(this);
+    }
+
     public   List<E> selectList(){
 
         return SessionUtil.route().select(this);

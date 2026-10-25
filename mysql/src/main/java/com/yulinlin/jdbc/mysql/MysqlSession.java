@@ -11,6 +11,9 @@ import java.util.List;
 
 /** MySQL execution plus optional startup-only schema creation/validation. */
 public class MysqlSession extends JdbcSession {
+    @Override
+    protected String explainPrefix() { return "EXPLAIN "; }
+
     private final MysqlSchemaManager schemaManager = new MysqlSchemaManager();
     private volatile SchemaMode schemaMode = SchemaMode.NONE;
     private volatile boolean alterColumnType;

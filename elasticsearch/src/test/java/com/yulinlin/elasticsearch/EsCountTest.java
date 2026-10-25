@@ -66,6 +66,34 @@ class EsCountTest {
         transport.close();
     }
 
+    @Test
+    void indexHintsAreIgnoredWithoutChangingTheEsRequests() {
+        var select = new SelectWrapper<>().table("people").page(2, 5);
+        select.where().eq("status", "active");
+        var request = request(select).useIndex("idx_people_name");
+        transport.replies.add(response(9, 0));
+        transport.replies.add(SearchResponse.of(b -> b.took(1).timedOut(false)
+                .shards(s -> s.failed(0).successful(1).total(1)).hits(h -> h.hits(List.of()))));
+        var page = session.page(request);
+        assertEquals(9, page.getTotal());
+        assertTrue(page.getList().isEmpty());
+        assertEquals(List.of("/people/_count", "/people/_search"), transport.paths);
+        var count = assertInstanceOf(CountRequest.class, transport.requests.getFirst());
+        var search = assertInstanceOf(SearchRequest.class, transport.requests.getLast());
+        assertEquals(List.of("people"), count.index());
+        assertEquals(List.of("people"), search.index());
+        assertEquals(parse(new CountWrapper(select), RequestType.count).getRequest().toString(), count.toString());
+        assertEquals(parse(select, RequestType.select).getRequest().toString(), search.toString());
+    }
+
+    @Test
+    void unsupportedExplainDoesNotFallBackToExecutingSearchOrCount() {
+        var request = request(new SelectWrapper<>().table("people"));
+        assertThrows(UnsupportedOperationException.class, () -> session.explain(request));
+        assertThrows(UnsupportedOperationException.class, () -> session.explainCount(request));
+        assertTrue(transport.requests.isEmpty());
+    }
+
     @ParameterizedTest
     @ValueSource(longs = {0, 1, 10001, Integer.MAX_VALUE})
     void countUsesNativeCountEndpointAndThePublicIntegerContract(long total) {

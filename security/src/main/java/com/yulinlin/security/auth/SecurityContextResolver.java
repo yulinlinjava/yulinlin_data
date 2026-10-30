@@ -5,7 +5,8 @@ package com.yulinlin.security.auth;
 public interface SecurityContextResolver {
     /**
      * 以外部框架当前身份为准校验并刷新快照；身份未变时可复用 cached.user()。
-     * 未登录/已注销返回 null；存储故障等异常应正常抛出，不能退回旧身份。
+     * 未登录/已注销返回 null，或用 LoginException 表示认证拒绝（上下文按匿名处理）；
+     * 存储故障等异常应正常抛出，不能包装成 LoginException 或退回旧身份。
      * 不能调用 SecurityContext 的读取方法，否则会递归解析。
      */
     LoginSession resolveContext(LoginSession cached);

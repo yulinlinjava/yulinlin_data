@@ -4600,6 +4600,7 @@ JWT 用户重新启用后，其尚未过期的旧 Token 可能继续使用。删
 | 内容 | 配置或扩展入口 |
 | --- | --- |
 | 是否提供统一会话管理、登录会话数量上限、查询分页 | `yulinlin.security.session.*` |
+| 默认 Token 请求头与前缀 | `yulinlin.security.auth.token-header` / `token-prefix`；详见[适用范围](#ai-security-context-配置-token-请求头) |
 | Sa-Token 有效期、活跃超时、Token 头、Cookie、超限注销方式 | `sa-token.*`、原生 `SaTokenConfig` / `StpLogic` / `SaTokenDao` |
 | Spring 授权、CSRF、CORS、会话固定防护、超限拒绝登录、失效响应 | 业务自己的 `SecurityFilterChain` 和原生扩展 Bean |
 | Servlet 会话超时、Cookie | `server.servlet.session.*` |
@@ -5694,7 +5695,7 @@ public class AuthController {
 }
 ```
 
-示例使用项目 starter 的 R，业务将 LoginException 统一转为 HTTP 401；项目已有的访问控制、防跨站请求校验及报文加密规则仍需遵守。密钥接口 JSON 为 `{"apiKey":"业务密钥","deviceType":"server"}`，后续使用返回的 Token。登录前移除失效旧 Token，公开接口携带无效凭证也会被拒绝。
+示例使用项目 starter 的 R，业务将登录操作抛出的 LoginException 统一转为 HTTP 401；项目已有的访问控制、防跨站请求校验及报文加密规则仍需遵守。密钥接口 JSON 为 `{"apiKey":"业务密钥","deviceType":"server"}`，后续使用返回的 Token。公开登录接口兼容缺失或无效旧 Token，本次提交的登录凭证仍必须通过认证；详见[公开接口的可选登录](#ai-security-context-公开接口的可选登录)。
 
 <a id="ai-security-user-根据用户-id-登录"></a>
 ### 根据用户 ID 登录
@@ -5872,11 +5873,16 @@ sessions.kickoutByDeviceType(userId, "web", "退出网页端");
 ```yaml
 yulinlin:
   security:
+    auth:
+      token-header: Authorization # 默认值；也可改为 token 或 X-Token
+      token-prefix: Bearer         # 直接传原始 Token 时设为 ""
     jwt:
       secret: ${YULINLIN_JWT_SECRET} # 至少 32 字节随机密钥的 Base64，不是 AES 设备密钥
       issuer: yulinlin
       ttl: 2h
 ```
+
+以上请求约定为 `Authorization: Bearer <token>`。仅更换请求头或去掉 Bearer 前缀时，调整 `auth` 配置即可，不需要自定义拦截器；修改后重启生效。完整规则见[配置 Token 请求头](#ai-security-context-配置-token-请求头)。
 
 默认使用 HS256 签名，Token 包含用户 ID、设备类型、认证来源、唯一凭证标识和有效期，不保存密码或完整用户资料。authType 取成功认证器的 name，不接收客户端自报值。请求必须通过签名、签发者、时间及用户可用性校验。`ttl` 默认 2h，允许 1s～365d。JWT 是签名而非加密，不要加入密码等秘密资料。
 
@@ -5999,6 +6005,7 @@ public record TokenInfo(
 | 加载用户资料、角色与权限 | UserStore | 提供按 userId 加载安全用户的 Bean |
 | 替换 JWT 生成和解析 | JwtTokenCodec | 提供一个 Bean，生成和解析成对替换 |
 | 替换接口请求解密和响应加密 | CryptoCodec | 提供一个 Bean，无需框架 AES 密钥，见[接口加解密扩展](#ai-security-crypto-codec) |
+| 仅修改默认 Token 请求头或前缀 | `yulinlin.security.auth.token-header` / `token-prefix` | 配置即可，不需要提供拦截器 Bean；见[请求头配置](#ai-security-context-配置-token-请求头) |
 | 自定义凭证读取与请求身份恢复 | LoginInterceptor | 提供一个 Bean，自动替换并注册 |
 | 完整自定义登录或接入已有认证体系 | ISecurityManager | 提供一个 Bean，按需要配套 LoginInterceptor |
 
@@ -6022,9 +6029,13 @@ public record TokenInfo(
 <a id="ai-security-extension-自定义登录拦截器"></a>
 ### 自定义登录拦截器
 
+仅修改请求头名称或前缀时，先使用[Token 请求头配置](#ai-security-context-配置-token-请求头)。需要兼容多个旧请求头、Cookie、参数或完整替换身份恢复行为时，再提供下面的拦截器。
+
 业务提供 LoginInterceptor Bean，框架就使用它；没有自定义 Bean 时使用默认实现。无需手动重复注册。Bean 返回类型应声明为 LoginInterceptor 或其具体实现；通常只提供一个，存在多个时用 @Primary 明确选择。
 
-下面示例用于 security-jwt，或完全使用 SecurityContext 管理请求身份的自定义安全实现：客户端通过 X-Token 发送原始凭证，调用公开的 resolveSession 验证后恢复上下文。
+自定义 Bean 需要复用请求头配置时，应注入容器中的 `SecurityAuthProperties`。不要自行 `new SecurityAuthProperties()`：普通对象不会自动绑定 YAML，只会使用默认值。继承默认 Token 拦截器时也必须传入配置对象，已移除内部新建默认配置的单参数构造。
+
+下面示例用于 security-jwt，或完全使用 SecurityContext 管理请求身份的自定义安全实现：展示完整的凭证读取与验证流程，客户端通过 X-Token 发送原始凭证。该示例自行读取请求头，不使用 auth 配置；仅需 X-Token 时使用配置即可。
 
 ```java
 import com.yulinlin.security.auth.*;
@@ -6044,19 +6055,11 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
             if (token == null) return true; // 匿名请求，是否允许访问由权限声明决定
             if (token.isBlank() || token.length() > 8192
                     || token.chars().anyMatch(Character::isWhitespace)) {
-                response.sendError(401, "登录凭证无效");
-                return false;
+                throw new LoginException("登录凭证无效");
             }
-            LoginSession session;
-            try {
-                session = manager.resolveSession(token);
-            } catch (LoginException error) {
-                response.sendError(401, "登录已失效，请重新登录");
-                return false;
-            }
+            LoginSession session = manager.resolveSession(token);
             if (session == null || session.expired() || !token.equals(session.token())) {
-                response.sendError(401, "登录已失效，请重新登录");
-                return false;
+                throw new LoginException("登录已失效，请重新登录");
             }
             SecurityContext.set(session);
             return true;
@@ -6068,6 +6071,12 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 这是替换整个请求身份恢复行为，不只是新增一个请求头。manager.resolveSession 必须完成真实凭证验证；此示例不能直接替换 Sa-Token、Spring 或其他同时维护外部身份的请求处理。它们应保留模块默认凭证约定，或通过完整自定义接入统一管理两侧身份。不要将客户端传入的 userId 直接写入上下文。
 
 框架负责自动注册和清理 SecurityContext，包括拒绝请求、异常、请求完成及异步切换。自定义实现若还维护其他请求状态，必须自行清理；基础设施异常正常传播，不能伪装成验证成功。
+
+MVC 静态资源由框架统一放行，不调用自定义 LoginInterceptor 的 preHandle、postHandle、afterCompletion 或异步切换回调，仍清理框架上下文。无需在自定义拦截器内重复判断静态资源；需要对所有请求记录日志等通用功能时，使用独立组件。静态资源按实际处理器识别，不按 URL 后缀绕过 Controller 鉴权。
+
+公开接口也照常解析有效 Token，不要因为方法或类标记 `@ApiPublic` 就提前返回。`preHandle` 验证凭证失败时抛出 `LoginException`：框架只对最终允许匿名的入口按匿名继续，对受保护入口返回 401。类、接口、父类及方法的鉴权要求按同一套[权限规则](#ai-security-authorization)判断。
+
+不要先 `sendError` 或输出错误 JSON 再抛异常。自定义拦截器直接返回 false、已提交响应、已设置错误状态、抛出其他异常时，框架不会替它改成匿名成功；数据库、缓存或网络故障不能包装成 `LoginException`。公开登录接口内部的账号密码认证失败仍正常报错，不在这项兼容范围内。
 
 不需要启用开关，也不要重复注册同一个拦截器。只替换 Token 算法时，应使用 JwtTokenCodec，不必修改拦截器。
 
@@ -6182,6 +6191,8 @@ Content-Type: application/json
 ```
 
 已有项目使用其他凭证头或 Cookie 时应统一客户端约定，不要同时携带多份身份凭证。普通接入保留模块默认处理即可；需要完全自定义请求认证时，按[公开扩展协议](#ai-security-extension-接入外部安全框架)完整接入，不能直接套用仅设置框架上下文的 JWT 拦截器示例。
+
+原生凭证读取规则优先；未携带原生凭证时，兼容 `yulinlin.security.auth` 指定的备用请求头，默认 `Authorization: Bearer <token>`。原生凭证存在但无效时不尝试备用身份，公开接口按匿名处理、受保护接口拒绝访问。修改原生头名称仍使用 `sa-token.token-name`，见[配置案例](#ai-security-native-config-sa-token-请求头登录案例)。
 
 每次统一登录返回独立 Token，authType 取成功认证器的 name。旧凭证缺少必要认证信息时需要重新登录；不要假设绕过统一入口产生的凭证可以直接接入。
 
@@ -6402,6 +6413,8 @@ Spring Session 原生注册表不支持 getAllPrincipals，因此默认分布式
 ### 本页导航
 
 - [登录上下文与请求生命周期](#ai-security-context-登录上下文与请求生命周期)
+- [配置 Token 请求头](#ai-security-context-配置-token-请求头)
+- [公开接口的可选登录](#ai-security-context-公开接口的可选登录)
 - [刷新与注销](#ai-security-context-刷新与注销)
 - [异步与后台任务](#ai-security-context-异步与后台任务)
 
@@ -6423,17 +6436,83 @@ boolean loggedIn = SecurityContext.isLogin();
 
 也可全部使用 SecurityUtil，或者注入 ISecurityManager。未登录时 getUser/getUserDetails、getUserId、getToken、getAuthType 返回 null，requireUser 抛 LoginException。会话型登录可能没有可返回的 Token，判断登录状态使用 isLogin，而不是判断 token 是否为空。
 
-JWT 客户端在后续请求携带 `Authorization: Bearer <token>`，其他登录模块按对应专题的客户端约定携带凭证。
+JWT 客户端默认在后续请求携带 `Authorization: Bearer <token>`，请求头名称和前缀可以通过[配置](#ai-security-context-配置-token-请求头)修改。其他登录模块按对应专题的客户端约定携带凭证。
 
 请求行为：
 
 - 有有效凭证：恢复当前用户及可信 authType。
 - 没有凭证：按匿名访问，由权限注解决定是否允许。
-- 凭证格式错误、过期或无效：默认 Token 接入返回 401，即使目标是公开接口；重新登录前移除失效旧凭证。
+- 凭证格式错误、过期或无效：公开接口按匿名继续；要求登录、角色或权限的接口返回 401。
+- 公开接口包括 `@ApiPublic` 最终生效的接口，以及没有鉴权要求的接口。类上公开但方法要求登录、角色或权限的，仍按受保护接口处理。
+- 数据库、Redis 等故障正常抛出，不当作无效 Token 静默放行。
 - 正常返回、异常、拒绝请求和异步请求切换时，自动清理本模块当前上下文。
 - OPTIONS 不解析登录 Token。仅使用公共 security 的匿名模式不接管其他认证格式。
+- MVC 托管的静态资源直接放行，不解析 Token；即使携带无效或过期 Token，也不会因此返回登录错误。请求开始、结束和异步切换仍清理框架上下文。
 
 自定义拦截器和外部登录体系需要遵守同样的身份隔离要求，见[扩展接口](#ai-security-extension)。
+
+静态资源按实际资源处理器识别，包括 MVC 资源映射和默认 Servlet 的静态资源转发，无需添加路径白名单。Controller 返回文件，或接口路径以 `.js`、`.html` 等结尾，仍按业务接口鉴权；不属于自动放行的静态资源。资源是否存在、缓存与响应状态由资源服务正常处理。本模块的放行不会覆盖网关或外部认证体系在请求到达 MVC 前的拦截规则。
+
+<a id="ai-security-context-配置-token-请求头"></a>
+### 配置 Token 请求头
+
+只更换请求头名称或前缀，不需要编写拦截器。例如客户端直接发送 `token: <token>`：
+
+```yaml
+yulinlin:
+  security:
+    auth:
+      token-header: token
+      token-prefix: ""  # 必须写空字符串：直接传原始 Token，不带 Bearer
+```
+
+```http
+token: 用户的Token
+```
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `yulinlin.security.auth.token-header` | `Authorization` | 请求头名称，也可设置为 `token`、`X-Token` 等 |
+| `yulinlin.security.auth.token-prefix` | `Bearer` | 凭证前缀；设为 `""` 表示无前缀 |
+
+保留默认值时发送 `Authorization: Bearer <token>`；配置 `token-header: X-Auth`、`token-prefix: Token` 时发送 `X-Auth: Token <token>`。前缀后面的空格由框架处理，配置值不要带空格。请求头名称和前缀按大小写不敏感匹配，Token 本身不改写大小写。
+
+默认拦截器只读取选定请求头，不自动兼容其他请求头、同名 Cookie 或 URL 参数。没有该请求头视为未携带 Token；存在但为空、前缀不符、含内部空白或超长时视为无效凭证，继续遵循[公开接口可选登录规则](#ai-security-context-公开接口的可选登录)。请求头值最多 8192 个字符。
+
+配置在应用初始化时读取，修改后重启生效，不提供运行时热更新。请求头名称不能为空，不能包含空白或冒号；非空前缀必须是一个合法、不含空白的标记，错误配置会在启动时提示。
+
+适用范围：
+
+- `security-jwt` 和使用默认 Token 拦截器的自定义安全管理器直接使用这组配置。
+- `security-sa-token` 优先使用 `sa-token.*` 配置的凭证；没有原生凭证时才读取上述备用请求头。原生凭证无效时不尝试另一份身份。通常只维护原生约定，见[配置案例](#ai-security-native-config-sa-token-请求头登录案例)。
+- `security-spring` 沿用项目自己的认证入口配置，此配置不会修改外部认证规则。
+- 自定义 `LoginInterceptor` Bean 仍优先，由其决定如何读取凭证；代码中写死的请求头不会被 YAML 自动替换。只需要改请求头时，可移除自定义拦截器，使用默认实现与这组配置。
+
+<a id="ai-security-context-公开接口的可选登录"></a>
+### 公开接口的可选登录
+
+例如视频列表既允许游客访问，也需要为已登录用户展示个性化结果：
+
+```java
+@ApiPublic
+@PostMapping("/video/list")
+public R<List<VideoVO>> list(@RequestBody VideoQuery query) {
+    String userId = SecurityContext.getUserId(); // 游客为 null，有效 Token 对应当前用户。
+    return R.newInstance(videoService.list(query, userId));
+}
+```
+
+这是 Controller 方法片段，`VideoQuery`、`VideoVO` 和 `videoService` 由业务定义。
+
+| 请求携带的凭证 | 公开接口的行为 |
+| --- | --- |
+| 没有 Token | 匿名执行，当前用户为 null |
+| 有效 Token | 验证后恢复身份，可读取用户、Token 与 authType |
+| 过期、格式错误或无效 Token | 清理本次身份，匿名执行；不会注销其他有效登录 |
+
+公开接口应使用 `getUserId()` / `getUser()` 判断身份，调用 `requireUser()` 仍会主动拒绝匿名。若随后调用受保护的 Service 方法，该方法依然检查登录、角色和权限。
+
+自定义 `LoginInterceptor` 不要在发现 `@ApiPublic` 时提前返回，否则有效 Token 也没有机会恢复身份。读取 Token 后照常验证，凭证无效抛 `LoginException`，由框架统一决定匿名继续还是返回 401，不要提前写入错误响应。项目自身的过滤器、外部认证体系或网关若提前拒绝请求，本模块不会覆盖其规则。
 
 <a id="ai-security-context-刷新与注销"></a>
 ### 刷新与注销
@@ -6501,7 +6580,7 @@ ApiLogin、ApiRole、ApiPerm、ApiPublic 和默认匿名行为。
 | `@ApiLogin` | 调用方必须登录 | 无 |
 | `@ApiRole("admin")` | 调用方必须登录并拥有指定角色 | 必填 `String[] value`；`any` 默认 false |
 | `@ApiPerm("user:query")` | 调用方必须登录并拥有指定权限 | 必填 `String[] value`；`any` 默认 false |
-| `@ApiPublic` | 允许匿名访问 | 无 |
+| `@ApiPublic` | 允许匿名访问；有效 Token 仍恢复身份，无效 Token 按匿名处理 | 无 |
 
 四个注解均可放在 Controller 或 Service 的类、接口和公共方法上。解析支持接口声明、实现类、父类、重写方法、泛型桥接和继承的 default 方法。角色和权限默认按大小写精确匹配，不解释通配符或 SpEL，也没有 admin 自动越权；`any=false` 表示全部满足，`any=true` 表示满足任意一个。
 
@@ -6534,8 +6613,10 @@ public class UserApi {
 - 方法 ApiPublic 可豁免类级 ApiLogin；不能绕过类级角色、权限要求，也不能与方法自身的鉴权要求共存。类上的 ApiPublic 不能与类级鉴权要求共存；但公开类中的方法可用 ApiLogin/ApiRole/ApiPerm 单独收紧访问。
 - 空数组、空白编码、编码首尾空白或冲突声明会抛出明确的配置异常，不静默放行。
 - 未登录返回 HTTP 401；登录后缺少角色或权限返回 HTTP 403。搭配 starter 时错误响应包装为 R；自定义异常处理器应保留对应状态，不把拒绝访问改成成功。
-- 获取当前用户时发生的数据库、Redis 或业务异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
+- 凭证校验明确失败使用 LoginException 或返回 null；公开入口按匿名继续，受保护入口返回 401。数据库、Redis 等其他异常原样传播，不伪装成未登录。ISecurityManager 的身份加载路径不要再次调用受鉴权保护的方法，否则明确报告递归配置错误；应直接使用 Repository、缓存等基础设施。
 - ApiPublic 只影响鉴权，不关闭全局接口加解密、ApiLimit 或 IP 黑名单。公开登录接口也遵守加密配置，需要例外时使用 ApiCrypto(false) 或排除路径。
+
+公开接口携带或不携带 Token 的完整示例见[可选登录](#ai-security-context-公开接口的可选登录)。
 
 <a id="ai-security-authorization-默认匿名安全管理器"></a>
 #### 默认匿名安全管理器

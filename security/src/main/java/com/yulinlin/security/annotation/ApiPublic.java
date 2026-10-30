@@ -9,6 +9,7 @@ import java.lang.annotation.Target;
 /**
  * 声明允许匿名访问，不表示关闭加密、限流或跳过角色与权限要求。
  * 方法标记可豁免类级 ApiLogin，与有效角色或权限要求冲突时拒绝配置。
+ * 公开入口仍恢复有效 Token 对应的身份；无 Token 或凭证无效时按匿名访问。
  */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)

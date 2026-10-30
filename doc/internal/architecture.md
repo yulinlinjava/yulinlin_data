@@ -64,7 +64,7 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 | CryptoCodec（security） | 可替换的接口文本加解密协议；业务 Bean 优先，默认支持多设备 AES；保持请求解密与响应加密协议一致 | JSON 序列化、R 包装、登录验证；对自定义密文强制执行 Base64 修正 |
 | security-sa-token | 有状态登录；统一 API 获取用户、刷新及注销当前登录 | 将内存状态当持久存储、保证多实例未配置共享状态时也一致 |
 | security-spring | 使已有认证体系使用统一用户、权限及登录 API；统一登录需项目先完成接入，外部身份无可信来源时 authType 为 null | 自动创建完整业务认证方案、编造来源、把密码或会话标识当返回 Token |
-| LoginInterceptor / 权限注解（security） | 自定义 LoginInterceptor Bean 自动替换并注册；请求结束清理 SecurityContext；权限以 ISecurityManager 提供的当前用户为准 | 替自定义拦截器验证凭证、自动清理业务另行维护的上下文、替代登录状态管理 |
+| LoginInterceptor / 权限注解（security） | 自定义 LoginInterceptor Bean 自动替换并注册；有效凭证恢复身份；明确认证失败时按最终注解策略决定公开入口匿名继续或受保护入口 401；请求结束清理 SecurityContext | 替自定义拦截器验证凭证、吞掉基础设施异常、覆盖已写出的错误响应、自动清理业务另行维护的上下文、替代登录状态管理 |
 | core/http | 独立 HTTP 客户端工具 | 参与 ORM 路由、事务或数据库监听链 |
 
 业务 CRUD 必须经过 RouteSession，Model Wrapper、Request 便利方法和事务切面均接入这一入口。具体 Session 是执行器和资源参与者，不作为独立业务事务入口；建表 SQL 预览、启动 Schema 初始化和解析器专项用例仍可以直接使用其底层能力。

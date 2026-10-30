@@ -4,6 +4,7 @@ import cn.dev33.satoken.stp.StpUtil;
 import cn.dev33.satoken.config.SaTokenConfig;
 import cn.dev33.satoken.spring.SaBeanRegister;
 import com.yulinlin.security.SecurityAuthAutoConfiguration;
+import com.yulinlin.security.SecurityAuthProperties;
 import com.yulinlin.security.SecurityLoginAutoConfiguration;
 import com.yulinlin.security.auth.ISecurityManager;
 import com.yulinlin.security.auth.LoginAuthenticatorRegistry;
@@ -25,7 +26,7 @@ import org.springframework.core.env.Environment;
 
 /** 应用必须只选择一种安全实现；业务 ISecurityManager 可替换默认实现。 */
 @AutoConfiguration(before = {SecurityAuthAutoConfiguration.class, SecurityLoginAutoConfiguration.class})
-@EnableConfigurationProperties(SessionManagementProperties.class)
+@EnableConfigurationProperties({SessionManagementProperties.class, SecurityAuthProperties.class})
 @ConditionalOnMissingBean(value = ISecurityManager.class, ignoredType = {
         "com.yulinlin.security.jwt.JwtSecurityManager",
         "com.yulinlin.security.satoken.SaTokenSecurityManager",
@@ -91,7 +92,8 @@ public class SaTokenAutoConfiguration {
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnMissingBean(LoginInterceptor.class)
-    public SaTokenLoginInterceptor saTokenLoginInterceptor(ObjectProvider<ISecurityManager> managers) {
-        return new SaTokenLoginInterceptor(managers::getObject);
+    public SaTokenLoginInterceptor saTokenLoginInterceptor(ObjectProvider<ISecurityManager> managers,
+                                                           SecurityAuthProperties properties) {
+        return new SaTokenLoginInterceptor(managers::getObject, properties);
     }
 }

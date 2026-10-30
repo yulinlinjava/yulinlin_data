@@ -17,11 +17,16 @@
 ```yaml
 yulinlin:
   security:
+    auth:
+      token-header: Authorization # 默认值；也可改为 token 或 X-Token
+      token-prefix: Bearer         # 直接传原始 Token 时设为 ""
     jwt:
       secret: ${YULINLIN_JWT_SECRET} # 至少 32 字节随机密钥的 Base64，不是 AES 设备密钥
       issuer: yulinlin
       ttl: 2h
 ```
+
+以上请求约定为 `Authorization: Bearer <token>`。仅更换请求头或去掉 Bearer 前缀时，调整 `auth` 配置即可，不需要自定义拦截器；修改后重启生效。完整规则见[配置 Token 请求头](context.md#配置-token-请求头)。
 
 默认使用 HS256 签名，Token 包含用户 ID、设备类型、认证来源、唯一凭证标识和有效期，不保存密码或完整用户资料。authType 取成功认证器的 name，不接收客户端自报值。请求必须通过签名、签发者、时间及用户可用性校验。`ttl` 默认 2h，允许 1s～365d。JWT 是签名而非加密，不要加入密码等秘密资料。
 

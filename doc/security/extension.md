@@ -19,6 +19,7 @@
 | 加载用户资料、角色与权限 | UserStore | 提供按 userId 加载安全用户的 Bean |
 | 替换 JWT 生成和解析 | JwtTokenCodec | 提供一个 Bean，生成和解析成对替换 |
 | 替换接口请求解密和响应加密 | CryptoCodec | 提供一个 Bean，无需框架 AES 密钥，见[接口加解密扩展](crypto-codec.md) |
+| 仅修改默认 Token 请求头或前缀 | `yulinlin.security.auth.token-header` / `token-prefix` | 配置即可，不需要提供拦截器 Bean；见[请求头配置](context.md#配置-token-请求头) |
 | 自定义凭证读取与请求身份恢复 | LoginInterceptor | 提供一个 Bean，自动替换并注册 |
 | 完整自定义登录或接入已有认证体系 | ISecurityManager | 提供一个 Bean，按需要配套 LoginInterceptor |
 
@@ -40,9 +41,13 @@
 
 ## 自定义登录拦截器
 
+仅修改请求头名称或前缀时，先使用[Token 请求头配置](context.md#配置-token-请求头)。需要兼容多个旧请求头、Cookie、参数或完整替换身份恢复行为时，再提供下面的拦截器。
+
 业务提供 LoginInterceptor Bean，框架就使用它；没有自定义 Bean 时使用默认实现。无需手动重复注册。Bean 返回类型应声明为 LoginInterceptor 或其具体实现；通常只提供一个，存在多个时用 @Primary 明确选择。
 
-下面示例用于 security-jwt，或完全使用 SecurityContext 管理请求身份的自定义安全实现：客户端通过 X-Token 发送原始凭证，调用公开的 resolveSession 验证后恢复上下文。
+自定义 Bean 需要复用请求头配置时，应注入容器中的 `SecurityAuthProperties`。不要自行 `new SecurityAuthProperties()`：普通对象不会自动绑定 YAML，只会使用默认值。继承默认 Token 拦截器时也必须传入配置对象，已移除内部新建默认配置的单参数构造。
+
+下面示例用于 security-jwt，或完全使用 SecurityContext 管理请求身份的自定义安全实现：展示完整的凭证读取与验证流程，客户端通过 X-Token 发送原始凭证。该示例自行读取请求头，不使用 auth 配置；仅需 X-Token 时使用配置即可。
 
 ```java
 import com.yulinlin.security.auth.*;
@@ -62,19 +67,11 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
             if (token == null) return true; // 匿名请求，是否允许访问由权限声明决定
             if (token.isBlank() || token.length() > 8192
                     || token.chars().anyMatch(Character::isWhitespace)) {
-                response.sendError(401, "登录凭证无效");
-                return false;
+                throw new LoginException("登录凭证无效");
             }
-            LoginSession session;
-            try {
-                session = manager.resolveSession(token);
-            } catch (LoginException error) {
-                response.sendError(401, "登录已失效，请重新登录");
-                return false;
-            }
+            LoginSession session = manager.resolveSession(token);
             if (session == null || session.expired() || !token.equals(session.token())) {
-                response.sendError(401, "登录已失效，请重新登录");
-                return false;
+                throw new LoginException("登录已失效，请重新登录");
             }
             SecurityContext.set(session);
             return true;
@@ -86,6 +83,12 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 这是替换整个请求身份恢复行为，不只是新增一个请求头。manager.resolveSession 必须完成真实凭证验证；此示例不能直接替换 Sa-Token、Spring 或其他同时维护外部身份的请求处理。它们应保留模块默认凭证约定，或通过完整自定义接入统一管理两侧身份。不要将客户端传入的 userId 直接写入上下文。
 
 框架负责自动注册和清理 SecurityContext，包括拒绝请求、异常、请求完成及异步切换。自定义实现若还维护其他请求状态，必须自行清理；基础设施异常正常传播，不能伪装成验证成功。
+
+MVC 静态资源由框架统一放行，不调用自定义 LoginInterceptor 的 preHandle、postHandle、afterCompletion 或异步切换回调，仍清理框架上下文。无需在自定义拦截器内重复判断静态资源；需要对所有请求记录日志等通用功能时，使用独立组件。静态资源按实际处理器识别，不按 URL 后缀绕过 Controller 鉴权。
+
+公开接口也照常解析有效 Token，不要因为方法或类标记 `@ApiPublic` 就提前返回。`preHandle` 验证凭证失败时抛出 `LoginException`：框架只对最终允许匿名的入口按匿名继续，对受保护入口返回 401。类、接口、父类及方法的鉴权要求按同一套[权限规则](authorization.md)判断。
+
+不要先 `sendError` 或输出错误 JSON 再抛异常。自定义拦截器直接返回 false、已提交响应、已设置错误状态、抛出其他异常时，框架不会替它改成匿名成功；数据库、缓存或网络故障不能包装成 `LoginException`。公开登录接口内部的账号密码认证失败仍正常报错，不在这项兼容范围内。
 
 不需要启用开关，也不要重复注册同一个拦截器。只替换 Token 算法时，应使用 JwtTokenCodec，不必修改拦截器。
 

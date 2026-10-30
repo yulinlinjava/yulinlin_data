@@ -20,7 +20,7 @@
 | [自定义安全实现与拦截器](extension.md) | 有 LoginInterceptor Bean 就使用用户实现，否则自动提供默认实现。 |
 | [有状态 Sa-Token 登录](sa-token.md) | 统一登录和注销、客户端凭证、重启与多实例使用边界。 |
 | [Spring Security 接入](spring.md) | 已有登录体系使用统一用户、权限和登录 API 的约定。 |
-| [登录上下文生命周期](context.md) | 线程身份恢复、请求结束清理与异步边界。 |
+| [登录上下文生命周期](context.md) | Token 请求头配置、公开接口可选登录、静态资源放行与请求上下文清理。 |
 | [登录、角色与权限注解](authorization.md) | ApiLogin、ApiRole、ApiPerm、ApiPublic 和默认匿名行为。 |
 
 ## 建议顺序

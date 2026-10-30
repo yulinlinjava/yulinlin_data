@@ -57,6 +57,8 @@ Content-Type: application/json
 
 已有项目使用其他凭证头或 Cookie 时应统一客户端约定，不要同时携带多份身份凭证。普通接入保留模块默认处理即可；需要完全自定义请求认证时，按[公开扩展协议](extension.md#接入外部安全框架)完整接入，不能直接套用仅设置框架上下文的 JWT 拦截器示例。
 
+原生凭证读取规则优先；未携带原生凭证时，兼容 `yulinlin.security.auth` 指定的备用请求头，默认 `Authorization: Bearer <token>`。原生凭证存在但无效时不尝试备用身份，公开接口按匿名处理、受保护接口拒绝访问。修改原生头名称仍使用 `sa-token.token-name`，见[配置案例](native-config.md#sa-token-请求头登录案例)。
+
 每次统一登录返回独立 Token，authType 取成功认证器的 name。旧凭证缺少必要认证信息时需要重新登录；不要假设绕过统一入口产生的凭证可以直接接入。
 
 ## 当前用户与注销

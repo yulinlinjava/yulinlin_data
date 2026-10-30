@@ -19,7 +19,10 @@ public interface ISecurityManager {
         throw new UnsupportedOperationException("当前安全管理器不支持登录，请引入登录模块或提供认证实现");
     }
 
-    /** 验证 Token 并恢复请求快照；可无状态验签或校验服务端会话，不依赖当前上下文。 */
+    /**
+     * 验证 Token 并恢复请求快照；可无状态验签或校验服务端会话，不依赖当前上下文。
+     * 无效/过期凭证返回 null 或抛 LoginException；数据库、缓存等故障正常抛出，不能包装为认证拒绝。
+     */
     default LoginSession resolveSession(String token) { return null; }
 
     /**

@@ -17,6 +17,7 @@
 | 内容 | 配置或扩展入口 |
 | --- | --- |
 | 是否提供统一会话管理、登录会话数量上限、查询分页 | `yulinlin.security.session.*` |
+| 默认 Token 请求头与前缀 | `yulinlin.security.auth.token-header` / `token-prefix`；详见[适用范围](context.md#配置-token-请求头) |
 | Sa-Token 有效期、活跃超时、Token 头、Cookie、超限注销方式 | `sa-token.*`、原生 `SaTokenConfig` / `StpLogic` / `SaTokenDao` |
 | Spring 授权、CSRF、CORS、会话固定防护、超限拒绝登录、失效响应 | 业务自己的 `SecurityFilterChain` 和原生扩展 Bean |
 | Servlet 会话超时、Cookie | `server.servlet.session.*` |

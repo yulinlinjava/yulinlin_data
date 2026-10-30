@@ -157,7 +157,7 @@ public class AuthController {
 }
 ```
 
-示例使用项目 starter 的 R，业务将 LoginException 统一转为 HTTP 401；项目已有的访问控制、防跨站请求校验及报文加密规则仍需遵守。密钥接口 JSON 为 `{"apiKey":"业务密钥","deviceType":"server"}`，后续使用返回的 Token。登录前移除失效旧 Token，公开接口携带无效凭证也会被拒绝。
+示例使用项目 starter 的 R，业务将登录操作抛出的 LoginException 统一转为 HTTP 401；项目已有的访问控制、防跨站请求校验及报文加密规则仍需遵守。密钥接口 JSON 为 `{"apiKey":"业务密钥","deviceType":"server"}`，后续使用返回的 Token。公开登录接口兼容缺失或无效旧 Token，本次提交的登录凭证仍必须通过认证；详见[公开接口的可选登录](context.md#公开接口的可选登录)。
 
 ## 根据用户 ID 登录
 

@@ -9,16 +9,19 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
 /** 自动注册登录拦截器：优先使用业务 LoginInterceptor Bean，否则提供默认实现。 */
 @AutoConfiguration(after = SecurityAuthAutoConfiguration.class)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+@EnableConfigurationProperties(SecurityAuthProperties.class)
 public class SecurityLoginAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(LoginInterceptor.class)
-    public LoginContextInterceptor loginContextInterceptor(ObjectProvider<ISecurityManager> managers) {
-        return new LoginContextInterceptor(managers::getObject);
+    public LoginContextInterceptor loginContextInterceptor(ObjectProvider<ISecurityManager> managers,
+                                                           SecurityAuthProperties properties) {
+        return new LoginContextInterceptor(managers::getObject, properties);
     }
 
     @Bean

@@ -29,6 +29,11 @@ public final class SecurityContext {
             RESOLVING.set(true);
             try {
                 session = resolver.resolveContext(session);
+            } catch (LoginException error) {
+                // 外部凭证仍可能出现在请求中；再次读取时认证拒绝应保持匿名，不能恢复旧快照。
+                // 是否允许匿名由入口权限策略决定，requireUser 仍会拒绝匿名访问。
+                CURRENT.remove();
+                return null;
             } catch (RuntimeException | Error error) {
                 CURRENT.remove();
                 throw error;

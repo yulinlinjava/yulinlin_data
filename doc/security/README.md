@@ -13,6 +13,7 @@
 | [接口加密与前端对接](crypto.md) | 全局加解密、ApiCrypto(false) 例外、多设备、前端协议和排除路径。 |
 | [自定义接口加解密](crypto-codec.md) | 提供 CryptoCodec Bean 替换算法与密文格式，不要求配置 AES 密钥。 |
 | [限流与 IP 黑名单](rate-limit.md) | 注解限流、业务黑名单和 Nginx 可信真实 IP。 |
+| [行为风控](risk.md) | 重要接口的持续访问识别、内存判断、异步持久化和管理扩展。 |
 | [用户模型与安全管理器](user.md) | 统一 LoginAuthenticator，密码、密钥、可信 ID 与自定义登录；name 记录 authType。 |
 | [会话管理与数量限制](user.md#会话管理与数量限制) | 会话分页、计数、踢人、自定义管理器与分布式使用边界。 |
 | [无状态 JWT 登录](jwt.md) | 最小接入和请求身份恢复；注销不会撤销已发出的 JWT。 |

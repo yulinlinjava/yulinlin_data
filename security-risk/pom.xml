@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent><groupId>com.yulinlin</groupId><artifactId>data</artifactId><version>3.0</version></parent>
+    <artifactId>security-risk</artifactId>
+    <description>In-memory behavioral risk checks with asynchronous ORM persistence.</description>
+    <dependencies>
+        <dependency><groupId>com.yulinlin</groupId><artifactId>security</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.yulinlin</groupId><artifactId>common</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-configuration-processor</artifactId><optional>true</optional></dependency>
+        <dependency><groupId>com.yulinlin</groupId><artifactId>h2</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>com.yulinlin</groupId><artifactId>postgresql</artifactId><version>${project.version}</version><scope>test</scope></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    </dependencies>
+</project>

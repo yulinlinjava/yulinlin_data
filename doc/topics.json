@@ -215,6 +215,10 @@
         "title": "限流与 IP 黑名单"
       },
       {
+        "file": "security/risk.md",
+        "title": "行为风控与异步存储"
+      },
+      {
         "file": "security/user.md",
         "title": "用户模型与安全管理器"
       },

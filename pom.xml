@@ -30,6 +30,7 @@
         <module>generate</module>
         <module>postgresql</module>
         <module>security</module>
+        <module>security-risk</module>
         <module>security-jwt</module>
         <module>security-sa-token</module>
         <module>security-spring</module>

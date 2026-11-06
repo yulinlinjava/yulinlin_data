@@ -256,13 +256,15 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         try {
             return callable.call();
         }catch (Throwable e){
-            // 只标记自己的资源；是否整体回滚由最外层 RouteSession 决定。
-            try { setRollbackOnly(); }
+            try { onExecutionFailure(e); }
             catch (Throwable cleanup) { if (e != cleanup) e.addSuppressed(cleanup); }
             throw e;
         }
 
     }
+
+    /** 各存储实现决定执行错误是否使资源失效；异常始终交给业务事务边界处理。 */
+    protected void onExecutionFailure(Throwable error) { setRollbackOnly(); }
 
     @Override
     public <E> Integer count(QueryRequest<E> request) {
@@ -358,7 +360,6 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                 }
             }
             if (failure != null) {
-                setRollbackOnly();
                 if (failure instanceof Error error) throw error;
                 if (failure instanceof Exception error) throw error;
                 throw new IllegalStateException(failure);

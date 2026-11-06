@@ -11,6 +11,12 @@ import java.util.List;
 /** 数据源执行与资源协议；业务 CRUD 和事务必须通过 RouteSession，不作为独立业务入口。 */
 public interface EntitySession extends LoadBalanceNode,TransactionSession {
 
+    /** 是否支持由 RouteSession 管理的本地物理事务。 */
+    default boolean supportsTransactions() { return false; }
+    default Object createSavepoint() { throw new UnsupportedOperationException("当前数据源不支持保存点"); }
+    default void releaseSavepoint(Object savepoint) { throw new UnsupportedOperationException("当前数据源不支持保存点"); }
+    default void rollbackToSavepoint(Object savepoint) { throw new UnsupportedOperationException("当前数据源不支持保存点"); }
+
     /** Whether this session can use independent connections for concurrent writes in the current context. */
     default boolean supportsParallelWrites() {
         return false;

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.datasource.AbstractDataSource;
+import com.yulinlin.data.core.exception.OrmException;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
@@ -51,11 +52,12 @@ class JdbcExplainTest {
         jdbc.failurePhase = phase;
         try (var session = new TestSession(jdbc)) {
             var request = QueryRequest.newInstance(Map.class, new SelectWrapper<>().table("sample"));
-            assertSame(jdbc.failure, assertThrows(SQLException.class, () -> session.explainCount(request)));
+            var failure = assertThrows(OrmException.class, () -> session.explainCount(request));
+            assertSame(jdbc.failure, failure.getCause());
             assertEquals(1, jdbc.executions);
             assertTrue(jdbc.statementClosed && jdbc.connectionClosed);
             assertEquals(phase.equals("read"), jdbc.resultClosed);
-            assertSame(jdbc.failure, session.events.getFirst().error());
+            assertSame(failure, session.events.getFirst().error());
             assertTrue(jdbc.sql.startsWith("EXPLAIN select count(1)"));
         }
     }

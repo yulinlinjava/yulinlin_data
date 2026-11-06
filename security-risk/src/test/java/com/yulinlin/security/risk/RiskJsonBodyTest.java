@@ -34,20 +34,24 @@ class RiskJsonBodyTest {
 
     @RestController static class Videos {
         final AtomicInteger calls = new AtomicInteger();
-        @PostMapping("/play") @ApiRisk(value="video", resourceBody="videoId")
+        @PostMapping("/play") @ApiRisk(value="video", resource="videoId")
         String play(@RequestBody PlayRequest body) { calls.incrementAndGet(); return body.videoId(); }
-        @PostMapping("/nested") @ApiRisk(value="video", resourceBody="video.id")
+        @PostMapping("/play/{videoId}") @ApiRisk(value="video", resource="videoId")
+        String path(@RequestBody PlayRequest body) { calls.incrementAndGet(); return body.videoId(); }
+        @PostMapping("/form") @ApiRisk(value="video", resource="videoId")
+        String form(@RequestParam("videoId") String videoId) { calls.incrementAndGet(); return videoId; }
+        @PostMapping("/nested") @ApiRisk(value="video", resource="video.id")
         Object nested(@RequestBody Map<String,Object> body) { calls.incrementAndGet(); return body; }
-        @PostMapping("/string") @ApiRisk(value="video", resourceBody="videoId")
+        @PostMapping("/string") @ApiRisk(value="video", resource="videoId")
         String text(@RequestBody String body) { calls.incrementAndGet(); return body; }
-        @PostMapping("/entity") @ApiRisk(value="video", resourceBody="videoId")
+        @PostMapping("/entity") @ApiRisk(value="video", resource="videoId")
         Object entity(HttpEntity<PlayRequest> body) { calls.incrementAndGet(); return body.getBody(); }
-        @PostMapping("/optional") @ApiRisk(value="video", resourceBody="videoId")
+        @PostMapping("/optional") @ApiRisk(value="video", resource="videoId")
         String optional(@RequestBody(required=false) PlayRequest body) { calls.incrementAndGet(); return "ok"; }
         @PostMapping("/public-json")
         String publicJson(@RequestBody PlayRequest body) { return body.videoId(); }
-        @GetMapping("/invalid") @ApiRisk(value="video", resourceBody="videoId")
-        String invalid() { calls.incrementAndGet(); return "unexpected"; }
+        @GetMapping("/no-body") @ApiRisk(value="video", resource="videoId")
+        String noBody() { calls.incrementAndGet(); return "ok"; }
     }
 
     final RiskService service = mock(RiskService.class);
@@ -73,7 +77,7 @@ class RiskJsonBodyTest {
 
     @Test void dtoBodyReachesControllerAndIdentityCannotBeSpoofedOrCountedTwice() throws Exception {
         var result = mvc().perform(post("/play").contentType(MediaType.APPLICATION_JSON)
-                .param("videoId", "wrong-query-value").content("{\"videoId\":\"v123\",\"userId\":\"victim\"}"))
+                .content("{\"videoId\":\"v123\",\"userId\":\"victim\"}"))
                 .andExpect(status().isOk()).andExpect(content().string("v123")).andReturn();
         assertEquals(1, controller.calls.get());
         registry.interceptor().preHandle(result.getRequest(), result.getResponse(),
@@ -94,11 +98,50 @@ class RiskJsonBodyTest {
         assertEquals(3, controller.calls.get());
     }
 
+    @Test void oneResourceAttributeUsesPathThenParametersThenJson() throws Exception {
+        var mvc = mvc();
+        String body = "{\"videoId\":\"body-video\"}";
+        mvc.perform(post("/play/path-video").param("videoId", "query-video")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk()).andExpect(content().string("body-video"));
+        mvc.perform(post("/play").param("videoId", "query-video").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk()).andExpect(content().string("body-video"));
+        mvc.perform(post("/play").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk()).andExpect(content().string("body-video"));
+        mvc.perform(post("/form").contentType(MediaType.APPLICATION_FORM_URLENCODED).param("videoId", "form-video"))
+                .andExpect(status().isOk()).andExpect(content().string("form-video"));
+        mvc.perform(get("/no-body").param("videoId", "get-video")).andExpect(status().isOk());
+        for (String id : List.of("path-video", "query-video", "body-video", "form-video", "get-video"))
+            verify(service).checkAndRecord(new BehaviorEvent("logged-in-user", "video", id));
+        verifyNoMoreInteractions(service);
+        // An invalid higher-priority value must not silently fall back to the JSON value.
+        mvc.perform(post("/play").param("videoId", " ").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest());
+        assertEquals(5, controller.calls.get());
+    }
+
+    @Test void optionalEmptyAndNonJsonBodiesStillCountAndParametersNeedNoBody() throws Exception {
+        var mvc = mvc();
+        mvc.perform(post("/optional").contentType(MediaType.APPLICATION_JSON)).andExpect(status().isOk());
+        mvc.perform(post("/optional")).andExpect(status().isOk());
+        mvc.perform(post("/optional").param("videoId", "query-only").contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+        mvc.perform(post("/string").contentType(MediaType.TEXT_PLAIN).content("plain text"))
+                .andExpect(status().isOk()).andExpect(content().string("plain text"));
+        verify(service, times(3)).checkAndRecord(new BehaviorEvent("logged-in-user", "video", null));
+        verify(service).checkAndRecord(new BehaviorEvent("logged-in-user", "video", "query-only"));
+        assertEquals(4, controller.calls.get());
+        when(service.checkAndRecord(any())).thenReturn(new Decision(false, Status.BLOCKED, 1000, List.of()));
+        mvc.perform(post("/optional").contentType(MediaType.APPLICATION_JSON)).andExpect(status().isTooManyRequests());
+        assertEquals(4, controller.calls.get());
+    }
+
     @Test void blockingStopsControllerAndAnonymousRequestIsRejectedBeforeJsonParsing() throws Exception {
         when(service.checkAndRecord(any())).thenReturn(new Decision(false, Status.BLOCKED, 1000, List.of()));
         var mvc = mvc();
-        mvc.perform(post("/play").contentType(MediaType.APPLICATION_JSON).content("{\"videoId\":\"v\"}"))
-                .andExpect(status().isTooManyRequests()).andExpect(header().string("Retry-After", "60"));
+        var result=mvc.perform(post("/play").contentType(MediaType.APPLICATION_JSON).content("{\"videoId\":\"v\"}"))
+                .andExpect(status().isTooManyRequests()).andExpect(header().string("Retry-After", "1")).andReturn();
+        assertInstanceOf(ApiRiskException.class,result.getResolvedException());
         assertEquals(0, controller.calls.get());
         when(manager.getUserDetails()).thenReturn(null);
         mvc.perform(post("/play").contentType(MediaType.APPLICATION_JSON).content("broken"))
@@ -106,13 +149,21 @@ class RiskJsonBodyTest {
         verify(service, times(1)).checkAndRecord(any());
     }
 
-    @Test void emptyMalformedNonJsonAndNonScalarResourcesCannotInvokeBusiness() throws Exception {
+    @Test void jsonRiskRejectionUsesTheSameBusinessExceptionHandler() throws Exception {
+        when(service.checkAndRecord(any())).thenReturn(new Decision(false,Status.BLOCKED,1000,List.of()));
+        mvc(new RiskWebTest.BusinessRiskErrors()).perform(post("/play").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"videoId\":\"json-video\"}"))
+                .andExpect(status().isForbidden()).andExpect(header().doesNotExist("Retry-After"))
+                .andExpect(jsonPath("$.code").value("VIDEO_RISK"))
+                .andExpect(jsonPath("$.message").value("请稍后再获取播放链接"));
+        verify(service).checkAndRecord(new BehaviorEvent("logged-in-user","video","json-video"));
+        assertEquals(0,controller.calls.get());
+    }
+
+    @Test void malformedJsonAndNonScalarResourcesCannotInvokeBusiness() throws Exception {
         var mvc = mvc();
-        mvc.perform(post("/optional").contentType(MediaType.APPLICATION_JSON)).andExpect(status().isBadRequest());
         mvc.perform(post("/play").contentType(MediaType.APPLICATION_JSON).content("{"))
                 .andExpect(status().isBadRequest());
-        mvc.perform(post("/string").contentType(MediaType.TEXT_PLAIN).content("{\"videoId\":\"v\"}"))
-                .andExpect(status().isUnsupportedMediaType());
         for (String value : List.of("{}", "[]", "true", "\"\""))
             mvc.perform(post("/nested").contentType(MediaType.APPLICATION_JSON).content("{\"video\":{\"id\":" + value + "}}"))
                     .andExpect(status().isBadRequest());
@@ -128,7 +179,8 @@ class RiskJsonBodyTest {
                 .andExpect(status().isOk()).andExpect(content().string("public"));
         verify(service).checkAndRecord(new BehaviorEvent("logged-in-user", "video", null));
         verifyNoMoreInteractions(service);
-        assertThrows(jakarta.servlet.ServletException.class, () -> mvc.perform(get("/invalid")));
+        mvc.perform(get("/no-body")).andExpect(status().isOk());
+        verify(service, times(2)).checkAndRecord(new BehaviorEvent("logged-in-user", "video", null));
     }
 
     @Test void encryptedJsonIsCheckedAfterExistingCryptoAdviceDecryptsIt() throws Exception {

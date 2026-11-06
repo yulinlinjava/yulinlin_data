@@ -79,10 +79,14 @@ public class RegisterSession {
     }
 
     public  EntitySession session(String code,JoinCluster tag){
+        return enlist(selectSession(code, tag));
+    }
 
+    /** 只选择候选节点；RouteSession 在 before 过滤器确定最终路由后才绑定资源。 */
+    protected EntitySession selectSession(String code, JoinCluster tag) {
         if(code == null || code.isBlank()){
             if(threadLocal.get().size() > 0){
-               return enlist(threadLocal.get().getFirst());
+               return threadLocal.get().getFirst();
             }else {
                 code = defaultSessionGroup();
             }
@@ -93,7 +97,7 @@ public class RegisterSession {
 
         EntitySession session = resolveSession(code, tag);
 
-        return enlist(session);
+        return session;
 
     }
 

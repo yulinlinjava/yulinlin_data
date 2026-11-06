@@ -24,9 +24,9 @@ public final class TransactionLog {
         return new TransactionLog(enabled, Long.toHexString(IDS.incrementAndGet()));
     }
 
-    /** 在所属线程捕获，JDBC 事务资源可将此只读日志对象带到批处理线程。 */
+    /** 从当前 ORM 事务读取；事务外独立批量不会生成虚假的整体事务 ID。 */
     public static TransactionLog current() {
-        TransactionContext context = TransactionListenerManager.currentContext();
+        TransactionContext context = TransactionContext.current();
         return context == null ? NONE : context.transactionLog();
     }
 

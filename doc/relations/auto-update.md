@@ -13,7 +13,7 @@
 
 ## 自动更新
 
-自动更新捕获事务内的 setter 修改，在提交前统一更新数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。现有 `ProxyChanges` 按需保存在管理器的统一 `TransactionContext` 中，代理工厂不再维护独立事务 ThreadLocal；主对象和懒加载出的关联代理共用这份记录。单次查询开启：
+自动更新捕获事务内的 setter 修改，在事务边界刷新到数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。`ProxyChanges` 按需保存在 RouteSession 的统一 `TransactionContext` 中，代理工厂不维护独立事务 ThreadLocal；主对象和懒加载出的关联代理共用这份记录。单次查询开启：
 
 ```java
 SessionUtil.route().transaction(() ->
@@ -28,7 +28,9 @@ SessionUtil.route().transaction(() ->
         }));
 ```
 
-没有框架业务事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。setter 只保存脏字段的最终非 null 值，不为每次修改创建 Runnable；最外层提交前按数据源和实体类型批量写回，保留主键校验和乐观锁。内层提交不写回，回滚丢弃修改记录；回滚不会还原 Java 对象的内存值。这些更新不能放进 `afterCommitTasks`。
+没有 ORM 业务事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。setter 只保存脏字段的最终非 null 值，不为每次修改创建 Runnable；写回按实体类型合并为 JDBC 批处理，使用当前事务的同一连接，保留主键校验和乐观锁，不拆多连接。
+
+嵌套开始前先刷新外层修改，再建立保存点；内层成功时刷新内层修改并释放保存点，但数据库仍等最外层提交。内层回滚会恢复已有代理的字段、版本和懒加载状态，内层新建的代理失效，需要重新查询。最外层提交前刷新剩余修改；最外层回滚丢弃待写记录，不承诺还原已脱离事务的 Java 对象。保存点快照只恢复 ORM 跟踪的字段赋值，不撤销可变对象内部的任意修改。这些更新不能放进 `afterCommitTasks`。
 
 全局开启：
 

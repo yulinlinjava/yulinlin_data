@@ -88,11 +88,11 @@ public void changeProfile(String id, String username) {
 }
 ```
 
-- `@Transactional` 经默认的 `yulinlinTransactionManager` 委托 RouteSession；连接由框架独立提交，不复用 Spring JDBC 事务。`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
-- 默认只对 RuntimeException/Error 回滚，受检异常也需回滚时写 `@Transactional(rollbackFor = Exception.class)`。目前只支持 REQUIRED 及默认隔离/超时、非只读语义，完整边界见[事务注解兼容](../relations/transactions.md#spring-事务注解兼容)。
+- `@Transactional` 和 `@JoinTransaction` 由同一个 ORM Advisor 委托 RouteSession，嵌套使用 JDBC 保存点，不注册 Spring 事务管理器。`@JoinSync` 只决定查询是否返回自动更新代理。
+- 默认对所有逃出事务范围的异常回滚，包括受检异常；显式 noRollbackFor 可覆盖普通业务异常。非默认 Spring 传播、隔离、超时、只读或事务管理器配置会报错，详见[注解兼容](../relations/transactions.md#spring-事务注解兼容)。
 - 必须通过 Spring Bean 从外部调用 public 方法；`this.changeProfile(...)` 式自调用会绕过 Spring AOP。
 - 不要将代理 Entity 传给异步任务、虚拟线程或事务外的 Controller。它只能在创建它的原线程和原事务中 setter。
-- 业务失败让异常离开事务方法。如果必须捕获，应继续抛出或明确设置 rollback-only，不要吞掉后继提交。
+- 业务失败让异常离开事务范围；可忽略的操作包进内层 transaction，并在外层捕获。内层回滚后外层可继续，致命资源错误除外。
 - 只读方法不加 `@JoinSync`。全局 `yulinlin.data.auto-update=true` 适合对边界非常一致的项目；一般项目优先显式方法注解。
 - Repository 方法可使用 `@JoinSync` 只增强特定查询，但仍需外层 Service 活动事务。推荐默认放在 Service，避免事务和更新意图分散。
 
@@ -182,7 +182,7 @@ public int importUsers(List<UserEntity> users) {
 }
 ```
 
-- 普通集合写入先使用 JDBC batch；数据足够大、数据库与连接池有余量时，才启用 `.batch()` 多连接拆分。
+- 普通集合写入先使用 JDBC batch；事务外显式 batch 可拆独立连接并允许部分成功。需要整批原子性时包进 transaction，事务内自动单连接。
 - `parallel-connections` 控制一个框架事务的最大物理连接数，`execute-batch-size` 控制一次 `executeBatch()` 的行数，都应结合连接池和数据库实测。
 - SQLite 单文件只有一个写者，Session 会拒绝多连接拆组；不要用增加写线程的方式解决 SQLite 锁竞争。
 - 业务上可以每批 128 个对象提交给上层，底层仍由 `execute-batch-size` 限制 JDBC 批大小。不为每 128 条数据创建一个新线程或新事务。

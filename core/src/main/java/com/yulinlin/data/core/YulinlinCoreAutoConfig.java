@@ -19,7 +19,6 @@ import com.yulinlin.data.core.session.DataProperties;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionListener;
-import com.yulinlin.data.core.transaction.TransactionListenerManager;
 import com.yulinlin.data.core.wrapper.IWrapperFactory;
 import com.yulinlin.data.core.wrapper.factory.WrapperFactoryImpl;
 import com.yulinlin.data.core.wrapper.impl.*;
@@ -98,15 +97,6 @@ public class YulinlinCoreAutoConfig {
     }
 
     @ConditionalOnMissingBean
-    @Bean
-    public TransactionListenerManager transactionListenerManager(ObjectProvider<TransactionListener> listeners,
-                                                                 DataProperties properties){
-        TransactionListenerManager manager = new TransactionListenerManager(listeners.orderedStream().toList());
-        manager.setTransactionLog(properties.isTransactionLog());
-        return manager;
-    }
-
-    @ConditionalOnMissingBean
     @Bean(destroyMethod = "close")
     public WriteQueueManager writeQueueManager(DataProperties properties) {
         return new WriteQueueManager(properties.getQueue());
@@ -117,7 +107,7 @@ public class YulinlinCoreAutoConfig {
     public RouteSession routeSession(List<EntitySession> list,
                                      EntityProxyService proxyService,
                                      LoadBalance loadbalance,IFilterManager filterManager,
-                                     TransactionListenerManager listenerManager,
+                                     ObjectProvider<TransactionListener> listeners, DataProperties properties,
                                      WriteQueueManager writeQueueManager,
                                      CacheRegistry caches){
         QueryCache queryCache = caches.defaultCache();
@@ -130,7 +120,8 @@ public class YulinlinCoreAutoConfig {
 
                 .clearOnWrite(queryCache.clearOnWrite())
 
-                .transactionListenerManager(listenerManager)
+                .transactionListeners(listeners.orderedStream().toList())
+                .transactionLog(properties.isTransactionLog())
                 .build();
 
         build.setLoadBalance(loadbalance);

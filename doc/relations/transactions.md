@@ -2,76 +2,109 @@
 
 [文档首页](../README.md) / [关联与事务](README.md)
 
-路由事务、Spring 注解兼容和 afterCommit。
+ORM 自己管理事务；回调和两种注解都进入同一个 RouteSession。
 
 ## 本页导航
 
 - [事务使用](#事务使用)
 - [框架路由事务](#框架路由事务)
 - [Spring 事务注解兼容](#spring-事务注解兼容)
+- [SQL 失败与业务捕获](#sql-失败与业务捕获)
 - [排查事务是否提交](#排查事务是否提交)
 - [提交成功回调](#提交成功回调)
 - [路由是唯一业务入口](#路由是唯一业务入口)
+- [迁移说明](#迁移说明)
 
 ## 事务使用
 
 ### 框架路由事务
 
-以下完整 Service 方法片段假设 mysql/sqlite 两组及业务表均已准备：
-
-```java
-import com.yulinlin.data.core.anno.JoinTransaction;
-
-@JoinTransaction
-public void saveBusinessData() {
-    ModelInsertWrapper.newInstance("mysql", mysqlUsers).batch().execute();
-    ModelInsertWrapper.newInstance("sqlite", localUsers).execute();
-}
-```
-
-放在 Spring 管理的 Service public 方法上，通过代理调用。也可使用回调：
+统一使用 `SessionUtil.route().transaction(callable)`。成功返回提交，异常离开回调则回滚并原样抛出，受检异常也默认回滚。回调可返回业务结果，不需要结果时返回 null。
 
 ```java
 SessionUtil.route().transaction(() -> {
-    ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();
+    ModelInsertWrapper.newInstance("mysql", order).execute();
+    ModelInsertWrapper.newInstance("mysql", details).execute();
     return null;
 });
 ```
 
-`RouteSession` 是业务 CRUD 和事务的唯一入口。没有外层事务时，一次写请求由 RouteSession 自动开始并结束事务；普通查询不主动开启事务，多个独立请求不自动合成一个业务事务。RouteSession 定义边界并登记参与者，`TransactionListenerManager` 统一维护当前线程的业务上下文，各 Session 只管理自己的连接资源。
+也可以在 Spring 管理的 public Service 方法上标注 `@JoinTransaction`，通过代理调用。普通方法自调用不经过代理，需要嵌套边界时显式调用 transaction 或另一个代理 Bean。
 
-同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
+| 当前状态 | transaction 的行为 |
+| --- | --- |
+| 没有事务 | 建立外层事务，使用一条 JDBC 连接，最终 commit/rollback |
+| 已有事务 | 在同一连接建立保存点；成功释放保存点，失败回滚到该保存点 |
+| 内层成功，外层随后失败 | 内层修改也随外层全部回滚 |
+| 内层失败，外层捕获 | 内层修改已撤销；数据库资源仍有效时，外层可以继续 |
+| 内层失败，外层不捕获 | 异常继续向外传播，各层依次回滚 |
+| 驱动不支持保存点 | 明确报错，不降级成共享回滚标记或独立提交 |
+
+一次事务只能使用一个数据源组和一个节点；第一次访问选择 master，之后固定。跨组访问在执行目标 SQL 前拒绝。禁止将非事务表、DDL 隐式提交或直接操作独立 JDBC 连接视为受本事务保护。
+
+嵌套开始前刷新外层代理修改，再创建保存点并记录代理状态。内层成功前刷新内层代理；内层回滚会恢复已有代理的字段、乐观锁版本和懒加载状态，并丢弃内层回调和缓存失效记录。内层新建的代理在回滚后不能再使用，请重新查询。快照针对 ORM 跟踪的字段赋值，不承诺撤销业务对象内集合、Date 等可变对象的任意原地修改。最外层结束后的代理不能继续自动写回。
 
 ### Spring 事务注解兼容
 
-继续使用 `org.springframework.transaction.annotation.Transactional`。JDBC 模块自动注册默认优先的 `yulinlinTransactionManager`，Spring 标准注解拦截器解析注解后，由这个轻量适配器调用 RouteSession。它不创建 Spring JDBC 事务、不绑定 Spring 连接、不注册 Spring 同步回调。原有重复的 `SpringTransactionAop` 已移除，默认 Boot JDBC 事务管理器自动配置会退让。
+可以保留 `org.springframework.transaction.annotation.Transactional`。统一的 `JoinTransactionAop` 同时识别它和 `@JoinTransaction`，调用 ORM transaction；没有自定义 Spring 事务管理器，也没有第二套连接上下文。
 
 ```java
 import org.springframework.transaction.annotation.Transactional;
 
-@Transactional(rollbackFor = Exception.class)
+@Transactional
 public void createOrder() throws Exception {
-    // 在 Service 中通过 Repository / Wrapper 执行业务；所有数据源加入同一路由事务。
+    // Repository / Wrapper 在同一个 ORM 事务内执行。
 }
 ```
 
-- 支持默认 `REQUIRED`：内层加入同一业务上下文，最外层才提交；内层回滚会标记整个事务 rollback-only。
-- `rollbackFor`、`noRollbackFor` 及其类名规则由 Spring 标准拦截器解析。默认对 `RuntimeException` / `Error` 回滚，对受检异常默认提交；业务需要受检异常也回滚时使用上例。已经发生 SQL 失败等导致 rollback-only 的事务不能被 `noRollbackFor` 强行提交。
-- 目前仅支持默认隔离级别、默认超时和 `readOnly=false`。非默认传播方式（包括 `REQUIRES_NEW` / `NESTED`）、隔离级别、超时或 `readOnly=true` 会在进入业务方法前明确报错，不静默假装支持。
-- 必须从 Spring 代理外部调用；不要叠加 `@JoinTransaction` 和 `@Transactional`，也不要认为业务异步线程会继承事务。框架 `.batch()` 由内部显式传递连接池，不等于自动传播业务线程上下文。
-- 数据源仍使用原来的 Spring Bean 配置，但连接由框架独立取得和管理。原生 JdbcTemplate、MyBatis、JPA 不会加入此事务；不能把混合使用当成统一提交。
-- 若项目另外指定了默认事务管理器、有其他 `@Primary` 管理器，或使用 `TransactionManagementConfigurer`，请明确使用 `@Transactional(transactionManager = "yulinlinTransactionManager", rollbackFor = Exception.class)`。显式指定其他管理器不进入本适配器，框架写请求会按自己的边界独立提交。
-- 不提供 Spring `TransactionSynchronizationManager` / `@TransactionalEventListener` 的同步生命周期。提交后业务使用 `TransactionUtil.afterCommit`；手动 `TransactionTemplate` 只有选择本适配器时才进入框架事务。
+**兼容的是注解入口，不是 Spring 完整事务语义。**
 
-迁移时更新配套的 core、jdbc 及所用数据库模块，移除业务手动注册的旧 `SpringTransactionAop`。不要同时保留另一套拦截相同 `@Transactional` 方法的自定义事务切面。
+- 注解默认值 REQUIRED 表示使用 ORM 自动嵌套保存点规则，不是 Spring REQUIRED 的共享回滚规则。不要再写 `propagation=NESTED` 或 REQUIRES_NEW。
+- 支持 rollbackFor、noRollbackFor 以及两个 ClassName 属性。最具体的匹配规则优先；无匹配时所有异常默认回滚，包括受检异常。noRollbackFor 不会清除数据库资源失效状态。
+- 类、接口、方法和组合注解按 Spring 注解解析规则识别；方法声明覆盖类声明。同一方法同时有两种注解，只建立一个范围，使用 Transactional 的显式回滚规则。
+- 非默认 propagation、isolation、timeout、timeoutString、readOnly=true、transactionManager/value、label 明确拒绝。普通单例 Bean 在创建代理时发现不支持的配置会启动失败；懒加载 Bean 在首次创建代理时检查。
+- JDBC 模块阻止 Boot 自动创建默认 DataSourceTransactionManager；显式启用 `@EnableTransactionManagement` 或注册原生 TransactionInterceptor/事务 Advisor 会与 ORM 切面冲突并启动失败。
+- 不使用 Spring 连接绑定、TransactionTemplate、TransactionSynchronizationManager 或 TransactionalEventListener。JdbcTemplate、MyBatis、JPA 不会加入 ORM 事务；业务异步线程也不继承它。
+- 不接受 `@JoinTransaction({"mysql", "other"})` 数据源列表，一次事务只能选择一个组。
+
+### SQL 失败与业务捕获
+
+可预期的失败操作放进内层 transaction，**在内层范围外捕获**，MySQL、H2、PG 可以使用同一种业务写法：
+
+```java
+import com.yulinlin.data.core.exception.DuplicateDataException;
+
+var route = SessionUtil.route();
+route.transaction(() -> {
+    users.updateProfile();
+    try {
+        route.transaction(() -> {
+            users.insertOptionalRecord();
+            return null;
+        });
+    } catch (DuplicateDataException error) {
+        // 内层已回滚；业务允许记录已存在。
+    }
+    audit.insertRecord();
+    return null;
+});
+```
+
+例中 users/audit 是同一数据源的业务仓库。JDBC 主键/唯一约束冲突抛 `DuplicateDataException`，其他 JDBC 执行错误抛 `OrmException`；前者继承后者，原始 SQLException 保留在 cause 中，可读 SQLState 和错误码。业务回调自身异常保留原类型。
+
+不会给每条 SQL 偷加保存点。MySQL/H2 某些普通语句错误在当前范围内捕获后仍能继续，但不能把这一点推广到所有数据库。PG 发生普通 SQL 错误后，当前范围不能继续执行或提交，必须回滚当前保存点；没有保存点时只能回滚外层事务。即使在 PG 内层吞掉 SQL 异常，内层提交也会失败并尝试回滚保存点。
+
+死锁、连接失效、事务回滚类 SQLState、JDBC 超时、MySQL/MariaDB 锁等待超时以及无法确认连接状态的错误保守标记物理事务失效；catch、保存点或 noRollbackFor 都不能保证恢复。框架不自动重试。
+
+无外层事务时，普通 JDBC 写请求自动包一层事务；`.batch()` 走独立自动提交路径，等待全部已派发任务结束，任一失败就抛异常，已成功数据保留并清理相关缓存。事务内的 `.batch()` 自动使用本事务单连接 JDBC batch，不并行、不独立提交。详见[批量写入](../write-sync/batch.md)。
+
+当前 MongoDB、ES 保留普通 CRUD 路径，不提供 ORM 物理事务；在显式事务内访问会在写入前拒绝，不能用空实现假装已回滚。
 
 ### 排查事务是否提交
 
-开启 `yulinlin.data.transaction-log: true`（默认关闭），按 SQL 日志里的同一个 `txId` 查看开启、嵌套深度、数据源参与和连接的最终处理。SQL 日志中的 `affected=1` 只表示 JDBC 执行影响一行，不代表事务已经提交；事务日志关闭时 SQL 仍保留 ID，没有框架事务的查询显示 `txId=none`。连接均由框架持有，最终查看每个连接的 `JDBC连接提交成功` 或回滚日志。`数据源事务提交方法已返回`、`框架事务上下文已清理` 都不是物理提交凭证，多库/多连接要逐一核对，不能凭一个资源成功推断全部成功。配置、字段和日志事件详见[事务诊断日志](../operations/sql-log.md#事务诊断日志)。
+开启 `yulinlin.data.transaction-log: true`，默认关闭。嵌套保存点沿用外层事务 ID；SQL 成功或内层成功不等于物理提交，以最外层 JDBC commit/rollback 结果为准。独立批量写入和事务外查询显示 `事务ID=none`，不会伪造整体事务 ID。详见[事务诊断日志](../operations/sql-log.md#事务诊断日志)。
 
 ### 提交成功回调
-
-业务需要在数据库提交成功后刷新权限、清理业务缓存或发送进程内通知时，使用 `com.yulinlin.data.core.transaction.TransactionUtil.afterCommit(Runnable)`：
 
 ```java
 @Transactional
@@ -83,46 +116,34 @@ public void changeNickname(String id, String nickname) {
 }
 ```
 
-上例是方法片段，`userRepository` 为业务仓库，`security` 为注入的 `ISecurityManager`。刷新指定用户资料；若是当前用户，则更新本线程快照，不续期或撤销 JWT。实际业务还应保留输入校验。无状态 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
+userRepository 和 security 是业务注入的仓库、权限服务。也可调用 `route.afterCommit(action)`。
 
-| 场景 | 行为 |
-| --- | --- |
-| 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
-| 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
-| 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
-| `@Transactional` 使用框架适配器 | 与路由事务完全一致，不等待其他 Spring 事务 |
-| 仅有其他 Spring 管理器的事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
-| 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
-| 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
-| 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
-
-回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
-
-回调开始前，框架 JDBC 连接已完成提交与释放。因此回调中再次调用 `SessionUtil.route().transaction(...)` 会建立新的框架事务；这只是旧事务结束后的新事务，不代表支持活动事务内的 `REQUIRES_NEW`。若另外包在原生 Spring 事务中，两者完全独立，本回调不会等待该原生事务，也不能保证它提交成功。
-
-提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
-
-具体 Session 的 `startTransaction/commitTransaction/rollbackTransaction` 是管理器调用的资源生命周期，不再转发管理器，也不维护业务嵌套深度。业务代码不得手动调用它们，否则会绕过统一的代理写回、跨数据源协调、缓存失效和回调；JDBC 无活动资源的写操作会报错。
+- 回调登记在当前范围。内层成功后合并进父层，保持注册顺序；内层回滚时丢弃，最外层实际提交后才执行一次。
+- 最外层提交顺序：提交前监听 → 代理 flush → JDBC commit/释放 → 清理代理与上下文 → afterCompletion → 缓存失效 → 固定 afterCommit 监听 → 业务回调。
+- 回滚、失效或提交失败不发成功通知。提交结果不明确时仍尝试清理缓存。
+- 没有活动 ORM 事务时注册回调会报错；具体 Session 的资源事务不等于 ORM 业务事务。
+- 清理或某个回调失败仍尝试后续任务，最后抛首个异常，其余放 suppressed。已经提交的数据不会因此回滚，不能盲目重试原始写入。
+- 回调同步运行在当前线程，可以开启新的 ORM 事务；这是旧事务完成后的新事务，不是 REQUIRES_NEW。不要修改旧代理。
+- 这是进程内通知，不是可靠消息投递；需要可靠投递时由业务使用持久化任务/Outbox。
 
 ### 路由是唯一业务入口
 
-以下为方法体片段，两个 Request 已构造，并明确指定各自的数据源组：
+Wrapper、Repository、注解和 callback 都通过 RouteSession。具体 Session 的 startTransaction/commitTransaction/rollbackTransaction、保存点方法是底层资源接口，不用于业务手动组合。RouteSession 保留手动生命周期方法以兼容已有调用，必须同线程、按栈配对；推荐统一迁移到 transaction。
 
-```java
-insertRequest.setSession("mysql");
-updateRequest.setSession("sqlite");
-RouteSession route = SessionUtil.route();
-route.transaction(() -> {
-    route.insert(insertRequest);
-    route.update(updateRequest);
-    return null;
-});
-```
+同一线程不得混用不同 RouteSession 的事务。一次事务不可跨组、跨节点或跨线程；不提供分布式事务、XA 或自动重试。
 
-`route.isOpenTransaction()` 表示当前线程是否存在业务事务；具体 Session 的同名方法只表示自身资源是否已开启，不等于新的业务事务。业务事务必须在开启它的同一线程结束。
+### 迁移说明
 
-嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
+本次属于事务语义变更，需要一起升级 core、jdbc 和数据库模块：
+
+1. 移除业务配置里的 yulinlinTransactionManager、RouteTransactionManager、TransactionListenerManager、EnableTransactionManagement 和额外事务拦截器。
+2. 删除 Transactional 中的 transactionManager 等非默认选项；注解默认对受检异常也回滚。明确需要提交某类业务异常时写 noRollbackFor。
+3. 将捕获 Spring DuplicateKeyException/DataAccessException 的业务处理改成 ORM DuplicateDataException/OrmException。
+4. 原来依赖“内层失败使外层全部回滚”的业务，继续向外抛异常，或显式标记外层 rollback-only。现在捕获内层异常后可继续。
+5. 原来跨库事务必须拆成独立业务步骤；对原子性有要求时由业务重新设计。
+6. 需要整批成功或全回滚时，把 batch 包进 transaction；仅把 parallel-connections 设为 1 不会使事务外 batch 变成原子事务。
+7. 自定义 Session 只有真正实现物理事务时才能声明 supportsTransactions；需要嵌套还必须实现保存点。MongoDB/ES 普通 CRUD 不受此限制。
 
 ---
 
-下一步：返回[关联与事务主题目录](README.md)按需选择相关专题。
+下一步：返回[关联与事务主题目录](README.md)。

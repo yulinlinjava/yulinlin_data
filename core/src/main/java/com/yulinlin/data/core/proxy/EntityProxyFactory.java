@@ -9,7 +9,6 @@ import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionContext;
-import com.yulinlin.data.core.transaction.TransactionListenerManager;
 import com.yulinlin.data.core.wrapper.IUpdateWrapper;
 import com.yulinlin.data.core.wrapper.factory.UpdatePatchFactory;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
@@ -179,7 +178,7 @@ public final class EntityProxyFactory implements IProxyFactory {
 
         RouteSession route = SessionUtil.route();
         boolean managed = autoUpdate && plan.manageable();
-        boolean active = TransactionListenerManager.currentContext() != null;
+        boolean active = TransactionContext.current() != null;
         if (managed && !active) throw transactionRequired();
         boolean lazy = plan.hasLazyRelations() && active;
         List<?> beans = data;
@@ -205,7 +204,7 @@ public final class EntityProxyFactory implements IProxyFactory {
         return ProxyUtil.getProxyClass(value instanceof Class<?> type ? type : value.getClass());
     }
 
-    /** 现有修改跟踪状态，按需存入管理器的事务上下文，不持有独立 ThreadLocal。 */
+    /** 修改跟踪状态按需存入 RouteSession 的事务上下文，不持有独立 ThreadLocal。 */
     public final class ProxyChanges {
         final RouteSession route;
         final TransactionContext context;
@@ -225,6 +224,32 @@ public final class EntityProxyFactory implements IProxyFactory {
         }
 
         public boolean hasDirty() { return tracked.stream().anyMatch(EntityProxy::hasDirty); }
+        /** 保存点入口先 flush，所以快照中的脏字段已清空。 */
+        public final class Snapshot {
+            private final Map<EntityProxy, ProxyState> proxies = new IdentityHashMap<>();
+            private final Map<LazyBatch, BatchState> batches = new IdentityHashMap<>();
+            private Snapshot() {
+                for (EntityProxy proxy : tracked) {
+                    proxies.put(proxy, new ProxyState(proxy));
+                    if (proxy.batch != null) batches.computeIfAbsent(proxy.batch, BatchState::new);
+                }
+            }
+        }
+
+        public Snapshot snapshot() { check(); return new Snapshot(); }
+
+        public void restore(Snapshot snapshot) {
+            for (EntityProxy proxy : tracked) {
+                ProxyState state = snapshot == null ? null : snapshot.proxies.get(proxy);
+                if (state == null) { proxy.invalidated = true; proxy.clearDirty(); }
+                else state.restore(proxy);
+            }
+            tracked.removeIf(proxy -> proxy.invalidated);
+            sources.values().forEach(cache -> cache.values().removeIf(proxy -> proxy.invalidated));
+            sources.values().removeIf(Map::isEmpty);
+            if (snapshot != null) snapshot.batches.forEach((batch, state) -> state.restore(batch));
+        }
+
         public void flush() { check(); EntityProxyFactory.this.flush(this); }
         public void rollback() { for (EntityProxy proxy : tracked) proxy.clearDirty(); }
         public void close() {
@@ -235,9 +260,55 @@ public final class EntityProxyFactory implements IProxyFactory {
         }
     }
 
+    private final class ProxyState {
+        final Map<Field, Object> values = new LinkedHashMap<>();
+        final Map<String, Object> keys;
+        final Map<String, Object> versions;
+        final boolean managed;
+        final LazyBatch batch;
+        ProxyState(EntityProxy proxy) {
+            Set<Field> fields = new LinkedHashSet<>(proxy.plan.updateFields);
+            fields.addAll(proxy.plan.keys);
+            fields.addAll(proxy.plan.relations);
+            fields.forEach(field -> values.put(field, ReflectionUtil.invokeGetter(proxy.target, field)));
+            keys = new LinkedHashMap<>(proxy.primaryKeys);
+            versions = new LinkedHashMap<>(proxy.versions);
+            managed = proxy.managed;
+            batch = proxy.batch;
+        }
+        void restore(EntityProxy proxy) {
+            values.forEach((field, value) -> ReflectionUtil.invokeSetter(proxy.target, field, value));
+            proxy.primaryKeys.clear(); proxy.primaryKeys.putAll(keys);
+            proxy.versions.clear(); proxy.versions.putAll(versions);
+            proxy.managed = managed;
+            proxy.batch = batch;
+            proxy.clearDirty();
+        }
+    }
+
+    private final class BatchState {
+        final Map<Field, LoadState> states;
+        final Map<Field, Set<Object>> assigned = new HashMap<>();
+        BatchState(LazyBatch batch) {
+            states = new HashMap<>(batch.states);
+            batch.assigned.forEach((field, values) -> {
+                Set<Object> copy = Collections.newSetFromMap(new IdentityHashMap<>());
+                copy.addAll(values); assigned.put(field, copy);
+            });
+        }
+        void restore(LazyBatch batch) {
+            batch.states.clear(); batch.states.putAll(states);
+            batch.assigned.clear();
+            assigned.forEach((field, values) -> {
+                Set<Object> copy = Collections.newSetFromMap(new IdentityHashMap<>());
+                copy.addAll(values); batch.assigned.put(field, copy);
+            });
+        }
+    }
+
     private ProxyChanges changes() {
         RouteSession route = SessionUtil.route();
-        TransactionContext context = TransactionListenerManager.currentContext();
+        TransactionContext context = TransactionContext.current();
         if (context == null) throw transactionRequired();
         if (route == null) throw new IllegalStateException("实体代理需要配置 RouteSession，并通过路由事务使用");
         ProxyChanges changes = context.proxyChanges();
@@ -249,7 +320,7 @@ public final class EntityProxyFactory implements IProxyFactory {
         return changes;
     }
 
-    /** 兼容手动调用；正常生命周期由 TransactionListenerManager 统一处理。 */
+    /** 兼容手动调用；正常生命周期由 RouteSession 统一处理。 */
     @Deprecated
     public void startTransaction() {
         changes();
@@ -257,19 +328,19 @@ public final class EntityProxyFactory implements IProxyFactory {
 
     @Deprecated
     public void commitTransaction() {
-        TransactionContext context = TransactionListenerManager.currentContext();
+        TransactionContext context = TransactionContext.current();
         if (context != null && context.depth() == 1 && context.proxyChanges() != null) context.proxyChanges().flush();
     }
 
     @Deprecated
     public void rollbackTransaction() {
-        TransactionContext context = TransactionListenerManager.currentContext();
+        TransactionContext context = TransactionContext.current();
         if (context != null && context.depth() == 1 && context.proxyChanges() != null) context.proxyChanges().rollback();
     }
 
     @Deprecated
     public void afterCompletion() {
-        TransactionContext context = TransactionListenerManager.currentContext();
+        TransactionContext context = TransactionContext.current();
         if (context != null && context.proxyChanges() != null) context.proxyChanges().close();
     }
 
@@ -335,6 +406,7 @@ public final class EntityProxyFactory implements IProxyFactory {
         final Map<String, Object> primaryKeys = new LinkedHashMap<>();
         final Map<String, Object> versions = new LinkedHashMap<>();
         boolean managed;
+        boolean invalidated;
         LazyBatch batch;
         BitSet dirty;
         Object[] dirtyValues;
@@ -380,6 +452,7 @@ public final class EntityProxyFactory implements IProxyFactory {
 
         @Override
         public Object intercept(Object ignored, Method method, Object[] args, MethodProxy methodProxy) throws Throwable {
+            if (invalidated) throw new NoticeException("该实体代理所属的嵌套事务已回滚，请重新查询");
             Field lazyGetter = args.length == 0 && batch != null ? plan.lazyGetters.get(method.getName()) : null;
             if (lazyGetter != null) {
                 Object value = methodProxy.invoke(target, args);
@@ -481,7 +554,7 @@ public final class EntityProxyFactory implements IProxyFactory {
         LazyBatch(RouteSession route, String source, CacheContext cache, boolean autoUpdate,
                   Plan plan, List<?> values) {
             this.route = route;
-            this.transaction = TransactionListenerManager.currentContext();
+            this.transaction = TransactionContext.current();
             this.source = source;
             this.cache = cache == null ? CacheContext.DISABLED : cache;
             this.autoUpdate = autoUpdate;
@@ -502,7 +575,7 @@ public final class EntityProxyFactory implements IProxyFactory {
         void load(Field field, Object target) {
             if (states.get(field) == LoadState.LOADED
                     || assigned.getOrDefault(field, Set.of()).contains(target)) return;
-            if (Thread.currentThread() != owner || TransactionListenerManager.currentContext() != transaction)
+            if (Thread.currentThread() != owner || TransactionContext.current() != transaction)
                 throw new NoticeException("懒加载必须在创建代理的线程及原始事务内执行: " + field.getName());
             if (route == null) throw new NoticeException("关联懒加载需要配置 RouteSession");
             if (states.get(field) == LoadState.LOADING)

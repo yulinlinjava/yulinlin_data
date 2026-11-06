@@ -8,6 +8,11 @@ import com.yulinlin.data.core.request.ExecuteRequest;
 public final class SyncRequestFilter implements IRequestFilter {
     private final SyncManager manager;
     public SyncRequestFilter(SyncManager manager) { this.manager = manager; }
+    @Override public ExecuteRequest<?> updateBefore(String session, ExecuteRequest<?> request) {
+        String source = request.getSession();
+        manager.validateWrite(source == null || source.isBlank() ? session : source, request);
+        return request;
+    }
     @Override public Object updateAfter(String session, BaseRequest<?> request, Object result) {
         manager.capture(session, (ExecuteRequest<?>) request);
         return result;

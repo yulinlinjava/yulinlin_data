@@ -71,36 +71,35 @@ logging:
     com.yulinlin.data.core.transaction.TransactionLog: INFO
 ```
 
-日志统一使用中文事件描述。同一个最外层框架事务使用相同事务 ID，SQL 日志以 `事务ID` 展示，事务生命周期日志仍使用 `txId`；嵌套事务、多个数据源及 JDBC 批处理工作线程共享该 ID。ID 只用于当前进程内关联，不是订单 ID，也不是跨服务链路 ID。普通查询没有框架事务时显示 `事务ID=none`。事务日志的 `elapsedMs` 从最外层框架事务开启时计算，包含事务内业务耗时，与 SQL 日志的 `总耗时` 计时范围不同。
+日志统一使用中文事件描述。最外层 ORM 事务与所有嵌套保存点共用一个事务 ID；SQL 日志显示 `事务ID`，生命周期日志显示 `txId`。每笔事务只绑定一个数据源、一条连接。事务外查询及独立 batch 显示 none，不把多个独立自动提交伪装成一个事务。
 
-框架层记录开启、嵌套深度 `depth`、参与者数量 `participants`、只回滚标记 `rollbackOnly`、资源提交/回滚和上下文清理。JDBC 层额外记录 `group`、`cluster`、DataSource 实例标识、连接标识、连接数量、原始/当前自动提交状态和提交归属 `owner`。不额外借连接、查询数据库元数据或打印账号密码；连接标识是当前 JDBC 连接对象的标识，不是数据库服务器的连接编号。
+事务日志包含嵌套深度 depth、group 和 rollbackOnly；JDBC 资源日志包含 group、cluster、owner=orm、savepoints 和 rollbackOnly。elapsedMs 从最外层开启起计算，包含业务时间，与 SQL 执行耗时不同。日志不打印连接密码。
 
 | 事件 | 如何理解 |
 | --- | --- |
-| `内层事务提交返回，等待最外层提交` | 只减少嵌套深度，尚未提交连接 |
-| `JDBC连接开始提交` | 即将调用这个连接的 `commit()` |
-| `JDBC连接提交成功` | 这个连接的 `commit()` 已正常返回；多连接/多库仍需逐一核对其他资源 |
-| `JDBC连接回滚成功` | 对应连接已回滚，之前打印 SQL 成功不代表数据最终保留 |
-| `框架事务资源处理完成` | 所有参与 Session 的提交方法均已正常返回；JDBC 物理结果仍按连接核对 |
-| `框架事务上下文已清理` | 只代表线程状态清理，不代表数据库提交成功 |
-| `事务提交后回调开始` | 框架资源提交成功且旧上下文已清理，开始处理进程内通知 |
+| JDBC保存点已创建 | 内层后续修改可以回滚到此处 |
+| 嵌套事务成功，等待外层提交 | 保存点已释放，物理事务尚未提交 |
+| JDBC保存点回滚成功 | 内层 SQL 已撤销，资源有效时外层可继续 |
+| JDBC连接提交成功 | 单条事务连接的 commit 已正常返回 |
+| JDBC连接回滚成功 | 物理事务已回滚，之前的 SQL 成功日志不代表数据保留 |
+| JDBC事务完成失败 | 提交、回滚或清理异常，需要查看原始原因；不能盲目重试 |
+| 事务提交完成 | ORM 物理提交阶段成功，后续通知可能仍抛异常 |
 
-例如，下列是同一笔单连接事务中实际提交的关键日志片段，省略了其他生命周期行：
+例如：
 
 ```text
-事务开启 txId=1 elapsedMs=0 depth=1 participants=0 rollbackOnly=false
+事务开启 txId=1 elapsedMs=0 depth=1 group=unbound rollbackOnly=false
 SQL批量执行成功 事务ID=1 数据源=mysql 节点=master 操作=insert 总耗时=8ms 平均每条耗时=8.000ms 操作数量=1 影响行数=1 SQL模板数=1
-SQL=["insert into `pay_order` (`id`) values (?)"]
+SQL=[insert into pay_order (id) values (?)]
 参数=[order-1]
-JDBC连接开始提交 txId=1 elapsedMs=28 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
-JDBC连接提交成功 txId=1 elapsedMs=31 group=mysql cluster=master dataSource=HikariDataSource@6f1 connection=7ab owner=framework connections=1 rollbackOnly=false
+JDBC连接提交成功 txId=1 elapsedMs=31 group=mysql cluster=master owner=orm savepoints=0 rollbackOnly=false
 ```
 
-排查时按 `txId` 找完整过程：只看到嵌套结束则检查最外层是否收尾；每个 JDBC 连接都应找到最终提交或回滚结果；出现提交失败、回滚失败或连接释放失败会记录 ERROR 与原始异常。只有 SQL 成功而没有最终结果时，不应直接下结论认为已提交或已回滚。ES/MongoDB 当前没有对应的物理事务，框架资源方法返回也不能证明其具备数据库回滚能力。
+只看到 SQL 成功或内层成功，不能推断最外层已提交。提交后回调失败也不会撤销已提交数据。没有 ORM 事务的 batch 是独立自动提交，整体失败可能已有成功数据。
 
-关闭开关时不采集事务诊断计时、不输出生命周期日志，但仍生成轻量事务 ID，供 SQL 日志关联。SQL 普通、慢操作、异常和批量日志都包含 `事务ID`，是否输出仍遵守原有 SQL 日志配置；批处理 ID 在提交工作线程前捕获，不依赖工作线程的事务 ThreadLocal。手动声明 `TransactionListenerManager` Bean 的项目需自行调用 `setTransactionLog(true)`，默认自动配置会读取上述 YAML。
+关闭开关时不读取事务诊断时钟、不输出生命周期日志，但活动事务仍有轻量 ID 供 SQL 日志关联。手动构造 RouteSession 时可调用 setTransactionLog(true)，默认自动配置读取上述 YAML。
 
-JDBC 事务连接统一标记 `owner=framework`：直接向 DataSource 借连接，关闭自动提交，最终由框架提交/回滚、恢复连接状态并释放。不再复用 Spring 线程绑定连接，也不等待 Spring 的提交通知。DataSource 仍可由 Spring Boot、Druid 或 Hikari 配置和注入；`@Transactional` 仅通过注解适配器委托 RouteSession，不再交给原生 JDBC 事务管理器。多资源仍是多个本地事务，不提供跨库原子提交保证；原生 JdbcTemplate/MyBatis/JPA 与框架写入不共用事务。注解支持范围及多事务管理器选取见[Spring 事务注解兼容](../relations/transactions.md#spring-事务注解兼容)。
+连接由 ORM 直接向 DataSource 取得和管理；不复用 Spring 绑定连接。Transactional 是注解兼容入口，不再注册原生事务管理器；JdbcTemplate/MyBatis/JPA 不参与此事务。详见[Spring 事务注解兼容](../relations/transactions.md#spring-事务注解兼容)。
 
 ---
 

@@ -76,7 +76,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 class VideoController {
     @GetMapping("/video/{videoId}/play-url")
-    @ApiRisk(value = "video-play-url", resourceParam = "videoId")
+    @ApiRisk(value = "video-play-url", resource = "videoId")
     public String playUrl(@PathVariable String videoId) {
         // 只有风控允许才执行到这里，再调用业务 Service 生成链接。
         return "...";
@@ -84,13 +84,13 @@ class VideoController {
 }
 ```
 
-resourceParam 读取同名 MVC 路径变量或请求参数，路径变量优先。JSON 请求使用 resourceBody：
+资源统一用 resource 指定字段名，按“路径变量 → 请求参数（query/form）→ JSON 请求体”的顺序提取。GET、表单、JSON 都使用同一个注解属性；JSON 示例：
 
 ```java
 public record PlayRequest(String videoId) {}
 
 @PostMapping("/video/play-url")
-@ApiRisk(value = "video-play-url", resourceBody = "videoId")
+@ApiRisk(value = "video-play-url", resource = "videoId")
 public String playUrl(@RequestBody PlayRequest request) {
     // 风控已通过，请求体仍可正常使用；业务事务放在这里调用的 Service。
     return videoService.playUrl(request.videoId());
@@ -103,29 +103,29 @@ public String playUrl(@RequestBody PlayRequest request) {
 {"videoId":"video-123"}
 ```
 
-- resourceBody 支持点分隔嵌套字段，例如 video.id 对应 {"video":{"id":"video-123"}}；与 resourceParam 互斥。
-- 使用 @RequestBody DTO、Map、JsonNode、JSON 字符串或 HttpEntity<DTO> 接收。字段从转换后的对象提取，不消费或替换 Servlet 请求流；兼容已有 CryptoRequestBodyAdvice 解密。按应用 ObjectMapper 的字段命名规则读取。
-- 资源 ID 接受字符串或数字。字段缺失/null 时仍按登录用户＋行为统计，资源记为 null；空白、超过 256 字符、对象、数组或布尔值返回 400。
-- resourceBody 要求非空 JSON 对象（Content-Type 为 application/json 或 +json）；空请求体、无效 JSON 返回 400，非 JSON 类型返回 415。即使 @RequestBody(required=false)，空正文也不能绕过检查。反序列化失败的请求不计入这种行为；后续参数校验或业务失败不会撤回已记录行为。
-- 两个资源配置都不填时，只按登录用户＋行为统计，不必提取资源。JSON 中的 userId、behaviorType 不用于决定身份和规则。
+- resource 支持点分隔嵌套 JSON 字段，例如 video.id 对应 {"video":{"id":"video-123"}}；路径变量和请求参数则按完整字段名查找。
+- 同名值同时存在时，路径变量优先，其次请求参数，最后 JSON。已存在但为空白或不合法的值返回 400，不向后回退。一次请求只记录一次行为。
+- JSON 请求声明 Content-Type 为 application/json 或 +json，使用 @RequestBody DTO、Map、JsonNode、JSON 字符串或 HttpEntity<DTO> 接收。先完成现有 CryptoRequestBodyAdvice 解密和转换，再按应用 ObjectMapper 的字段命名规则提取；Controller 收到的对象保持正常。
+- 资源 ID 接受字符串或数字。所有来源均未找到/null 时，仍按登录用户＋行为统计，资源记为 null。空白、超过 256 字符、JSON 字段为对象/数组/布尔值时返回 400。
+- 空的可选请求体、无 Content-Type 或非 JSON 正文同样经过风控，只是不从正文提取资源。请求体是否必填、是否支持该格式仍由 Spring MVC 决定；无效 JSON 在转换/解析时返回 400。已经记录的行为不会因后续参数校验或业务失败撤回。
+- 不填写 resource 时，只按登录用户＋行为统计。客户端提交的 userId、behaviorType 不用于决定身份和规则。
 
-静态资源和 OPTIONS 不计入；MVC 异步再派发不会重复记录同一个请求。resourceBody 配置在没有 @RequestBody/HttpEntity 参数的方法上会报配置错误，避免静默跳过检查。
+静态资源和 OPTIONS 不计入；MVC 异步再派发不会重复记录。原先两个资源来源属性已统一为 resource，调用方直接替换属性名即可。
 
 需要自定义资源提取、明确分开续签/预加载或复用已验证身份时，采用 Java 接口：
 
 ```java
 import com.yulinlin.security.auth.ISecurityManager;
 import com.yulinlin.security.risk.RiskService;
+import com.yulinlin.security.risk.ApiRiskException;
 import com.yulinlin.security.risk.RiskModels.BehaviorEvent;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 // 在不带业务事务的入口中：
 String userId = securityManager.requireUser().getUserId();
-var decision = riskService.checkAndRecord(
-        new BehaviorEvent(userId, "video-play-url", videoId));
+var event = new BehaviorEvent(userId, "video-play-url", videoId);
+var decision = riskService.checkAndRecord(event);
 if (!decision.allowed()) {
-    throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "访问暂时受限");
+    throw new ApiRiskException(event, decision);
 }
 // 再调用带事务的业务 Service。
 ```
@@ -135,6 +135,40 @@ if (!decision.allowed()) {
 本模块统计的是已认证的重要接口调用尝试，不能把记录当成“确实成功取得播放地址”。业务后续失败仍保留行为。播放心跳、正常续签、预加载应使用其他行为或不接入该规则；资源相同的不同请求仍分别计数。
 
 BehaviorEvent 的第四个可选参数 eventId 只能由可信服务端提供。本机使用有界缓存，在保留期内尽量复用同一事件的结果；缓存淘汰或重启、跨实例后不保证计数层去重。数据库写入与后台重试按事件 ID 幂等。不要把任意客户端提供的固定 ID 用作事件 ID，否则会把不同请求错误合并。userId 最大 128 字符，resourceId 最大 256，eventId 最大 128；空白 ID 拒绝，resourceId/eventId 可为 null。
+
+## 自定义风控拦截提示
+
+@ApiRisk 判定不允许访问时，抛出 com.yulinlin.security.risk.ApiRiskException，参数、表单和 JSON 请求使用同一种异常。检查入口不设置响应头、不提交响应体，Controller/业务方法不会执行；业务方可以使用 @ExceptionHandler 自行决定状态码、文案和返回结构。
+
+ApiRiskException 继承 ResponseStatusException，默认 HTTP 429。getHeaders() 提供 Retry-After，按判定的 blockedUntil 与抛出时刻之差向上取整为秒，至少 1 秒；不再固定为 60 秒。getRetryAfterSeconds() 返回该值，getEvent() 返回行为信息，getDecision() 返回判定结果（含限制截止时间和命中规则）。这些详情供服务端处理，不要把整个异常或判定直接序列化给客户端。
+
+```java
+import com.yulinlin.security.annotation.ApiCrypto;
+import com.yulinlin.security.risk.ApiRiskException;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import java.util.Map;
+
+@Order(Ordered.HIGHEST_PRECEDENCE)
+@RestControllerAdvice
+public class BusinessRiskExceptionHandler {
+    @ApiCrypto(false) // 启用全局加密时，让这份错误提示保持明文
+    @ExceptionHandler(ApiRiskException.class)
+    public ResponseEntity<Map<String, Object>> riskBlocked(ApiRiskException error) {
+        return ResponseEntity.status(429)
+                .headers(error.getHeaders())
+                .body(Map.of(
+                        "code", "VIDEO_RISK_BLOCKED",
+                        "message", "访问过于频繁，请稍后再获取播放链接",
+                        "retryAfterSeconds", error.getRetryAfterSeconds()));
+    }
+}
+```
+
+使用 starter 且没有自定义处理器时，StarterExceptionHandler 保留 HTTP 429、Retry-After 并返回默认 R 错误结构；不使用 starter 时，交给 Spring MVC 默认异常处理。OBSERVE 模式仍放行；匿名请求和参数错误分别维持 401、400。手工调用 checkAndRecord 仍返回 Decision，上面的 Java 示例可在拒绝时抛出同一种异常。
 
 ## 规则语义
 
@@ -206,10 +240,10 @@ DefaultRiskService 不承担 JWT 撤销，亦不自动踢人；自定义处置�
 
 ## 验证
 
-模块测试覆盖两类规则、窗口边界、跨分钟间隔、同一用户并发、队列溢出、写入失败重试、MVC 拦截、JSON DTO/嵌套字段/解密请求体、配置绑定、H2 实际建表/恢复/清理与版本防回退。H2 同时验证普通模式与 MYSQL 兼容模式，不等于真实 MySQL 服务端验证；模块不再维护 MySQL 专用 SQL。RiskPostgresqlIntegrationTest 在显式提供 pg.test.url 时使用独立随机 Schema 验证真实 PG，并清理该 Schema。
+模块测试覆盖两类规则、窗口边界、跨分钟间隔、同一用户并发、队列溢出、写入失败重试、MVC 拦截、专用风控异常及业务自定义响应、JSON DTO/嵌套字段/解密请求体、配置绑定、H2 实际建表/恢复/清理与版本防回退。H2 同时验证普通模式与 MYSQL 兼容模式，不等于真实 MySQL 服务端验证；模块不再维护 MySQL 专用 SQL。RiskPostgresqlIntegrationTest 在显式提供 pg.test.url 时使用独立随机 Schema 验证真实 PG，并清理该 Schema。
 
 ```text
-mvn -pl security-risk -am test -Dtest=Risk*Test,OrmBehaviorStoreTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn -pl security-risk -am test -Dtest=Risk*Test,ApiRiskExceptionTest,OrmBehaviorStoreTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 性能参数需结合实际用户数、调用频率、数据库吞吐压测，不承诺固定 QPS。

@@ -15,7 +15,9 @@ import com.yulinlin.data.core.queue.WriteQueueManager;
 import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
-import com.yulinlin.data.core.transaction.TransactionListenerManager;
+import com.yulinlin.data.core.transaction.TransactionListener;
+import com.yulinlin.data.core.exception.OrmException;
+import com.yulinlin.data.core.transaction.TransactionContext.Frame;
 import com.yulinlin.data.core.transaction.TransactionContext;
 import com.yulinlin.data.core.transaction.TransactionContext.CacheInvalidation;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
@@ -30,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Callable;
+import java.util.function.Predicate;
 import java.util.concurrent.atomic.LongAdder;
 
 @Builder
@@ -44,7 +47,9 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     private IFilterManager filterManager = IFilterManager.NONE;
 
     @Builder.Default
-    private TransactionListenerManager transactionListenerManager = new TransactionListenerManager();
+    private List<TransactionListener> transactionListeners = List.of();
+
+    private boolean transactionLog;
 
     private WriteQueueManager writeQueueManager;
 
@@ -64,32 +69,190 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     private final ThreadLocal<Integer> annotatedSessionDepth = ThreadLocal.withInitial(() -> 0);
 
-    public TransactionListenerManager getTransactionListenerManager() {
-        return java.util.Objects.requireNonNull(transactionListenerManager, "transactionListenerManager");
+    private TransactionContext context() {
+        TransactionContext context = TransactionContext.current();
+        if (context != null && context.route != this) throw new OrmException("同一事务不能混用不同 RouteSession");
+        return context;
     }
 
-    @Override public void startTransaction() { getTransactionListenerManager().startTransaction(); }
-    @Override public void commitTransaction() { getTransactionListenerManager().commitTransaction(); }
-    @Override public void rollbackTransaction() { getTransactionListenerManager().rollbackTransaction(); }
-    @Override public boolean isOpenTransaction() { return getTransactionListenerManager().isOpenTransaction(); }
-    @Override public void setRollbackOnly() { getTransactionListenerManager().setRollbackOnly(); }
-    @Override public boolean isRollbackOnly() { return getTransactionListenerManager().isRollbackOnly(); }
-    protected int transactionDepth() { return getTransactionListenerManager().transactionDepth(); }
-    public final Object transactionIdentity() { return TransactionListenerManager.currentContext(); }
+    public void setTransactionListeners(List<TransactionListener> listeners) { transactionListeners = List.copyOf(listeners); }
+    public void setTransactionLog(boolean enabled) { transactionLog = enabled; }
+    @Override public boolean isOpenTransaction() { return context() != null; }
+    protected int transactionDepth() { var context = context(); return context == null ? 0 : context.depth(); }
+    public final Object transactionIdentity() { return context(); }
     public final boolean isOutermostTransaction() { return transactionDepth() == 1; }
+    @Override public void setRollbackOnly() { var context = context(); if (context != null) context.frame().rollbackOnly = true; }
+    @Override public boolean isRollbackOnly() {
+        var context = context();
+        return context != null && (context.rollbackOnly || context.frame().rollbackOnly
+                || (context.session != null && context.session.isRollbackOnly()));
+    }
 
-    @Override protected EntitySession enlist(EntitySession session) {
-        return getTransactionListenerManager().enlist(session);
+    @Override @SneakyThrows
+    public void startTransaction() {
+        TransactionContext context = context();
+        if (context == null) {
+            context = new TransactionContext(this, transactionLog);
+            TransactionContext.bind(context);
+            txLog(context, "事务开启");
+            try { for (var listener : transactionListeners) listener.startTransaction(); }
+            catch (Throwable error) {
+                context.fail(error);
+                finishTransaction(context, true);
+            }
+            return;
+        }
+        if (context.closing || isRollbackOnly()) throw new OrmException("当前事务不能再开启嵌套范围");
+        // 外层待写数据先落到保存点之前；创建失败不进入内层。
+        if (context.proxyChanges() != null) context.proxyChanges().flush();
+        Frame frame = new Frame();
+        if (context.proxyChanges() != null) frame.proxySnapshot = context.proxyChanges().snapshot();
+        if (context.session != null) frame.savepoint = context.session.createSavepoint();
+        context.frames.addLast(frame);
+        txLog(context, "嵌套事务开启");
+    }
+
+    @Override @SneakyThrows
+    protected EntitySession enlist(EntitySession session) {
+        TransactionContext context = context();
+        if (context == null) return session;
+        if (context.session != null) {
+            if (context.session != session) throw new OrmException("一次 ORM 事务只能使用一个数据源和节点");
+            return session;
+        }
+        if (!session.supportsTransactions()) throw new OrmException("当前数据源不支持 ORM 本地事务：" + session.group());
+        if (session.cluster() != JoinCluster.master) throw new OrmException("ORM 事务只能绑定 master 节点");
+        if (session.isOpenTransaction()) throw new OrmException("Session 已有独立资源事务，请统一使用 RouteSession.transaction");
+        context.session = session;
+        try {
+            session.startTransaction();
+            boolean first = true;
+            for (Frame frame : context.frames) {
+                if (first) first = false;
+                else frame.savepoint = session.createSavepoint();
+            }
+            txLog(context, "事务绑定数据源");
+            return session;
+        } catch (Throwable error) {
+            context.rollbackOnly = true;
+            throw error;
+        }
     }
 
     @Override protected EntitySession resolveSession(String group, JoinCluster cluster) {
-        return getTransactionListenerManager().resolveSession(this, group + ":" + cluster.name(),
-                () -> super.resolveSession(group, cluster));
+        var context = context();
+        if (context != null && context.session != null && Objects.equals(group, context.session.group())) {
+            return context.session;
+        }
+        return super.resolveSession(group, context == null ? cluster : JoinCluster.master);
+    }
+    @Override public void clear() { /* 活动事务的连接和节点保持固定。 */ }
+
+    @Override @SneakyThrows
+    public void commitTransaction() {
+        TransactionContext context = context();
+        if (context == null) throw new OrmException("没有可提交的 ORM 事务");
+        if (context.depth() == 1) { finishTransaction(context, false); return; }
+        Frame frame = context.frame();
+        try {
+            if (isRollbackOnly()) throw new OrmException("当前嵌套范围只能回滚");
+            if (context.proxyChanges() != null) context.proxyChanges().flush();
+            if (isRollbackOnly()) throw new OrmException("当前嵌套范围只能回滚");
+            if (frame.savepoint != null) context.session.releaseSavepoint(frame.savepoint);
+        } catch (Throwable error) {
+            try { rollbackNested(context, frame); }
+            catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+            throw error;
+        }
+        context.frames.removeLast();
+        context.frame().merge(frame);
+        txLog(context, "嵌套事务成功，等待外层提交");
     }
 
-    @Override public void clear() { getTransactionListenerManager().clearSelections(this); }
+    @Override public void rollbackTransaction() {
+        TransactionContext context = context();
+        if (context == null) throw new OrmException("没有可回滚的 ORM 事务");
+        if (context.depth() == 1) finishTransaction(context, true);
+        else rollbackNested(context, context.frame());
+    }
 
-    public void afterCommit(Runnable action) { getTransactionListenerManager().afterCommit(action); }
+    @SneakyThrows
+    private void rollbackNested(TransactionContext context, Frame frame) {
+        Throwable failure = null;
+        try {
+            if (frame.savepoint != null) context.session.rollbackToSavepoint(frame.savepoint);
+        } catch (Throwable error) { failure = error; context.rollbackOnly = true; }
+        try {
+            if (context.proxyChanges() != null) context.proxyChanges().restore(frame.proxySnapshot);
+        } catch (Throwable error) {
+            context.rollbackOnly = true;
+            if (failure == null) failure = error; else if (failure != error) failure.addSuppressed(error);
+        } finally {
+            context.frames.removeLast();
+        }
+        if (failure != null) {
+            context.transactionLog().error("嵌套事务回滚失败", "depth=" + context.depth(), failure);
+            context.fail(failure);
+            throw failure;
+        }
+        txLog(context, "嵌套事务已回滚");
+    }
+
+    private void finishTransaction(TransactionContext context, boolean requestedRollback) {
+        context.closing = true;
+        Frame frame = context.frame();
+        try {
+            if (!requestedRollback && !isRollbackOnly()) {
+                for (var listener : transactionListeners) listener.commitTransaction();
+                if (context.proxyChanges() != null) context.proxyChanges().flush();
+                context.beforeCommitDone = true;
+            }
+            if (requestedRollback || isRollbackOnly()) {
+                if (!requestedRollback) context.fail(new OrmException("事务已失效或标记回滚，不能提交"));
+                rollbackResources(context);
+            } else {
+                context.commitAttempted = true;
+                if (context.session != null) context.session.commitTransaction();
+                context.committed = true;
+                txLog(context, "事务提交完成");
+            }
+        } catch (Throwable error) {
+            context.fail(error);
+            rollbackResources(context);
+        } finally {
+            if (context.proxyChanges() != null) context.attempt(context.proxyChanges()::close);
+            context.completed = true;
+            context.frames.clear();
+            TransactionContext.unbind(context);
+            for (var listener : transactionListeners) context.attempt(listener::afterCompletion);
+        }
+        // 提交结果未知时也失效缓存，但只在确定提交成功时发成功通知。
+        if (context.commitAttempted) frame.invalidations.forEach((cache, changes) -> context.attempt(() -> changes.apply(cache)));
+        if (context.committed) {
+            for (var listener : transactionListeners) context.attempt(listener::afterCommit);
+            frame.afterCommitTasks.forEach(context::attempt);
+        }
+        context.throwIfFailed();
+    }
+
+    private void rollbackResources(TransactionContext context) {
+        for (var listener : transactionListeners) context.attempt(listener::rollbackTransaction);
+        if (context.proxyChanges() != null) context.attempt(context.proxyChanges()::rollback);
+        if (context.session != null && context.session.isOpenTransaction()) context.attempt(context.session::rollbackTransaction);
+        txLog(context, "事务回滚处理结束");
+    }
+
+    public void afterCommit(Runnable action) {
+        var context = context();
+        if (context == null || context.beforeCommitDone || context.completed) throw new OrmException("afterCommit 需要活动 ORM 事务");
+        context.frame().afterCommitTasks.add(Objects.requireNonNull(action, "action"));
+    }
+
+    private static void txLog(TransactionContext context, String message) {
+        context.transactionLog().info(message, "depth=" + context.depth() + " group="
+                + (context.session == null ? "unbound" : com.yulinlin.data.core.transaction.TransactionLog.token(context.session.group()))
+                + " rollbackOnly=" + context.rollbackOnly);
+    }
 
     private record PreparedRequest(EntitySession session, BaseRequest<?> request, int routeDepth) {
     }
@@ -143,7 +306,8 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 pushSession(session);
                 routeDepth++;
             }
-            return new PreparedRequest(session, request, routeDepth);
+            // 初选节点可能被租户/路由过滤器替换，只登记最终执行的节点。
+            return new PreparedRequest(enlist(session), request, routeDepth);
         } catch (RuntimeException | Error error) {
             while (routeDepth-- > 0) popSession();
             throw error;
@@ -234,30 +398,32 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private Integer executeNow(EntitySession session, ExecuteRequest<?> request, boolean delayed, boolean replay) {
-        if (!isOpenTransaction()) return transaction(() -> executeNow(session, request, delayed, replay));
-        TransactionContext context = TransactionListenerManager.currentContext();
+        if (!isOpenTransaction()) {
+            if (session.supportsTransactions() && !request.isBatch())
+                return transaction(() -> executeNow(session, request, delayed, replay));
+            return executeIndependent(session, request, delayed, replay);
+        }
+        TransactionContext context = TransactionContext.current();
+        boolean executing = false;
         try {
             enlist(session);
             CacheInvalidation invalidation = resolveInvalidation(session, request);
+            // 失败的批次也可能已有部分写入；业务捕获异常后提交时仍需失效缓存。
+            scheduleInvalidation(invalidation);
+            executing = true;
             Integer affected = switch (request.getRequestType()) {
                 case insert -> session.insert((ExecuteRequest) request);
                 case delete -> session.delete((ExecuteRequest) request);
                 case update -> session.update((ExecuteRequest) request);
                 default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
             };
+            executing = false;
             if (affected == null) return null;
             if (replay) {
-                scheduleInvalidation(invalidation);
                 return affected;
             }
             if (!delayed) {
-                scheduleInvalidation(invalidation);
                 return (Integer) after(session, request, affected, Integer.class);
-            }
-            try {
-                scheduleInvalidation(invalidation);
-            } catch (RuntimeException error) {
-                log.error("延迟写执行成功，但查询缓存失效处理失败", error);
             }
             try {
                 return (Integer) after(session, request, affected, Integer.class);
@@ -267,11 +433,36 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 return affected;
             }
         } catch (RuntimeException | Error error) {
-            if (TransactionListenerManager.currentContext() == context) {
+            // 执行错误由 Session 判断资源是否仍可提交，不覆盖 JDBC 的语句级错误策略。
+            if (!executing && TransactionContext.current() == context) {
                 try { setRollbackOnly(); }
                 catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
             }
             throw error;
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Integer executeIndependent(EntitySession session, ExecuteRequest<?> request, boolean delayed, boolean replay) {
+        CacheInvalidation invalidation = resolveInvalidation(session, request);
+        try {
+            Integer affected = switch (request.getRequestType()) {
+                case insert -> session.insert((ExecuteRequest) request);
+                case update -> session.update((ExecuteRequest) request);
+                case delete -> session.delete((ExecuteRequest) request);
+                default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
+            };
+            if (affected == null || replay) return affected;
+            try { return (Integer) after(session, request, affected, Integer.class); }
+            catch (RuntimeException error) {
+                if (!delayed) throw error;
+                log.error("独立写入已完成，但写后过滤器失败", error);
+                return affected;
+            }
+        } finally {
+            // 各任务已经全部收尾；即使部分失败，已成功的独立写入也需要失效缓存。
+            try { scheduleInvalidation(invalidation); }
+            catch (RuntimeException error) { log.error("独立写入完成后缓存失效失败", error); }
         }
     }
 
@@ -323,7 +514,10 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     }
 
     private void scheduleInvalidation(CacheInvalidation invalidation) {
-        getTransactionListenerManager().invalidate(queryCache(), invalidation);
+        if (invalidation == null || invalidation.empty()) return;
+        var context = context();
+        if (context == null) invalidation.apply(queryCache());
+        else context.frame().invalidations.computeIfAbsent(queryCache(), ignored -> new CacheInvalidation()).merge(invalidation);
     }
 
 
@@ -448,7 +642,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
 
     private EntitySession session(BaseRequest request){
-        EntitySession session =  session(request.getSession(),request.getCluster());
+        EntitySession session = selectSession(request.getSession(),request.getCluster());
         request.setSession(session.group());
         request.setCluster(session.cluster());
         return session;
@@ -459,24 +653,49 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     }
 
 
-    @SneakyThrows
     public <V> V transaction(Callable<V> callable){
-        int previousDepth = transactionDepth();
+        return transaction(callable, error -> true);
+    }
+
+    /** 注解兼容层复用同一事务执行器，仅传入显式异常回滚规则。 */
+    @SneakyThrows
+    public <V> V transaction(Callable<V> callable, Predicate<Throwable> rollbackRule) {
+        Objects.requireNonNull(callable, "callable");
+        Objects.requireNonNull(rollbackRule, "rollbackRule");
         startTransaction();
-        TransactionContext context = TransactionListenerManager.currentContext();
+        TransactionContext context = context();
+        Frame frame = context.frame();
+        int depth = context.depth();
+        V value;
         try {
-            V v =  callable.call();
-            commitTransaction();
-            return v;
-        }catch (Throwable e){
+            value = callable.call();
+            if (context() != context || context.frame() != frame)
+                throw new OrmException("transaction 回调内的手动事务未按嵌套顺序配对");
+        } catch (Throwable error) {
             try {
-                if (TransactionListenerManager.currentContext() == context && transactionDepth() > previousDepth) {
-                    rollbackTransaction();
+                if (context() == context && context.depth() >= depth) {
+                    if (context.frame() != frame) {
+                        context.rollbackOnly = true;
+                        while (context() == context && context.depth() >= depth) {
+                            try { rollbackTransaction(); }
+                            catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
+                        }
+                    } else {
+                        boolean rollback = true;
+                        try { rollback = rollbackRule.test(error); }
+                        catch (Throwable ruleFailure) { if (ruleFailure != error) error.addSuppressed(ruleFailure); }
+                        if (rollback) rollbackTransaction();
+                        else commitTransaction();
+                    }
                 }
+            } catch (Throwable cleanup) {
+                if (cleanup != error) error.addSuppressed(cleanup);
             }
-            catch (Throwable cleanup) { if (e != cleanup) e.addSuppressed(cleanup); }
-            throw e;
+            throw error;
         }
+        // 提交后回调失败不能再次回滚已结束的范围或外层事务。
+        commitTransaction();
+        return value;
     }
 
     /** Enters a route selected by {@link JoinSession}; method-level routing outranks entity metadata. */

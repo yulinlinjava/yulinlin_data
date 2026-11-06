@@ -16,7 +16,7 @@ import java.lang.annotation.Target;
 @Target({ElementType.TYPE, ElementType.METHOD})
 public @interface ApiLimit {
 
-    /** Allowed requests in one interval. */
+    /** Allowed requests in a fixed interval starting with the client's first request to this endpoint. */
     int count() default 60;
 
     /** Spring duration text such as 500ms, 10s, 1m or 1h. */

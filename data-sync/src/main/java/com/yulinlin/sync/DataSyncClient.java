@@ -1,8 +1,8 @@
 package com.yulinlin.sync;
 
+import com.yulinlin.data.core.transaction.TransactionContext;
 import com.yulinlin.data.core.anno.JoinCluster;
 import com.yulinlin.data.core.session.RouteSession;
-import com.yulinlin.data.core.transaction.TransactionListenerManager;
 import com.yulinlin.jdbc.session.JdbcSession;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -36,7 +36,7 @@ public final class DataSyncClient {
         if (sourceGroup == null || sourceGroup.isBlank() || targetGroup == null || targetGroup.isBlank()
                 || sourceGroup.equals(targetGroup) || entity == null || entity == Object.class)
             throw new IllegalArgumentException("请指定不同的源/目标 group 和完整实体类");
-        if (TransactionListenerManager.currentContext() != null || TransactionSynchronizationManager.isActualTransactionActive())
+        if (TransactionContext.current() != null || TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("全量同步不能放在业务事务中，请在事务外后台执行");
         RouteSession route = routes.get();
         var from = route.session(sourceGroup, JoinCluster.master);

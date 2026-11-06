@@ -1,316 +1,237 @@
 package com.yulinlin.jdbc.session;
 
 import com.zaxxer.hikari.HikariDataSource;
+import com.yulinlin.data.core.exception.OrmException;
 import com.yulinlin.data.core.transaction.TransactionLog;
-import lombok.SneakyThrows;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.sql.*;
+import java.util.*;
 
-/**
- * 一个 Session 事务的连接资源，不是替代 Hikari/Druid 的连接池，也不管理业务事务嵌套。
- * 首条连接由所属线程初始化；额外连接按需异步申请，执行线程始终优先复用归还的连接。
- */
+/** 一次本地事务的一条连接及保存点。并行独立写入不使用此资源。 */
 public final class JdbcTransactionResources {
-    private enum State { ACTIVE, FINISHING, CLOSED }
-
-    private static final class Node {
-        final Connection connection;
-        final boolean originalAutoCommit;
-        boolean available = true;
-        Node(Connection connection, boolean originalAutoCommit) {
-            this.connection = connection;
-            this.originalAutoCommit = originalAutoCommit;
-        }
+    private static final class Point {
+        final Savepoint value;
+        boolean failed;
+        Point(Savepoint value) { this.value = value; }
     }
-
     private final DataSource dataSource;
-    private final TransactionLog transactionLog;
+    private final Thread owner = Thread.currentThread();
+    private final TransactionLog log = TransactionLog.current();
     private final String group;
     private final String cluster;
-    private final List<Node> nodes = new ArrayList<>();
-    private final int limit;
-    private State state = State.ACTIVE;
-    private Thread expanding;
-    private boolean expansionDisabled;
-    private Throwable acquisitionFailure;
-    private volatile boolean rollbackOnly;
+    private final Deque<Point> points = new ArrayDeque<>();
+    private Connection connection;
+    private boolean originalAutoCommit;
+    private boolean borrowed;
+    private boolean rollbackOnly;
+    private boolean closed;
 
-    public JdbcTransactionResources(DataSource dataSource, int length) {
-        this(dataSource, length, "unknown", "unknown");
-    }
-
-    public JdbcTransactionResources(DataSource dataSource, int length, String group, String cluster) {
-        this.dataSource = targetDataSource(Objects.requireNonNull(dataSource, "dataSource"));
-        this.transactionLog = TransactionLog.current();
+    public JdbcTransactionResources(DataSource source) { this(source, "unknown", "unknown"); }
+    public JdbcTransactionResources(DataSource source, String group, String cluster) {
+        this.dataSource = targetDataSource(Objects.requireNonNull(source, "dataSource"));
         this.group = group;
         this.cluster = cluster;
-        limit = connectionLimit(this.dataSource, length);
     }
 
-    static int connectionLimit(DataSource source, int length) {
-        if (length < 1) throw new IllegalArgumentException("parallelConnections must be positive");
-        return source instanceof HikariDataSource hikari
-                ? Math.min(length, Math.max(1, hikari.getMaximumPoolSize())) : length;
+    static int connectionLimit(DataSource source, int requested) {
+        if (requested < 1) throw new IllegalArgumentException("parallelConnections must be positive");
+        return source instanceof HikariDataSource pool ? Math.min(requested, Math.max(1, pool.getMaximumPoolSize())) : requested;
     }
 
     static DataSource targetDataSource(DataSource source) {
-        // 事务感知代理会复用线程连接；框架自管时必须能够取得独立连接。
-        while (source instanceof TransactionAwareDataSourceProxy proxy) {
+        while (source instanceof TransactionAwareDataSourceProxy proxy)
             source = Objects.requireNonNull(proxy.getTargetDataSource(), "targetDataSource");
-        }
         return source;
     }
 
-    /** 必须先在事务所属线程调用，再交给批处理工作线程。未使用资源的事务不借连接。 */
-    @SneakyThrows
-    public synchronized JdbcTransactionResources initialize() {
-        requireActive();
-        if (acquisitionFailure != null) throw acquisitionFailure;
-        if (!nodes.isEmpty()) return this;
-        jdbcLog("JDBC事务开始获取连接", null, "", null);
-        try {
-            nodes.add(openConnection());
-            return this;
-        } catch (Throwable error) {
-            rollbackOnly = true;
-            acquisitionFailure = error;
-            jdbcLog("JDBC事务连接初始化失败", null, "", error);
-            throw error;
-        }
-    }
-
-    /** 首条连接和并行扩容使用同一套配置、失败清理逻辑。 */
-    private Node openConnection() throws SQLException {
-        Connection connection = null;
+    public JdbcTransactionResources initialize() {
+        usable();
+        if (connection != null) return this;
         try {
             connection = dataSource.getConnection();
-            boolean autoCommit = connection.getAutoCommit();
-            if (autoCommit) connection.setAutoCommit(false);
-            Node node = new Node(connection, autoCommit);
-            if (transactionLog.isEnabled()) jdbcLog("JDBC事务连接已取得", connection,
-                    "originalAutoCommit=" + autoCommit + " autoCommit=false", null);
-            return node;
-        } catch (Throwable error) {
-            try {
-                if (connection != null) connection.close();
-            }
-            catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
-            throw error;
-        }
-    }
-
-    public int getLimit() { return limit; }
-    public boolean isRollbackOnly() { return rollbackOnly; }
-    public void setRollbackOnly() {
-        boolean first = !rollbackOnly;
-        rollbackOnly = true;
-        if (first) jdbcLog("JDBC事务已标记为只能回滚", null, "", null);
-    }
-
-    @SneakyThrows
-    public synchronized Connection getConnection() {
-        requireActive();
-        if (acquisitionFailure != null) throw acquisitionFailure;
-        if (nodes.isEmpty()) throw new IllegalStateException("请先在事务所属线程初始化 JDBC 连接资源");
-        for (;;) {
-            requireActive();
-            if (acquisitionFailure != null) throw acquisitionFailure;
-            for (Node node : nodes) {
-                if (node.available) {
-                    if (node.connection.isClosed()) {
-                        rollbackOnly = true;
-                        throw new IllegalStateException("事务连接已关闭");
-                    }
-                    node.available = false;
-                    return node.connection;
-                }
-            }
-            expandIfNeeded();
-            try { wait(); }
-            catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
-                rollbackOnly = true;
-                throw error;
-            }
-        }
-    }
-
-    /** 调用时持有锁；每个事务最多一个正在申请的额外连接，不为每个等待者创建线程。 */
-    private void expandIfNeeded() {
-        if (expansionDisabled || expanding != null || nodes.size() >= limit) return;
-        try {
-            expanding = Thread.ofVirtual().name("jdbc-expand-" + transactionLog.id())
-                    .inheritInheritableThreadLocals(false).unstarted(this::expand);
-            expanding.start();
-        } catch (Throwable error) {
-            expanding = null;
-            rollbackOnly = true;
-            acquisitionFailure = error;
-            throw error;
-        }
-    }
-
-    private void expand() {
-        Node acquired = null;
-        try {
-            jdbcLog("JDBC并行事务开始获取连接", null, "", null);
-            acquired = openConnection();
-            synchronized (this) {
-                if (state == State.ACTIVE) {
-                    nodes.add(acquired);
-                    acquired = null; // 交给事务收尾，扩容线程不再负责关闭。
-                }
-            }
+            originalAutoCommit = connection.getAutoCommit();
+            if (originalAutoCommit) connection.setAutoCommit(false);
+            event("JDBC事务连接已取得");
+            return this;
         } catch (SQLException error) {
-            synchronized (this) {
-                // 额外连接只是性能优化，池耗尽等借连接失败可退化为复用已有连接。
-                expansionDisabled = true;
-                if (state == State.ACTIVE)
-                    jdbcLog("JDBC扩容失败，本事务继续复用已有连接", null, "", error);
+            rollbackOnly = true;
+            if (connection != null) {
+                try { connection.close(); } catch (SQLException cleanup) { error.addSuppressed(cleanup); }
+                connection = null;
             }
+            throw JdbcErrors.translate(error);
+        }
+    }
+
+    private void active() {
+        if (Thread.currentThread() != owner) throw new OrmException("事务连接不能跨业务线程使用");
+        if (closed) throw new OrmException("JDBC 事务已经结束");
+    }
+    private void usable() {
+        active();
+        if (isRollbackOnly()) throw new OrmException("当前事务范围只能回滚，不能继续执行 SQL");
+    }
+    public boolean isRollbackOnly() { return rollbackOnly || (!points.isEmpty() && points.getLast().failed); }
+    public void setRollbackOnly() { rollbackOnly = true; event("JDBC事务已标记为只能回滚"); }
+
+    public Connection getConnection() {
+        initialize();
+        if (borrowed) throw new OrmException("事务连接正在使用，不允许并行执行 SQL");
+        try {
+            if (connection.isClosed()) throw new SQLException("事务连接已关闭", "08003");
+        } catch (SQLException error) {
+            rollbackOnly = true;
+            throw JdbcErrors.translate(error);
+        }
+        borrowed = true;
+        return connection;
+    }
+    public void releaseConnection(Connection value) {
+        active();
+        if (value != connection || !borrowed) throw new OrmException("连接不属于当前借用范围");
+        borrowed = false;
+    }
+
+    public Object createSavepoint() {
+        initialize();
+        if (borrowed) throw new OrmException("SQL 执行期间不能创建保存点");
+        try {
+            if (!connection.getMetaData().supportsSavepoints())
+                throw new OrmException("当前 JDBC 驱动不支持保存点");
+            Point point = new Point(connection.setSavepoint());
+            points.addLast(point);
+            event("JDBC保存点已创建");
+            return point;
+        } catch (SQLException error) {
+            rollbackOnly = true;
+            throw JdbcErrors.translate(error);
+        }
+    }
+    private Point point(Object value) {
+        active();
+        if (borrowed || points.isEmpty() || points.getLast() != value)
+            throw new OrmException("保存点必须在原线程按嵌套顺序结束");
+        return points.getLast();
+    }
+    public void releaseSavepoint(Object value) {
+        Point point = point(value);
+        usable();
+        try {
+            connection.releaseSavepoint(point.value);
+            points.removeLast();
+            event("JDBC保存点已释放");
+        } catch (SQLException error) {
+            rollbackOnly = true;
+            throw JdbcErrors.translate(error);
+        }
+    }
+    public void rollbackToSavepoint(Object value) {
+        Point point = point(value);
+        try {
+            if (rollbackOnly) throw new OrmException("物理事务已失效，不能通过保存点恢复");
+            connection.rollback(point.value);
+            connection.releaseSavepoint(point.value);
+            event("JDBC保存点回滚成功");
         } catch (Throwable error) {
-            synchronized (this) {
-                if (state == State.ACTIVE) {
-                    acquisitionFailure = error;
-                    rollbackOnly = true;
-                }
-            }
-            jdbcLog("JDBC扩容异常", null, "", error);
-            if (error instanceof Error fatal) throw fatal;
+            rollbackOnly = true;
+            throw JdbcErrors.translate(error);
         } finally {
-            // 驱动可能不响应中断：晚到连接从未执行业务 SQL，独立关闭，不能加入已结束事务。
-            if (acquired != null) closeUnused(acquired);
-            synchronized (this) { expanding = null; notifyAll(); }
+            points.removeLast();
         }
     }
 
-    private void closeUnused(Node node) {
+    /** PG 普通错误可由当前保存点恢复；不可恢复的错误始终使物理事务失效。 */
+    void executionFailed(Connection value, Throwable error) {
+        try {
+            boolean sqlError = false, unknownState = false, lockTimeout = false;
+            var pending = new ArrayDeque<Throwable>();
+            var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+            pending.add(error);
+            while (!pending.isEmpty()) {
+                Throwable current = pending.removeFirst();
+                if (!seen.add(current)) continue;
+                if (current instanceof Error || current instanceof SQLNonTransientConnectionException
+                        || current instanceof SQLTransientConnectionException || current instanceof SQLRecoverableException
+                        || current instanceof SQLTimeoutException) { setRollbackOnly(); return; }
+                if (current instanceof SQLException sql) {
+                    sqlError = true;
+                    String state = sql.getSQLState();
+                    if (state != null && (state.startsWith("08") || state.startsWith("40")
+                            || state.startsWith("HYT") || (state.startsWith("25") && !state.equals("25P02")))) {
+                        setRollbackOnly(); return;
+                    }
+                    unknownState |= (state == null || state.isBlank()) && sql.getNextException() == null
+                            && !(sql.getCause() instanceof SQLException);
+                    lockTimeout |= sql.getErrorCode() == 1205;
+                    if (sql.getNextException() != null) pending.add(sql.getNextException());
+                }
+                if (current.getCause() != null) pending.add(current.getCause());
+                Collections.addAll(pending, current.getSuppressed());
+            }
+            if (!sqlError) return;
+            if (unknownState || value.isClosed() || value.getAutoCommit()) { setRollbackOnly(); return; }
+            String product = value.getMetaData().getDatabaseProductName();
+            if (product == null || product.isBlank()
+                    || (lockTimeout && ("MySQL".equalsIgnoreCase(product) || "MariaDB".equalsIgnoreCase(product)))) {
+                setRollbackOnly();
+            } else if ("PostgreSQL".equalsIgnoreCase(product)) {
+                if (points.isEmpty()) setRollbackOnly();
+                else points.getLast().failed = true;
+            }
+        } catch (Throwable checkFailure) {
+            if (checkFailure != error) error.addSuppressed(checkFailure);
+            setRollbackOnly();
+        }
+    }
+
+    public void finish(boolean rollback) {
+        active();
+        if (borrowed) throw new OrmException("事务连接仍在执行 SQL，不能结束事务");
         Throwable failure = null;
+        boolean mustRollback = rollback || isRollbackOnly() || !points.isEmpty();
         try {
-            node.connection.rollback();
-            if (node.originalAutoCommit) node.connection.setAutoCommit(true);
-        } catch (Throwable error) { failure = error; }
-        finally {
-            try { node.connection.close(); }
-            catch (Throwable error) { failure = append(failure, error); }
-        }
-        jdbcLog(failure == null ? "JDBC未使用的扩容连接已释放" : "JDBC未使用的扩容连接释放失败",
-                node.connection, "", failure);
-    }
-
-    public synchronized void releaseConnection(Connection connection) {
-        for (Node node : nodes) {
-            if (node.connection == connection) {
-                if (node.available) throw new IllegalStateException("事务连接不能重复归还");
-                node.available = true;
-                notifyAll();
-                return;
-            }
-        }
-        throw new IllegalArgumentException("连接不属于本次事务");
-    }
-
-    private void requireActive() {
-        if (state != State.ACTIVE) throw new IllegalStateException("事务正在结束或已关闭，不允许继续借用连接");
-    }
-
-    /** 停止借用、等待执行者归还、完成物理事务并释放全部连接；异常保留并向外传播。 */
-    @SneakyThrows
-    public synchronized void finish(boolean rollback) {
-        if (state == State.CLOSED) return;
-        requireActive();
-        state = State.FINISHING;
-        // 不等尚未借到的扩容连接，否则外部池耗尽时，本事务会一直占着已有连接无法提交。
-        if (expanding != null) expanding.interrupt();
-        notifyAll();
-        jdbcLog(rollback || rollbackOnly ? "JDBC事务准备回滚" : "JDBC事务准备提交", null, "", null);
-        boolean interrupted = false;
-        while (nodes.stream().anyMatch(node -> !node.available)) {
-            try { wait(); } catch (InterruptedException ignored) { interrupted = true; }
-        }
-        Throwable failure = acquisitionFailure;
-        boolean mustRollback = rollback || rollbackOnly;
-        try {
-            if (nodes.isEmpty()) jdbcLog("JDBC事务未借用连接，无需物理提交或回滚", null, "", null);
-            for (Node node : nodes) {
-                boolean doRollback = mustRollback || failure != null;
+            if (connection != null) {
                 try {
-                    jdbcLog(doRollback ? "JDBC连接开始回滚" : "JDBC连接开始提交", node.connection, "", null);
-                    if (doRollback) node.connection.rollback();
-                    else node.connection.commit();
-                    jdbcLog(doRollback ? "JDBC连接回滚成功" : "JDBC连接提交成功", node.connection, "", null);
+                    if (mustRollback) { connection.rollback(); event("JDBC连接回滚成功"); }
+                    else { connection.commit(); event("JDBC连接提交成功"); }
                 } catch (Throwable error) {
-                    jdbcLog(doRollback ? "JDBC连接回滚失败" : "JDBC连接提交失败", node.connection, "", error);
-                    failure = append(failure, error);
-                    if (!doRollback) {
-                        try {
-                            node.connection.rollback();
-                            jdbcLog("JDBC提交失败后的回滚成功", node.connection, "", null);
-                        }
-                        catch (Throwable cleanup) {
-                            jdbcLog("JDBC提交失败后的回滚也失败", node.connection, "", cleanup);
-                            failure = append(failure, cleanup);
-                        }
+                    failure = error;
+                    if (!mustRollback) {
+                        try { connection.rollback(); } catch (Throwable cleanup) { error.addSuppressed(cleanup); }
                     }
                 }
             }
-            if (!rollback && rollbackOnly) {
-                failure = append(failure, new IllegalStateException("JDBC 事务已被标记为只能回滚"));
-            }
+            if (!rollback && mustRollback && failure == null) failure = new OrmException("当前事务只能回滚，不能提交");
         } finally {
-            for (Node node : nodes) {
+            if (connection != null) {
                 try {
-                    // 完成失败时不能打开自动提交，否则可能把未完成的数据意外提交。
-                    if (failure == null && node.connection.getAutoCommit() != node.originalAutoCommit) {
-                        node.connection.setAutoCommit(node.originalAutoCommit);
-                    }
-                } catch (Throwable cleanup) {
-                    jdbcLog("JDBC连接恢复自动提交状态失败", node.connection, "", cleanup);
-                    failure = append(failure, cleanup);
-                }
-                finally {
-                    try {
-                        node.connection.close();
-                        jdbcLog("JDBC框架连接已释放", node.connection, "", null);
-                    }
-                    catch (Throwable cleanup) {
-                        jdbcLog("JDBC连接释放失败", node.connection, "", cleanup);
-                        failure = append(failure, cleanup);
-                    }
-                }
+                    // 提交结果不明时不切换自动提交，避免意外提交。
+                    if (failure == null && !connection.isClosed() && connection.getAutoCommit() != originalAutoCommit)
+                        connection.setAutoCommit(originalAutoCommit);
+                } catch (Throwable cleanup) { failure = append(failure, cleanup); }
+                try { connection.close(); event("JDBC事务连接已释放"); }
+                catch (Throwable cleanup) { failure = append(failure, cleanup); }
             }
-            nodes.clear();
-            state = State.CLOSED;
-            notifyAll();
-            if (interrupted) Thread.currentThread().interrupt();
+            connection = null;
+            points.clear();
+            closed = true;
         }
-        if (failure != null) throw failure;
+        if (failure != null) {
+            log.error("JDBC事务完成失败", "group=" + TransactionLog.token(group)
+                    + " cluster=" + TransactionLog.token(cluster) + " rollback=" + rollback, failure);
+            throw JdbcErrors.translate(failure);
+        }
     }
 
-    private void jdbcLog(String event, Connection connection, String extra, Throwable error) {
-        if (!transactionLog.isEnabled()) return;
-        int count;
-        synchronized (this) { count = nodes.size(); }
-        String details = "group=" + TransactionLog.token(group) + " cluster=" + TransactionLog.token(cluster)
-                + " dataSource=" + dataSource.getClass().getSimpleName() + "@"
-                + Integer.toHexString(System.identityHashCode(dataSource))
-                + " connection=" + (connection == null ? "none" : Integer.toHexString(System.identityHashCode(connection)))
-                + " owner=framework"
-                + " connections=" + count + " rollbackOnly=" + rollbackOnly;
-        if (!extra.isEmpty()) details += " " + extra;
-        if (error == null) transactionLog.info(event, details);
-        else transactionLog.error(event, details, error);
+    private static Throwable append(Throwable first, Throwable next) {
+        if (first == null) return next;
+        if (first != next) first.addSuppressed(next);
+        return first;
     }
-
-    private static Throwable append(Throwable failure, Throwable error) {
-        if (failure == null) return error;
-        if (failure != error) failure.addSuppressed(error);
-        return failure;
+    private void event(String message) {
+        log.info(message, "group=" + TransactionLog.token(group) + " cluster=" + TransactionLog.token(cluster)
+                + " owner=orm savepoints=" + points.size() + " rollbackOnly=" + isRollbackOnly());
     }
 }

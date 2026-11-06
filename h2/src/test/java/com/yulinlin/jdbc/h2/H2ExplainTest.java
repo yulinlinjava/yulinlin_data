@@ -170,7 +170,8 @@ class H2ExplainTest {
             assertTrue(f.events.isEmpty());
             var request = QueryRequest.newInstance(Fact.class, new SelectWrapper<>().table("repro_minute"))
                     .useIndex("missing_index");
-            SQLException error = assertThrows(SQLException.class, request::explain);
+            var error = assertThrows(com.yulinlin.data.core.exception.OrmException.class, request::explain);
+            assertInstanceOf(SQLException.class, error.getCause());
             assertSame(error, f.events.getLast().error());
             assertTrue(f.lastSql().getSql().startsWith("EXPLAIN "));
             assertFalse(f.lastSql().getSql().contains("ANALYZE"));

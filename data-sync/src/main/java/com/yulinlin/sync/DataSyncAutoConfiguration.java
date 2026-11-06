@@ -27,7 +27,10 @@ public class DataSyncAutoConfiguration {
     public SyncWriter syncWriter(ObjectProvider<RouteSession> routes) {
         // 延迟解析，避免 RouteSession -> FilterManager -> SyncManager -> RouteSession 循环依赖。
         return task -> {
-            Integer affected = routes.getObject().replayWrite(task.rule().target(), task.newRequest());
+            var request = task.newRequest();
+            // 每个 JDBC 重放请求保持单连接原子性，不继承源请求的独立批量提示。
+            request.setBatch(false);
+            Integer affected = routes.getObject().replayWrite(task.rule().target(), request);
             if (affected == null)
                 throw new IllegalStateException("目标同步未返回执行结果，规则：" + task.rule().name());
         };

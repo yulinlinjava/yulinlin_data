@@ -10,7 +10,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.convert.DurationStyle;
 import org.springframework.core.annotation.AnnotatedElementUtils;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -88,8 +87,8 @@ public final class ApiLimitInterceptor implements HandlerInterceptor {
         long retryAfterNanos = counter.acquire(System.nanoTime());
         if (retryAfterNanos == 0) return true;
 
-        writeRejected(response, retryAfterNanos);
-        return false;
+        long retryAfterSeconds = Math.max(1, Math.ceilDiv(retryAfterNanos, NANOS_PER_SECOND));
+        throw new ApiLimitException(rule.count(), Duration.ofNanos(rule.intervalNanos()), rule.by(), retryAfterSeconds);
     }
 
     private static LimitRule resolveRule(HandlerKey handler) {
@@ -122,12 +121,6 @@ public final class ApiLimitInterceptor implements HandlerInterceptor {
         }
     }
 
-    private static void writeRejected(HttpServletResponse response, long retryAfterNanos) throws IOException {
-        long retryAfterSeconds = Math.max(1, Math.ceilDiv(retryAfterNanos, NANOS_PER_SECOND));
-        response.setHeader(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
-        writeError(response, HttpStatus.TOO_MANY_REQUESTS, "请求过于频繁，请稍后再试");
-    }
-
     private static void writeError(
             HttpServletResponse response, HttpStatus status, String message) throws IOException {
         response.setStatus(status.value());
@@ -151,7 +144,7 @@ public final class ApiLimitInterceptor implements HandlerInterceptor {
     private record LimitRule(int count, long intervalNanos, LimitBy by) {
     }
 
-    /** One rolling fixed window; synchronization is local to one endpoint and one client. */
+    /** Fixed window anchored at the first request; synchronization is local to one endpoint and one client. */
     private static final class LimitCounter {
         private final int limit;
         private final long intervalNanos;

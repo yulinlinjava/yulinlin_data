@@ -26,7 +26,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Future;
 
 @Slf4j
 public abstract class AbstractJdbcSession extends AbstractSession implements EntitySession {
@@ -140,53 +139,38 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     protected CompletableFuture<Integer> executeUpdateAsync(List<ParseResult> results, RequestType requestType) {
-        // Capture the owning session's context, not a worker-thread ThreadLocal or global route.
-        JdbcTransactionResources resources = transactionConnections();
-
-        CompletableFuture<Integer> future =   CompletableFuture.supplyAsync(() -> {
-            Connection connection  =  resources.getConnection();
-            try {
-                return executeUpdateNode(connection,results);
-            } catch (Throwable error) {
-                resources.setRollbackOnly();
-                throw error;
-            }finally {
-                resources.releaseConnection(connection);
-            }
-        },getThreadPoolExecutor());
-
-
-        return future;
-
-
+        if (isOpenTransaction()) return CompletableFuture.completedFuture(executeUpdate(results, requestType));
+        return CompletableFuture.supplyAsync(() -> executeIndependentUpdate(results), getThreadPoolExecutor());
     }
 
     @Override
     protected IDataBuffer executeCount(ParseResult request) {
-        List<IDataBuffer> buffers = executeSelect(request);
-        return buffers.get(0);
+        return executeSelect(request).getFirst();
     }
 
     @Override
-    protected Integer executeUpdate(List<ParseResult> list,RequestType requestType) {
-
-
-            JdbcTransactionResources resources = transactionConnections();
-            Connection connection = resources.getConnection();
-
-            try {
-                Integer value =  executeUpdateNode(connection,list);
-                return value;
-            }finally {
-                resources.releaseConnection(connection);
-            }
-
-
-
-
-
+    protected Integer executeUpdate(List<ParseResult> results, RequestType requestType) {
+        if (!isOpenTransaction()) return executeIndependentUpdate(results);
+        JdbcTransactionResources resources = transactionConnections();
+        Connection connection = resources.getConnection();
+        try {
+            return executeUpdateNode(connection, results);
+        } catch (Throwable error) {
+            throw executionFailure(resources, connection, error);
+        } finally {
+            resources.releaseConnection(connection);
+        }
     }
 
+    private Integer executeIndependentUpdate(List<ParseResult> results) {
+        try (Connection connection = dataSource.getConnection()) {
+            // Parallel batches are independent auto-commit operations.
+            if (!connection.getAutoCommit()) connection.setAutoCommit(true);
+            return executeUpdateNode(connection, results);
+        } catch (Throwable error) {
+            throw JdbcErrors.translate(error);
+        }
+    }
 
     @Override
     protected List<IDataBuffer> executeGroup(ParseResult request) {
@@ -212,20 +196,31 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
         if (resources == null) {
             try (Connection connection = dataSource.getConnection()) {
                 return work.apply(connection);
+            } catch (java.sql.SQLException error) {
+                throw executionFailure(null, null, error);
             }
         }
         Connection connection = resources.getConnection();
         try {
             return work.apply(connection);
+        } catch (Throwable error) {
+            throw executionFailure(resources, connection, error);
         } finally {
             resources.releaseConnection(connection);
         }
 
     }
 
+    @Override
+    protected void onExecutionFailure(Throwable error) {
+        // SQL 错误已在持有连接的执行入口判断；普通错误交给事务边界决定回滚。
+        if (error instanceof Error) setRollbackOnly();
+    }
 
-
-
+    private RuntimeException executionFailure(JdbcTransactionResources resources, Connection connection, Throwable error) {
+        if (resources != null) resources.executionFailed(connection, error);
+        return JdbcErrors.translate(error);
+    }
 
     protected  abstract Integer executeUpdateNode(Connection connection, List<ParseResult> list);
 
@@ -240,7 +235,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     @Override
     public void startTransaction() {
         if (transactionResources.get() == null)
-            transactionResources.set(new JdbcTransactionResources(dataSource, parallelConnections, group(), String.valueOf(cluster())));
+            transactionResources.set(new JdbcTransactionResources(dataSource, group(), String.valueOf(cluster())));
     }
 
     @Override
@@ -274,24 +269,28 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     protected final JdbcTransactionResources transactionConnections() {
         JdbcTransactionResources resources = transactionResources.get();
         if (resources == null) throw new IllegalStateException("JDBC 事务资源尚未开启，请通过 RouteSession 执行写操作");
-        // 只在真正执行 SQL 时借连接，并在交给批处理工作线程前由原线程初始化。
+        // 同一业务线程内延迟取得唯一物理连接，保存点也使用该连接。
         return resources.initialize();
     }
 
-    @Override protected boolean isOpenAsync(ExecuteRequest request, List<ParseResult> results) {
-        if (!super.isOpenAsync(request, results)) return false;
-        JdbcTransactionResources resources = transactionConnections();
-        return resources.getLimit() > 1;
+    @Override public boolean supportsTransactions() { return true; }
+
+    @Override public Object createSavepoint() { return transactionConnections().createSavepoint(); }
+
+    @Override public void releaseSavepoint(Object savepoint) { transactionConnections().releaseSavepoint(savepoint); }
+
+    @Override public void rollbackToSavepoint(Object savepoint) {
+        JdbcTransactionResources resources = transactionResources.get();
+        if (resources == null) throw new IllegalStateException("JDBC 事务资源尚未开启");
+        resources.rollbackToSavepoint(savepoint);
     }
 
     @Override public boolean supportsParallelWrites() {
-        return parallelWriteGroupCount() > 1;
+        return !isOpenTransaction() && parallelWriteGroupCount() > 1;
     }
 
     @Override protected int parallelWriteGroupCount() {
-        JdbcTransactionResources resources = transactionResources.get();
-        if (resources != null) return resources.getLimit();
-        return JdbcTransactionResources.connectionLimit(dataSource, parallelConnections);
+        return isOpenTransaction() ? 1 : JdbcTransactionResources.connectionLimit(dataSource, parallelConnections);
     }
 
     public int getParallelConnections() { return parallelConnections; }

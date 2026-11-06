@@ -1,9 +1,9 @@
 package com.yulinlin.security.risk;
 
+import com.yulinlin.data.core.transaction.TransactionContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.yulinlin.data.core.transaction.TransactionListenerManager;
 import com.yulinlin.security.risk.RiskModels.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -108,7 +108,7 @@ public final class DefaultRiskService implements RiskService, AutoCloseable {
         Objects.requireNonNull(event, "event");
         if (!started.get() || closed.get()) throw new IllegalStateException("风控服务未启动或正在关闭");
         // A memory update survives rollback, but calling after business work has begun is still an integration error.
-        if (TransactionListenerManager.currentContext() != null || TransactionSynchronizationManager.isActualTransactionActive())
+        if (TransactionContext.current() != null || TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("请在业务事务开始前调用风控");
         var behavior = behavior(event.behaviorType());
         if (!behavior.isEnabled()) return decision(true, Status.DISABLED, 0, List.of());

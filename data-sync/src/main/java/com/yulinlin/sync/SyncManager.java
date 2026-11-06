@@ -2,6 +2,7 @@ package com.yulinlin.sync;
 
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.transaction.TransactionUtil;
+import com.yulinlin.data.core.transaction.TransactionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,7 +72,16 @@ public final class SyncManager implements AutoCloseable {
         for (Channel channel : channels.values()) synchronized (channel) { schedule(channel); }
     }
 
-    /** 写后调用时仍在源事务内；0 行影响也重放，不能据此推断两库状态相同。 */
+    /** 增量同步必须知道整个源请求的提交结果，不能重放部分成功的独立批次。 */
+    public void validateWrite(String source, ExecuteRequest<?> request) {
+        if (!request.isBatch() || TransactionContext.current() != null || request.getFromClass() == null) return;
+        for (Channel channel : channels.values()) {
+            if (channel.rule.source().equals(source) && channel.matcher.matches(request.getFromClass()))
+                throw new IllegalStateException("增量同步源的 batch 写入必须放在 route.transaction(...) 中，避免独立批次部分成功后无法准确重放");
+        }
+    }
+
+    /** 写后调用；事务内等实际提交，独立操作成功后立即入队。 */
     public void capture(String source, ExecuteRequest<?> request) {
         if (request.getFromClass() == null || request.getFromClass() == Object.class
                 || request.getWrappers().isEmpty()) return;
@@ -92,7 +102,8 @@ public final class SyncManager implements AutoCloseable {
                 if (request.getWrappers().size() > capacity)
                     throw new IllegalStateException("单个同步请求节点数超过 capacity=" + capacity);
                 SyncTask task = new SyncTask(channel.rule, request);
-                TransactionUtil.afterCommit(() -> enqueue(channel, task));
+                if (TransactionContext.current() != null) TransactionUtil.afterCommit(() -> enqueue(channel, task));
+                else enqueue(channel, task);
             } catch (RuntimeException error) {
                 // 延迟队列的 after 异常可能被隔离，必须在本模块显式保存同步缺口状态。
                 synchronized (channel) {

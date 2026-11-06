@@ -77,7 +77,7 @@ public class EntityProxyService {
                 EntityProxyFactory.CacheContext.DISABLED);
     }
 
-    /** @deprecated 生命周期由 TransactionListenerManager 统一控制。 */
+    /** @deprecated 生命周期由 RouteSession 统一控制。 */
     @Deprecated
     public void startTransaction() {
         factory.startTransaction();

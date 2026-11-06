@@ -245,8 +245,9 @@ class H2UseIndexTest {
             f.session.setQueryCache(cache);
             var request = QueryRequest.newInstance(Fact.class, new SelectWrapper<>().table("repro_minute"))
                     .useIndex("missing_index").cache();
-            SQLException error = assertThrows(SQLException.class, () -> f.session.count(request));
-            assertTrue(error.getMessage().contains("missing_index"));
+            var error = assertThrows(com.yulinlin.data.core.exception.OrmException.class, () -> f.session.count(request));
+            assertInstanceOf(SQLException.class, error.getCause());
+            assertTrue(error.getCause().getMessage().contains("missing_index"));
             assertSame(error, f.events.getFirst().error());
             assertTrue(cache.values.isEmpty());
             assertEquals(1, f.events.size());

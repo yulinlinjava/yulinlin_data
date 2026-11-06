@@ -12,15 +12,15 @@ public class TransactionUtil {
      */
     public static void afterCommit(Runnable action) {
         Objects.requireNonNull(action, "action");
-        manager().afterCommit(action);
+        route().afterCommit(action);
     }
 
     /** 只使用已开启的路由事务，或已配置的 RouteSession；不创建独立 Session 事务。 */
-    public static TransactionListenerManager manager() {
-        TransactionContext context = TransactionListenerManager.currentContext();
-        if (context != null) return context.manager();
+    private static com.yulinlin.data.core.session.RouteSession route() {
+        TransactionContext context = TransactionContext.current();
+        if (context != null) return context.route;
         var route = SessionUtil.route();
         if (route == null) throw new IllegalStateException("请先配置 RouteSession，并通过路由入口开启事务");
-        return route.getTransactionListenerManager();
+        return route;
     }
 }

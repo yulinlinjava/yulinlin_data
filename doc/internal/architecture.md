@@ -22,7 +22,7 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
       → 查询结果关联加载、代理增强
   → RouteSession：after → 返回
 
-写入事务由 RouteSession → TransactionListenerManager 协调；
+写入事务与保存点由 RouteSession 协调；
 实际连接、SQL / DSL 和驱动行为由数据库模块负责。
 ```
 
@@ -39,8 +39,8 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 | SessionFactory | 创建 Session，初始化缓存、编码器、解析器、代理服务、可选执行监听器、配置和 group | 默认承担路由注册或建表；注册日志管理器 |
 | RouteSession | 唯一业务 CRUD 入口、过滤器、会话选择、事务协调、队列接入与写后缓存失效决策 | 持有另一份事务上下文、翻译方言、执行物理 commit 或实现 XA |
 | IFilterManager/SimpFilterManager | 注册、排序、匹配、顺序执行过滤器 | 选择数据源、执行 SQL 或管理事务 |
-| TransactionListenerManager | 统一业务上下文、嵌套深度、代理写回、资源完成与回调 | 直接操作 JDBC Connection 或实现 XA |
-| JdbcTransactionResources（jdbc 模块） | 单个 Session 事务内的连接借还、按需扩容、物理提交/回滚与释放 | 全局连接池、业务事务嵌套、路由或 Spring 连接归属判断 |
+| TransactionContext | 保存 RouteSession 事务的帧栈、资源、代理快照、缓存及回调状态 | 独立协调事务或操作 JDBC 连接 |
+| JdbcTransactionResources（jdbc 模块） | 一条事务连接的借还、保存点、物理提交/回滚与释放 | 多连接事务、路由或 Spring 事务传播 |
 | RegisterSession/LoadBalance | Session 注册、选库作用域、默认组、cluster 和权重选择 | 数据源 URL 校验、执行 CRUD 或保证事务一致性 |
 | EntityProxyService/EntityProxyFactory | 关联加载、同步代理生成与脏字段记录 | 再维护一套事务 ThreadLocal 或自行提交连接 |
 | WriteQueueManager | 延迟接收节点、触发刷新、分组和重试调度 | 持久化消息、分布式队列、自动推断业务聚合语义 |

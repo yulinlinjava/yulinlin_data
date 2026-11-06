@@ -173,8 +173,10 @@ public final class EntityCounterManager implements AutoCloseable {
         return active.size() + activeInserts.size() + retryInsertRows;
     }
 
-    /** 手动刷新一个稳定快照；刷新期间的新提交留到下一轮。 */
+    /** 在业务事务外刷新稳定快照；刷新期间的新提交留到下一轮。 */
     public synchronized int flush() {
+        if (routeSession.isOpenTransaction())
+            throw new NoticeException("EntityCounter.flush() 必须在事务外调用，后台计数不能加入当前业务事务。");
         Window window = swapActive();
         ConcurrentHashMap<RowKey, RowAccumulator> snapshot = window.updates();
         if (snapshot.isEmpty() && window.inserts().isEmpty() && retryInserts.isEmpty()) return 0;
@@ -237,7 +239,7 @@ public final class EntityCounterManager implements AutoCloseable {
                 if (merged == null) merged = wrapper.getRequest();
                 else merged.mergeQueued(wrapper.getRequest());
             }
-            // 仍使用 JDBC executeBatch，但一个聚合插入组不拆多连接，缩小部分提交的风险。
+            // 普通 JDBC 写请求自动使用单连接事务，发送批次仍使用 executeBatch。
             merged.setBatch(false);
             batch.request = merged;
         }
@@ -255,7 +257,9 @@ public final class EntityCounterManager implements AutoCloseable {
             else merged.mergeQueued(request);
         }
         if (merged == null) return 0;
-        merged.setBatch(rows.size() > 1);
+        // 失败后会恢复整组增量；必须使用单连接事务，避免部分提交后整组重试重复计数。
+        // 集合请求仍使用 JDBC executeBatch，不需要开启独立多连接 batch。
+        merged.setBatch(false);
         return update(merged);
     }
 

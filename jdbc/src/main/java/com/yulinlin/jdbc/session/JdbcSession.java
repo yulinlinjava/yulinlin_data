@@ -195,7 +195,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
      */
     public <T> T withMaintenanceConnection(MaintenanceWork<T> work) throws Exception {
         if (isOpenTransaction()
-                || com.yulinlin.data.core.transaction.TransactionListenerManager.currentContext() != null
+                || com.yulinlin.data.core.transaction.TransactionContext.current() != null
                 || org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("数据维护操作不能在业务事务中执行");
         try (Connection connection = dataSource.getConnection()) {

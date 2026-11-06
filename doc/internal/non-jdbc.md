@@ -15,9 +15,9 @@
 
 解析器根结果用 ParseResult 携带 SDK 请求；子节点返回后端需要的对象，不强行套 SQL。客户端地址和凭据来自配置，不硬编码 localhost，不引入 jdbc 只为加入路由。Elasticsearch 模块当前基于 Java Client 9.5.4，使用默认 Rest5Client；新代码不要重新引入已弃用的 Apache HttpClient 4 RestClientTransport。
 
-EntitySession/TransactionSession 接口不提供后端事务能力。AbstractSession 的计数也不会替 SDK 开启真实事务；当前 MongoSession、ElasticsearchSession 的开始/提交/回滚是空实现，不能照抄后宣称支持回滚。
+EntitySession.supportsTransactions 默认 false；接口本身不提供后端物理事务。当前 MongoDB、ES 普通 CRUD 无事务直接执行，显式 ORM 事务访问会在 SQL/SDK 操作前拒绝。
 
-有真实事务时管理本 Session 的资源、rollback-only、提交/回滚和清理，业务嵌套统一由 TransactionListenerManager 处理；不支持时要设计无事务路径及能力拒绝。直接把 startTransaction 改成抛异常会影响 RouteSession 的自动写入事务包装，需联动处理。
+有真实事务的扩展才可声明 supportsTransactions=true，并管理本 Session 的资源、回滚标记和清理；嵌套还须实现保存点操作。业务范围由 RouteSession 协调，不支持的能力明确拒绝。
 
 supportsParallelWrites 默认 false。异步任务必须明确传递或隔离资源和事务上下文，不能把 CompletableFuture 包装视为自动继承主线程事务。
 
@@ -27,7 +27,7 @@ AbstractLoadBalance 只有一个注册组时直接选组；多个组使用应用
 
 注册/移除发布只读 copy-on-write 快照；RandomLoadBalance 健康快照绑定注册快照，旧 ping 不恢复已移除节点。标签过滤不因单节点绕过。0 权重不参与，负权重拒绝；long 总和、[0,total) 抽样避免整数溢出和首节点偏置。
 
-非事务请求重新选节点，路由事务内保留组和 cluster 的节点绑定。heartbeat 当前是空钩子，本轮不恢复自动后台调度；ping 是显式健康刷新。底层 JdbcSession.ping 仍主要返回 true，不代表真实服务探测已实现。
+非事务请求重新选节点；ORM 事务只绑定一个组的 master 节点。heartbeat 当前是空钩子，本轮不恢复自动后台调度；ping 是显式健康刷新。底层 JdbcSession.ping 仍主要返回 true，不代表真实服务探测已实现。
 
 只读快照保护集合访问，不提供在途事务的资源租约。运行中随意改 group/cluster、关闭共享客户端或卸载租户仍需业务协调。
 

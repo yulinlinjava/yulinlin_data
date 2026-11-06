@@ -2,15 +2,13 @@ package com.yulinlin.security.risk;
 
 import java.lang.annotation.*;
 
-/** Protect a controller endpoint after authentication, before its method or business transaction executes. */
+/** Checks before controller/business execution; a rejected decision throws {@link ApiRiskException}. */
 @Target({ElementType.METHOD, ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 @Inherited
 public @interface ApiRisk {
     String value();
-    /** Optional query parameter or MVC path-variable name. Mutually exclusive with resourceBody. */
-    String resourceParam() default "";
-    /** Optional JSON field path, e.g. videoId or video.id, read after body conversion and decryption. */
-    String resourceBody() default "";
+    /** Optional resource field: path variable, request parameter, then JSON field (e.g. videoId or video.id). */
+    String resource() default "";
 }
 

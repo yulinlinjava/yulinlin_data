@@ -13,7 +13,7 @@
 
 **同步重放例外入口：** `replayWrite(targetGroup, request)` 仅供内部适配器重放已经完成业务加工的节点。强制明确目标组及 master，不走 before/after、不进入普通延迟队列，因此不重复改表名、补默认值，也不会触发下一层同步。仍由 executeNow 管理事务参与、缓存失效和具体 Session 执行/日志。普通业务 CRUD 不应调用此入口绕过过滤器，目标权限及租户隔离必须由同步配置保证。
 
-**增量通知：** data-sync 的写后过滤器在源事务内保存独立快照，登记 TransactionUtil.afterCommit；最外层成功后才入队。队列后台真正写入和代理提交前 flush 产生的请求同样走此链路。每个请求在目标独立提交，不保留源多请求事务的原子性；失败任务不越过、不自动重试。内存容量按节点计，快照/入队失败显式暂停并报告可能缺口，不能回滚已提交的源数据。SyncTaskStore 内置没有持久化队列恢复或原子源事件记录。
+**增量通知：** data-sync 写后过滤器在源事务内保存快照并登记 afterCommit；保存点回滚时丢弃本帧快照，最外层提交后入队。命中同步规则的事务外 batch 在 before 阶段拒绝，需显式 transaction，避免部分成功无法准确重放。无事务的独立操作在全部成功后立即入队。目标请求独立提交；失败任务不越过、不自动重试。内存队列不提供持久化恢复和原子源事件记录。
 
 **全量维护例外入口：** DataSyncClient.sync(source,target,class) 通过 RouteSession 选择 master，再借 JdbcSession 独立维护连接，不加入业务事务、不走业务过滤器或代理。FullSyncMapping 校验单表实体与实际单列主键；JdbcFullSyncJob 复用源/目标各自 CoderManager 和 Session 读取/绑定策略。每批目标业务行与 yulinlin_sync_progress 检查点同连接提交，确认成功后调用 RouteSession.invalidateMaintenanceCache 清理目标命名空间。sync 自动续传；restart 重置该任务进度，不清空目标。禁止在业务事务中调用，不能把维护连接能力用于普通 CRUD 绕开 RouteSession。
 
@@ -31,11 +31,11 @@ RoutingCacheClient 仅管理缓存选择与只读清单：getCache()、getCache(
 
 CacheClient 不提供 ORM 表/实体清理入口，不依赖 ORM 注解解析或路由桥接。查询读写仍由具体 Session 完成，普通业务写入后的缓存失效仍由 RouteSession 协调事务提交；内部 CacheNamespaceResolver 和分区失效协议保留。需要刷新查询时通过 CacheMode.REFRESH，不使用业务缓存的 clear 操作代替。
 
-**立即写入：** `RouteSession.executeNow` 没有外层事务时自动包装一次框架事务；有外层事务则直接登记参与者，不重复增加业务事务深度。先解析失效范围，再调用 Session.insert/update/delete，执行成功登记待失效范围并调用 after。最外层提交时才完成连接提交和缓存失效。`after()` 是“执行后”，不是“提交后”；需要提交成功通知时用 TransactionUtil.afterCommit。
+**立即写入：** RouteSession 对事务外普通 JDBC 写请求自动包装单连接事务；显式 batch 走独立自动提交路径。事务内普通 CRUD 加入当前范围，不自动创建新保存点。写入前登记缓存失效，事务提交后执行；独立 batch 在全部任务结束后失效缓存，部分失败也失效。after 是“执行后”，不是“提交后”，成功通知使用 TransactionUtil.afterCommit。
 
-**延迟写入：** before 在入队前执行并固定所选 Session；queue() 不允许在活动事务内使用，成功接收返回 0，不表示落库成功。WriteQueueManager 根据 Session **实例** + RequestType + fromClass 合并节点；同一 Session 内分组依次执行，不同 Session 受全局并发上限控制。当前活跃队列的节点总数达到 flush-size（默认 1024）可提前唤醒刷新，不是必须每组都满。后台执行回到 RouteSession.executeNow，各组独立事务；不重新执行 before。它不会把多次 +1 自动合为 +N，不保证跨分组的原请求顺序，也不是持久化消息队列。
+**延迟写入：** before 在入队前执行并固定 Session；queue() 不允许在活动事务内使用，返回 0 只表示接收成功。WriteQueueManager 按 Session 实例、操作和实体分组合并，每组回到 RouteSession；普通组使用独立事务，batch 组使用独立自动提交。失败重试可能重复部分已成功写入，需业务幂等。
 
-**批量与事务：** AbstractSession 根据 batch()、执行器和 supportsParallelWrites 决定是否拆执行分组；具体 JDBC Session 再控制 executeBatchSize。executeBatch 是发送批次，不是提交事务。SQLite 禁止多连接写入拆组。业务自行开异步线程不会自动继承 TransactionContext；框架并行写入有自己的资源交接路径，不应直接复制为任意异步事务传播。
+**批量与事务：** 事务内只有一条连接，batch 不拆并行任务；事务外 batch 根据 supportsParallelWrites 和配置拆组，每个任务取得独立自动提交连接。所有派发任务结束后汇总结果/异常。execute-batch-size 仅控制发送条数。SQLite 不拆并行组。业务异步线程不继承 TransactionContext。
 
 **统计聚合插入：** common 的 EntityCounter.insert 不进入 WriteQueueManager，而与原计数更新共用 EntityCounterManager 的定时刷新。RouteSession.resolveWriteGroup 在提交线程固定目标组，CounterInsert 缓存字段元数据，把数字转成不可变数值快照，非数字字段名/toString 构成维度，null 忽略。同组数字合并先完整校验，再原子替换行快照，溢出不能部分累加。刷新切换活动区后才通过 ModelInsertWrapper 触发 insertBefore，避免自动 ID/时间提前成为维度。每个数据源/实体分组批量插入、不主动拆多连接；失败批次保留已生成请求，不回并新窗口。标量编码器位于 core/coder；JdbcScalarTypes 仅提供原子类到基础存储类型映射，各数据库 SchemaManager 仍决定方言。内存窗口与失败队列都不持久化，不能据此承诺自然分钟对齐或 exactly-once。
 
@@ -43,7 +43,7 @@ CacheClient 不提供 ORM 表/实体清理入口，不依赖 ORM 注解解析或
 
 **算术参数边界：** EntityCounter 链式 inc(x) 表示加 x、dec(x) 表示减 x，都接受正负整数、小数及现有原子数字类型。每次调用通过 CounterNumbers.snapshot 固定 BigDecimal 快照，拒绝 null/非有限浮点数/不支持的 Number 类型；Builder 和聚合器均使用 BigDecimal 合并，不再先转 long，dec 在 BigDecimal 上取负。终结时复制增量 Map，抵消为零不生成字段更新。输出参数能精确表示为 long 时保持整数，否则保留 BigDecimal；最终范围、精度由目标数据库列决定。JDBC UpdateFieldsParse 对 inc/dec 的数字使用 IParamsContext.putNumberGetKey，SimpParamsContext 保存原生数字、SqlParamsContext 负责委托，防止 BigDecimal 存储编码变成字符串后无法执行 PostgreSQL 数字加减。普通存储字段仍走原编码器，不改变表结构和数字文本存储约定；目标列必须能进行算术运算。
 
-**事务与 sync 代理：** TransactionListenerManager 的线程上下文统一保存 depth、rollbackOnly、参与 Session、选库绑定、代理修改、缓存失效和 afterCommitTasks。嵌套提交只减深度，内层回滚标记整体 rollback-only。代理 setter 只记录修改，最外层提交前 flush，随后各参与 Session 提交自己的资源。清理旧上下文后才运行成功回调。多库/多连接是本地协调，不是 XA；已经提交的参与者不能因后续参与者失败而被保证回滚。ES/MongoDB 的资源参与标记不等于服务端原子事务。
+**事务与 sync 代理：** RouteSession 的 TransactionContext 保存单个 Session 及保存点帧栈。嵌套前刷新外层代理，内层成功前刷新并合并回调/缓存记录，内层回滚恢复代理快照并丢弃该帧记录。最外层物理提交并解绑后通知成功。一次事务拒绝跨组；MongoDB/ES 普通 CRUD 不包虚假事务，显式事务访问拒绝。
 
 维护定位：
 
@@ -51,8 +51,8 @@ CacheClient 不提供 ORM 表/实体清理入口，不依赖 ORM 注解解析或
 | --- | --- |
 | 动态表名、请求替换、数据源改路由、返回值过滤 | [RouteSession](../../core/src/main/java/com/yulinlin/data/core/session/RouteSession.java)、filter |
 | 默认组、主从标签、节点选择 | [RegisterSession](../../core/src/main/java/com/yulinlin/data/core/session/RegisterSession.java)、loadbalan |
-| 嵌套、提交、回滚、成功回调 | [TransactionListenerManager](../../core/src/main/java/com/yulinlin/data/core/transaction/TransactionListenerManager.java)、TransactionContext |
-| JDBC 连接借还、批处理扩容、物理提交与释放 | [JdbcTransactionResources](../../jdbc/src/main/java/com/yulinlin/jdbc/session/JdbcTransactionResources.java)、AbstractJdbcSession |
+| 嵌套、提交、回滚、成功回调 | [RouteSession](../../core/src/main/java/com/yulinlin/data/core/session/RouteSession.java)、TransactionContext |
+| JDBC 连接借还、保存点、物理提交与释放 | [JdbcTransactionResources](../../jdbc/src/main/java/com/yulinlin/jdbc/session/JdbcTransactionResources.java)、AbstractJdbcSession |
 | 查询缓存读取、公共批量、解码与结果增强顺序 | [AbstractSession](../../core/src/main/java/com/yulinlin/data/core/session/AbstractSession.java) |
 | 关联查询、懒加载、自动更新字段跟踪 | [EntityProxyFactory](../../core/src/main/java/com/yulinlin/data/core/proxy/EntityProxyFactory.java) |
 | 延迟写分组、刷新、重试 | [WriteQueueManager](../../core/src/main/java/com/yulinlin/data/core/queue/WriteQueueManager.java) |

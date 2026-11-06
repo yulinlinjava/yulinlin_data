@@ -37,7 +37,13 @@ public class VideoController {
 }
 ```
 
-interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。超出限制时返回 HTTP `429`、`Retry-After` 响应头和未加密的统一 JSON：
+只写 `@ApiLimit(count = 20)` 等价于 `count=20, interval="1m", by=LimitBy.IP`：同一 IP 对同一接口在本机一个 60 秒固定窗口内最多放行 20 次，第 21 次拒绝。窗口从该客户端的首次请求开始计时，满 interval 后下一次请求开启新窗口。
+
+interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。
+
+超限时拦截器抛出 `com.yulinlin.security.limit.ApiLimitException`，不写响应体、不提交响应，Controller 不会执行。异常继承 ResponseStatusException，默认 HTTP 429，携带 Retry-After 响应头。业务方可通过 @ExceptionHandler 自己决定提示文案、返回结构和状态码。异常提供 getCount()、getInterval()、getBy() 和 getRetryAfterSeconds()；重试时间为距离本窗口结束的秒数，向上取整且至少为 1。
+
+引入 starter 且没有自定义处理器时，StarterExceptionHandler 保留 Retry-After 并返回默认 JSON：
 
 ```json
 {
@@ -49,6 +55,36 @@ interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@A
   "timestamp": 1792070400000
 }
 ```
+
+业务自定义示例（优先于 starter 的默认处理器）：
+
+```java
+import com.yulinlin.security.annotation.ApiCrypto;
+import com.yulinlin.security.limit.ApiLimitException;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import java.util.Map;
+
+@Order(Ordered.HIGHEST_PRECEDENCE)
+@RestControllerAdvice
+public class BusinessExceptionHandler {
+    @ApiCrypto(false) // 使用全局加密时，明确让这份错误提示保持明文
+    @ExceptionHandler(ApiLimitException.class)
+    public ResponseEntity<Map<String, Object>> limited(ApiLimitException error) {
+        return ResponseEntity.status(429)
+                .headers(error.getHeaders())
+                .body(Map.of(
+                        "code", "VIDEO_REQUEST_TOO_FAST",
+                        "message", "操作太频繁，请稍后再试",
+                        "retryAfterSeconds", error.getRetryAfterSeconds()));
+    }
+}
+```
+
+自定义处理器通过 headers(error.getHeaders()) 保留重试提示，也可按业务协议自行设置；不依赖 starter 时，同样可以使用上述处理器。不提供自定义处理器时由 Spring MVC 默认处理 HTTP 429，响应体采用应用自己的默认错误配置。
 
 各接口按 IP 或设备 ID 独立计数，不活跃记录随 interval 到期淘汰。maximum-size 限制本机保留的计数器数量；达到容量上限而被提前淘汰的客户端再次访问时会重新计数。多实例各自计数，不提供全局统一额度。
 

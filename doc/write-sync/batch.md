@@ -34,11 +34,22 @@ yulinlin:
 
 这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接；调用 `.batch()` 时，把整批数据均匀分成最多 4 个大组，一组一个任务/连接。同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。
 
-只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池会自动限制有效并发数，其他连接池应按其容量设置 parallel-connections。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+只有事务外 batch、执行器和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池限制有效并发数，其他连接池应按容量设置 parallel-connections。这个值是单次请求的连接并发上限，不是应用全局上限，也不保证线性提速。
 
-executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
+事务外 batch 使用独立自动提交连接，等待全部已派发任务完成后返回。任一任务失败则抛出首个异常，其余放 suppressed；已成功写入保留，相关缓存仍会失效。不能在任务还运行时归还连接，也不能把整体抛错理解成全部回滚。解析仍持有完整集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
 
-多个连接有各自的本地事务，中途提交失败无法撤销已成功提交的连接；跨连接未提交数据也不保证可读。严格单库原子性和事务内读己之写使用 parallel-connections: 1。
+需要整批原子性时使用显式事务：
+
+```java
+SessionUtil.route().transaction(() -> {
+    ModelInsertWrapper.newInstance("mysql", usersToInsert).batch().execute();
+    return null;
+});
+```
+
+事务内自动固定单连接，batch 不拆线程，但 execute-batch-size 仍控制 JDBC 发送批次。全部 SQL 成功后外层提交；异常逃出范围则回滚。普通非 batch 写请求在没有外层事务时也会自动包单连接事务。仅设置 parallel-connections: 1 不会改变事务外 batch 的独立自动提交语义。
+
+启用 data-sync 增量同步的源实体，batch 必须像上例一样包进显式事务；框架会在 before 阶段拒绝不满足条件的请求，避免部分成功后错误重放整批。
 
 ---
 

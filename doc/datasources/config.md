@@ -22,7 +22,7 @@
 | yulinlin.monitor.password | 空 | 内置监控对话框密码；必须显式配置，推荐使用环境变量 |
 | yulinlin.`<module>`.log | false | 当前模块 SQL 成功日志；module 为 mysql、postgresql、sqlite 或 h2 |
 | yulinlin.`<module>`.map-underscore-to-camel-case | true | 当前模块下划线与驼峰映射 |
-| yulinlin.`<module>`.parallel-connections | 4 | 当前模块每框架事务连接上限；SQLite 最终固定为 1 |
+| yulinlin.`<module>`.parallel-connections | 4 | 事务外 batch 单次请求的并发连接上限；事务内始终单连接，SQLite 不拆组 |
 | yulinlin.`<module>`.execute-batch-size | 256 | 当前模块一次 executeBatch 的行数，不是 commit |
 | yulinlin.mysql.schema-mode | NONE | CREATE、VALIDATE 或 NONE；默认不改生产结构 |
 | yulinlin.mysql.schema-packages | 空 | MySQL 启动递归扫描包列表 |
@@ -59,7 +59,7 @@
 
 - 单数据源也必须等待容器初始化，不在静态初始化块里查询。所有模块只有配置扫描包并启用相应模式时才处理结构；SQLite/H2 默认模式为 CREATE，MySQL/PostgreSQL/Elasticsearch 默认为 NONE。未扫描的结构由业务迁移工具准备。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
-- 多库事务与多连接事务不是 XA，详细规则见 [ORM 开发](../relations/transactions.md#事务使用)。
+- 一次 ORM 事务只支持一个 JDBC 数据源和一条连接，跨组访问拒绝；详细规则见 [ORM 开发](../relations/transactions.md#事务使用)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
 - 表或字段不存在：核对实际建表、JoinField 映射和实体基类继承字段。
 - PostgreSQL 报 MySQL 函数错误：检查是否使用了 mysqlSessionFactory 或原始 MySQL SQL。

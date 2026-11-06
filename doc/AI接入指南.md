@@ -660,7 +660,7 @@ H2 在 Session Bean 初始化时扫描配置包。schema-mode 的含义是：CRE
 
 H2 的 DDL 会自动提交，因此启动创建表或索引使用独立直连连接，不会提交业务事务连接；相应地，这些结构变更也不随业务回滚。普通 CRUD、SELECT FOR UPDATE、日期/区间统计使用 H2 专用解析器。
 
-H2 默认允许一个框架事务最多使用 4 个连接，并按 256 行调用一次 executeBatch；这适合本地批量吞吐，但多连接提交仍不是单连接原子事务。严格原子性或事务内读己之写时设置 parallel-connections: 1。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询执行超时。
+H2 的事务外 batch 默认最多拆成 4 个独立自动提交任务，每 256 行发送一次 executeBatch，部分失败会保留已成功写入。显式事务始终使用单连接，batch 不并行，无需通过 parallel-connections: 1 取得原子性。connection-timeout 是取连接等待时间，lock-timeout 是数据库锁等待时间，都不是 SQL 查询超时。
 
 `Date` 和框架 `DateTime` 的字段值、条件参数都统一编码为 `LocalDateTime`，通过 JDBC `setObject` 绑定无时区 `TIMESTAMP`。读取后，Date 按 JVM 默认时区还原，DateTime 直接保留本地日期时间。不同应用实例仍需统一 JVM 时区；手工创建的 `TIMESTAMP WITH TIME ZONE` 列不适用这套数字保留规则。Date 保留毫秒，DateTime 的小数秒由列精度决定；历史偏移数据不会自动修改。
 
@@ -1263,7 +1263,7 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 | yulinlin.monitor.password | 空 | 内置监控对话框密码；必须显式配置，推荐使用环境变量 |
 | yulinlin.`<module>`.log | false | 当前模块 SQL 成功日志；module 为 mysql、postgresql、sqlite 或 h2 |
 | yulinlin.`<module>`.map-underscore-to-camel-case | true | 当前模块下划线与驼峰映射 |
-| yulinlin.`<module>`.parallel-connections | 4 | 当前模块每框架事务连接上限；SQLite 最终固定为 1 |
+| yulinlin.`<module>`.parallel-connections | 4 | 事务外 batch 单次请求的并发连接上限；事务内始终单连接，SQLite 不拆组 |
 | yulinlin.`<module>`.execute-batch-size | 256 | 当前模块一次 executeBatch 的行数，不是 commit |
 | yulinlin.mysql.schema-mode | NONE | CREATE、VALIDATE 或 NONE；默认不改生产结构 |
 | yulinlin.mysql.schema-packages | 空 | MySQL 启动递归扫描包列表 |
@@ -1301,7 +1301,7 @@ ModelSelectWrapper.newInstance("oss", DemoUser.class).selectList();
 
 - 单数据源也必须等待容器初始化，不在静态初始化块里查询。所有模块只有配置扫描包并启用相应模式时才处理结构；SQLite/H2 默认模式为 CREATE，MySQL/PostgreSQL/Elasticsearch 默认为 NONE。未扫描的结构由业务迁移工具准备。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
-- 多库事务与多连接事务不是 XA，详细规则见 [ORM 开发](#ai-relations-transactions-事务使用)。
+- 一次 ORM 事务只支持一个 JDBC 数据源和一条连接，跨组访问拒绝；详细规则见 [ORM 开发](#ai-relations-transactions-事务使用)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
 - 表或字段不存在：核对实际建表、JoinField 映射和实体基类继承字段。
 - PostgreSQL 报 MySQL 函数错误：检查是否使用了 mysqlSessionFactory 或原始 MySQL SQL。
@@ -2655,7 +2655,7 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 
 [文档首页](README.md) / [关联与事务](relations/README.md)
 
-路由事务、Spring 注解兼容和 afterCommit。
+ORM 自己管理事务；回调和两种注解都进入同一个 RouteSession。
 
 <a id="ai-relations-transactions-本页导航"></a>
 ### 本页导航
@@ -2663,9 +2663,11 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 - [事务使用](#ai-relations-transactions-事务使用)
 - [框架路由事务](#ai-relations-transactions-框架路由事务)
 - [Spring 事务注解兼容](#ai-relations-transactions-spring-事务注解兼容)
+- [SQL 失败与业务捕获](#ai-relations-transactions-sql-失败与业务捕获)
 - [排查事务是否提交](#ai-relations-transactions-排查事务是否提交)
 - [提交成功回调](#ai-relations-transactions-提交成功回调)
 - [路由是唯一业务入口](#ai-relations-transactions-路由是唯一业务入口)
+- [迁移说明](#ai-relations-transactions-迁移说明)
 
 <a id="ai-relations-transactions-事务使用"></a>
 ### 事务使用
@@ -2673,64 +2675,96 @@ public interface DemoUserRepository extends BaseRepository<DemoUser> {
 <a id="ai-relations-transactions-框架路由事务"></a>
 #### 框架路由事务
 
-以下完整 Service 方法片段假设 mysql/sqlite 两组及业务表均已准备：
-
-```java
-import com.yulinlin.data.core.anno.JoinTransaction;
-
-@JoinTransaction
-public void saveBusinessData() {
-    ModelInsertWrapper.newInstance("mysql", mysqlUsers).batch().execute();
-    ModelInsertWrapper.newInstance("sqlite", localUsers).execute();
-}
-```
-
-放在 Spring 管理的 Service public 方法上，通过代理调用。也可使用回调：
+统一使用 `SessionUtil.route().transaction(callable)`。成功返回提交，异常离开回调则回滚并原样抛出，受检异常也默认回滚。回调可返回业务结果，不需要结果时返回 null。
 
 ```java
 SessionUtil.route().transaction(() -> {
-    ModelInsertWrapper.newInstance("mysql", usersToInsert).execute();
+    ModelInsertWrapper.newInstance("mysql", order).execute();
+    ModelInsertWrapper.newInstance("mysql", details).execute();
     return null;
 });
 ```
 
-`RouteSession` 是业务 CRUD 和事务的唯一入口。没有外层事务时，一次写请求由 RouteSession 自动开始并结束事务；普通查询不主动开启事务，多个独立请求不自动合成一个业务事务。RouteSession 定义边界并登记参与者，`TransactionListenerManager` 统一维护当前线程的业务上下文，各 Session 只管理自己的连接资源。
+也可以在 Spring 管理的 public Service 方法上标注 `@JoinTransaction`，通过代理调用。普通方法自调用不经过代理，需要嵌套边界时显式调用 transaction 或另一个代理 Bean。
 
-同一线程内，路由方法和事务注解共用一份 `TransactionContext`，具体 Session 不创建上下文，也不反向调用事务管理器。只有路由显式开启事务才增加 `depth`，普通 CRUD 和 Session 资源开启只登记参与者，不增加深度；同一个 Session 的资源在本事务中只开启一次。内层提交只减少深度，不提交连接、不刷新代理、不执行提交后回调；内层回滚标记整个事务 rollback-only。最外层统一写回代理、提交/回滚参与者、清理状态和通知回调。不同线程互相隔离，嵌套不模拟独立提交或保存点。
+| 当前状态 | transaction 的行为 |
+| --- | --- |
+| 没有事务 | 建立外层事务，使用一条 JDBC 连接，最终 commit/rollback |
+| 已有事务 | 在同一连接建立保存点；成功释放保存点，失败回滚到该保存点 |
+| 内层成功，外层随后失败 | 内层修改也随外层全部回滚 |
+| 内层失败，外层捕获 | 内层修改已撤销；数据库资源仍有效时，外层可以继续 |
+| 内层失败，外层不捕获 | 异常继续向外传播，各层依次回滚 |
+| 驱动不支持保存点 | 明确报错，不降级成共享回滚标记或独立提交 |
+
+一次事务只能使用一个数据源组和一个节点；第一次访问选择 master，之后固定。跨组访问在执行目标 SQL 前拒绝。禁止将非事务表、DDL 隐式提交或直接操作独立 JDBC 连接视为受本事务保护。
+
+嵌套开始前刷新外层代理修改，再创建保存点并记录代理状态。内层成功前刷新内层代理；内层回滚会恢复已有代理的字段、乐观锁版本和懒加载状态，并丢弃内层回调和缓存失效记录。内层新建的代理在回滚后不能再使用，请重新查询。快照针对 ORM 跟踪的字段赋值，不承诺撤销业务对象内集合、Date 等可变对象的任意原地修改。最外层结束后的代理不能继续自动写回。
 
 <a id="ai-relations-transactions-spring-事务注解兼容"></a>
 #### Spring 事务注解兼容
 
-继续使用 `org.springframework.transaction.annotation.Transactional`。JDBC 模块自动注册默认优先的 `yulinlinTransactionManager`，Spring 标准注解拦截器解析注解后，由这个轻量适配器调用 RouteSession。它不创建 Spring JDBC 事务、不绑定 Spring 连接、不注册 Spring 同步回调。原有重复的 `SpringTransactionAop` 已移除，默认 Boot JDBC 事务管理器自动配置会退让。
+可以保留 `org.springframework.transaction.annotation.Transactional`。统一的 `JoinTransactionAop` 同时识别它和 `@JoinTransaction`，调用 ORM transaction；没有自定义 Spring 事务管理器，也没有第二套连接上下文。
 
 ```java
 import org.springframework.transaction.annotation.Transactional;
 
-@Transactional(rollbackFor = Exception.class)
+@Transactional
 public void createOrder() throws Exception {
-    // 在 Service 中通过 Repository / Wrapper 执行业务；所有数据源加入同一路由事务。
+    // Repository / Wrapper 在同一个 ORM 事务内执行。
 }
 ```
 
-- 支持默认 `REQUIRED`：内层加入同一业务上下文，最外层才提交；内层回滚会标记整个事务 rollback-only。
-- `rollbackFor`、`noRollbackFor` 及其类名规则由 Spring 标准拦截器解析。默认对 `RuntimeException` / `Error` 回滚，对受检异常默认提交；业务需要受检异常也回滚时使用上例。已经发生 SQL 失败等导致 rollback-only 的事务不能被 `noRollbackFor` 强行提交。
-- 目前仅支持默认隔离级别、默认超时和 `readOnly=false`。非默认传播方式（包括 `REQUIRES_NEW` / `NESTED`）、隔离级别、超时或 `readOnly=true` 会在进入业务方法前明确报错，不静默假装支持。
-- 必须从 Spring 代理外部调用；不要叠加 `@JoinTransaction` 和 `@Transactional`，也不要认为业务异步线程会继承事务。框架 `.batch()` 由内部显式传递连接池，不等于自动传播业务线程上下文。
-- 数据源仍使用原来的 Spring Bean 配置，但连接由框架独立取得和管理。原生 JdbcTemplate、MyBatis、JPA 不会加入此事务；不能把混合使用当成统一提交。
-- 若项目另外指定了默认事务管理器、有其他 `@Primary` 管理器，或使用 `TransactionManagementConfigurer`，请明确使用 `@Transactional(transactionManager = "yulinlinTransactionManager", rollbackFor = Exception.class)`。显式指定其他管理器不进入本适配器，框架写请求会按自己的边界独立提交。
-- 不提供 Spring `TransactionSynchronizationManager` / `@TransactionalEventListener` 的同步生命周期。提交后业务使用 `TransactionUtil.afterCommit`；手动 `TransactionTemplate` 只有选择本适配器时才进入框架事务。
+**兼容的是注解入口，不是 Spring 完整事务语义。**
 
-迁移时更新配套的 core、jdbc 及所用数据库模块，移除业务手动注册的旧 `SpringTransactionAop`。不要同时保留另一套拦截相同 `@Transactional` 方法的自定义事务切面。
+- 注解默认值 REQUIRED 表示使用 ORM 自动嵌套保存点规则，不是 Spring REQUIRED 的共享回滚规则。不要再写 `propagation=NESTED` 或 REQUIRES_NEW。
+- 支持 rollbackFor、noRollbackFor 以及两个 ClassName 属性。最具体的匹配规则优先；无匹配时所有异常默认回滚，包括受检异常。noRollbackFor 不会清除数据库资源失效状态。
+- 类、接口、方法和组合注解按 Spring 注解解析规则识别；方法声明覆盖类声明。同一方法同时有两种注解，只建立一个范围，使用 Transactional 的显式回滚规则。
+- 非默认 propagation、isolation、timeout、timeoutString、readOnly=true、transactionManager/value、label 明确拒绝。普通单例 Bean 在创建代理时发现不支持的配置会启动失败；懒加载 Bean 在首次创建代理时检查。
+- JDBC 模块阻止 Boot 自动创建默认 DataSourceTransactionManager；显式启用 `@EnableTransactionManagement` 或注册原生 TransactionInterceptor/事务 Advisor 会与 ORM 切面冲突并启动失败。
+- 不使用 Spring 连接绑定、TransactionTemplate、TransactionSynchronizationManager 或 TransactionalEventListener。JdbcTemplate、MyBatis、JPA 不会加入 ORM 事务；业务异步线程也不继承它。
+- 不接受 `@JoinTransaction({"mysql", "other"})` 数据源列表，一次事务只能选择一个组。
+
+<a id="ai-relations-transactions-sql-失败与业务捕获"></a>
+#### SQL 失败与业务捕获
+
+可预期的失败操作放进内层 transaction，**在内层范围外捕获**，MySQL、H2、PG 可以使用同一种业务写法：
+
+```java
+import com.yulinlin.data.core.exception.DuplicateDataException;
+
+var route = SessionUtil.route();
+route.transaction(() -> {
+    users.updateProfile();
+    try {
+        route.transaction(() -> {
+            users.insertOptionalRecord();
+            return null;
+        });
+    } catch (DuplicateDataException error) {
+        // 内层已回滚；业务允许记录已存在。
+    }
+    audit.insertRecord();
+    return null;
+});
+```
+
+例中 users/audit 是同一数据源的业务仓库。JDBC 主键/唯一约束冲突抛 `DuplicateDataException`，其他 JDBC 执行错误抛 `OrmException`；前者继承后者，原始 SQLException 保留在 cause 中，可读 SQLState 和错误码。业务回调自身异常保留原类型。
+
+不会给每条 SQL 偷加保存点。MySQL/H2 某些普通语句错误在当前范围内捕获后仍能继续，但不能把这一点推广到所有数据库。PG 发生普通 SQL 错误后，当前范围不能继续执行或提交，必须回滚当前保存点；没有保存点时只能回滚外层事务。即使在 PG 内层吞掉 SQL 异常，内层提交也会失败并尝试回滚保存点。
+
+死锁、连接失效、事务回滚类 SQLState、JDBC 超时、MySQL/MariaDB 锁等待超时以及无法确认连接状态的错误保守标记物理事务失效；catch、保存点或 noRollbackFor 都不能保证恢复。框架不自动重试。
+
+无外层事务时，普通 JDBC 写请求自动包一层事务；`.batch()` 走独立自动提交路径，等待全部已派发任务结束，任一失败就抛异常，已成功数据保留并清理相关缓存。事务内的 `.batch()` 自动使用本事务单连接 JDBC batch，不并行、不独立提交。详见[批量写入](#ai-write-sync-batch)。
+
+当前 MongoDB、ES 保留普通 CRUD 路径，不提供 ORM 物理事务；在显式事务内访问会在写入前拒绝，不能用空实现假装已回滚。
 
 <a id="ai-relations-transactions-排查事务是否提交"></a>
 #### 排查事务是否提交
 
-开启 `yulinlin.data.transaction-log: true`（默认关闭），按 SQL 日志里的同一个 `txId` 查看开启、嵌套深度、数据源参与和连接的最终处理。SQL 日志中的 `affected=1` 只表示 JDBC 执行影响一行，不代表事务已经提交；事务日志关闭时 SQL 仍保留 ID，没有框架事务的查询显示 `txId=none`。连接均由框架持有，最终查看每个连接的 `JDBC连接提交成功` 或回滚日志。`数据源事务提交方法已返回`、`框架事务上下文已清理` 都不是物理提交凭证，多库/多连接要逐一核对，不能凭一个资源成功推断全部成功。配置、字段和日志事件详见[事务诊断日志](operations/sql-log.md#事务诊断日志)。
+开启 `yulinlin.data.transaction-log: true`，默认关闭。嵌套保存点沿用外层事务 ID；SQL 成功或内层成功不等于物理提交，以最外层 JDBC commit/rollback 结果为准。独立批量写入和事务外查询显示 `事务ID=none`，不会伪造整体事务 ID。详见[事务诊断日志](operations/sql-log.md#事务诊断日志)。
 
 <a id="ai-relations-transactions-提交成功回调"></a>
 #### 提交成功回调
-
-业务需要在数据库提交成功后刷新权限、清理业务缓存或发送进程内通知时，使用 `com.yulinlin.data.core.transaction.TransactionUtil.afterCommit(Runnable)`：
 
 ```java
 @Transactional
@@ -2742,50 +2776,39 @@ public void changeNickname(String id, String nickname) {
 }
 ```
 
-上例是方法片段，`userRepository` 为业务仓库，`security` 为注入的 `ISecurityManager`。刷新指定用户资料；若是当前用户，则更新本线程快照，不续期或撤销 JWT。实际业务还应保留输入校验。无状态 JWT 案例每次请求重新加载权限，单纯修改角色无需遍历刷新全部会话。`@Transactional` 经 `yulinlinTransactionManager` 接入路由事务；`@JoinTransaction` 和 `SessionUtil.route().transaction(...)` 也使用同一入口。`TransactionUtil` 只向当前框架事务注册，不为其他事务管理器提供回调兜底。
+userRepository 和 security 是业务注入的仓库、权限服务。也可调用 `route.afterCommit(action)`。
 
-| 场景 | 行为 |
-| --- | --- |
-| 框架业务事务成功提交 | 先清理旧代理状态并解绑上下文，处理相关缓存失效，再通知固定 `TransactionListener.afterCommit()`，最后按注册顺序同步执行业务回调 |
-| 路由事务嵌套、同时访问多个数据源 | 共用当前线程的上下文，等最外层完成后每个回调执行一次 |
-| 回滚、rollback-only 或提交失败 | 不触发提交成功通知，丢弃业务回调 |
-| `@Transactional` 使用框架适配器 | 与路由事务完全一致，不等待其他 Spring 事务 |
-| 仅有其他 Spring 管理器的事务、没有框架事务上下文 | 拒绝注册，提示先开启框架事务 |
-| 仅手动开启具体 Session 的连接资源 | 不构成业务事务，不能注册回调；必须通过 RouteSession 开启 |
-| 没有活动的框架事务 | 抛出 `IllegalStateException`，不静默立即执行 |
-| 清理、监听器或某个回调失败 | 仍尝试后续清理与回调，最终抛出首个异常，其他异常保留为 suppressed；已提交的数据不再回滚 |
-
-回调在当前线程执行，不是异步任务，也不是 `.queue()`。管理器先清理原事务的代理状态、解绑上下文，再发出 `afterCompletion()` 和成功通知；回调中新开的框架事务使用新上下文，不会被原事务的收尾逻辑误清理。不要在回调里修改原事务代理；普通读取显式 `.autoUpdate(false)`，多步写业务用新的框架事务边界。RBAC 案例的 `findSnapshotById` 使用普通查询快照，避免继承外层 `@JoinSync` 的代理策略。
-
-回调开始前，框架 JDBC 连接已完成提交与释放。因此回调中再次调用 `SessionUtil.route().transaction(...)` 会建立新的框架事务；这只是旧事务结束后的新事务，不代表支持活动事务内的 `REQUIRES_NEW`。若另外包在原生 Spring 事务中，两者完全独立，本回调不会等待该原生事务，也不能保证它提交成功。
-
-提交后回调失败不代表数据库写入失败，调用方不能盲目重试原始写入。它是进程内通知，应用在提交后异常退出可能来不及执行；需要可靠投递的外部消息仍由业务持久化任务或 Outbox 处理。
-
-具体 Session 的 `startTransaction/commitTransaction/rollbackTransaction` 是管理器调用的资源生命周期，不再转发管理器，也不维护业务嵌套深度。业务代码不得手动调用它们，否则会绕过统一的代理写回、跨数据源协调、缓存失效和回调；JDBC 无活动资源的写操作会报错。
+- 回调登记在当前范围。内层成功后合并进父层，保持注册顺序；内层回滚时丢弃，最外层实际提交后才执行一次。
+- 最外层提交顺序：提交前监听 → 代理 flush → JDBC commit/释放 → 清理代理与上下文 → afterCompletion → 缓存失效 → 固定 afterCommit 监听 → 业务回调。
+- 回滚、失效或提交失败不发成功通知。提交结果不明确时仍尝试清理缓存。
+- 没有活动 ORM 事务时注册回调会报错；具体 Session 的资源事务不等于 ORM 业务事务。
+- 清理或某个回调失败仍尝试后续任务，最后抛首个异常，其余放 suppressed。已经提交的数据不会因此回滚，不能盲目重试原始写入。
+- 回调同步运行在当前线程，可以开启新的 ORM 事务；这是旧事务完成后的新事务，不是 REQUIRES_NEW。不要修改旧代理。
+- 这是进程内通知，不是可靠消息投递；需要可靠投递时由业务使用持久化任务/Outbox。
 
 <a id="ai-relations-transactions-路由是唯一业务入口"></a>
 #### 路由是唯一业务入口
 
-以下为方法体片段，两个 Request 已构造，并明确指定各自的数据源组：
+Wrapper、Repository、注解和 callback 都通过 RouteSession。具体 Session 的 startTransaction/commitTransaction/rollbackTransaction、保存点方法是底层资源接口，不用于业务手动组合。RouteSession 保留手动生命周期方法以兼容已有调用，必须同线程、按栈配对；推荐统一迁移到 transaction。
 
-```java
-insertRequest.setSession("mysql");
-updateRequest.setSession("sqlite");
-RouteSession route = SessionUtil.route();
-route.transaction(() -> {
-    route.insert(insertRequest);
-    route.update(updateRequest);
-    return null;
-});
-```
+同一线程不得混用不同 RouteSession 的事务。一次事务不可跨组、跨节点或跨线程；不提供分布式事务、XA 或自动重试。
 
-`route.isOpenTransaction()` 表示当前线程是否存在业务事务；具体 Session 的同名方法只表示自身资源是否已开启，不等于新的业务事务。业务事务必须在开启它的同一线程结束。
+<a id="ai-relations-transactions-迁移说明"></a>
+#### 迁移说明
 
-嵌套是共享外层事务的计数，不是保存点。执行失败/嵌套回滚标记 rollback-only，即使业务捕获异常，外层不能继续正常提交。跨库和多连接只是本地事务协调，不是分布式原子提交。
+本次属于事务语义变更，需要一起升级 core、jdbc 和数据库模块：
+
+1. 移除业务配置里的 yulinlinTransactionManager、RouteTransactionManager、TransactionListenerManager、EnableTransactionManagement 和额外事务拦截器。
+2. 删除 Transactional 中的 transactionManager 等非默认选项；注解默认对受检异常也回滚。明确需要提交某类业务异常时写 noRollbackFor。
+3. 将捕获 Spring DuplicateKeyException/DataAccessException 的业务处理改成 ORM DuplicateDataException/OrmException。
+4. 原来依赖“内层失败使外层全部回滚”的业务，继续向外抛异常，或显式标记外层 rollback-only。现在捕获内层异常后可继续。
+5. 原来跨库事务必须拆成独立业务步骤；对原子性有要求时由业务重新设计。
+6. 需要整批成功或全回滚时，把 batch 包进 transaction；仅把 parallel-connections 设为 1 不会使事务外 batch 变成原子事务。
+7. 自定义 Session 只有真正实现物理事务时才能声明 supportsTransactions；需要嵌套还必须实现保存点。MongoDB/ES 普通 CRUD 不受此限制。
 
 ---
 
-下一步：返回[关联与事务主题目录](relations/README.md)按需选择相关专题。
+下一步：返回[关联与事务主题目录](relations/README.md)。
 
 ---
 
@@ -3115,7 +3138,7 @@ SessionUtil.route().transaction(() ->
 <a id="ai-relations-auto-update-自动更新"></a>
 ### 自动更新
 
-自动更新捕获事务内的 setter 修改，在提交前统一更新数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。现有 `ProxyChanges` 按需保存在管理器的统一 `TransactionContext` 中，代理工厂不再维护独立事务 ThreadLocal；主对象和懒加载出的关联代理共用这份记录。单次查询开启：
+自动更新捕获事务内的 setter 修改，在事务边界刷新到数据库，不是每次 setter 立即执行 SQL，也不是后台线程写入。`ProxyChanges` 按需保存在 RouteSession 的统一 `TransactionContext` 中，代理工厂不维护独立事务 ThreadLocal；主对象和懒加载出的关联代理共用这份记录。单次查询开启：
 
 ```java
 SessionUtil.route().transaction(() ->
@@ -3130,7 +3153,9 @@ SessionUtil.route().transaction(() ->
         }));
 ```
 
-没有框架业务事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。setter 只保存脏字段的最终非 null 值，不为每次修改创建 Runnable；最外层提交前按数据源和实体类型批量写回，保留主键校验和乐观锁。内层提交不写回，回滚丢弃修改记录；回滚不会还原 Java 对象的内存值。这些更新不能放进 `afterCommitTasks`。
+没有 ORM 业务事务时，`.autoUpdate()` 会在执行 SQL 前提示“请开启事务”。setter 只保存脏字段的最终非 null 值，不为每次修改创建 Runnable；写回按实体类型合并为 JDBC 批处理，使用当前事务的同一连接，保留主键校验和乐观锁，不拆多连接。
+
+嵌套开始前先刷新外层修改，再建立保存点；内层成功时刷新内层修改并释放保存点，但数据库仍等最外层提交。内层回滚会恢复已有代理的字段、版本和懒加载状态，内层新建的代理失效，需要重新查询。最外层提交前刷新剩余修改；最外层回滚丢弃待写记录，不承诺还原已脱离事务的 Java 对象。保存点快照只恢复 ORM 跟踪的字段赋值，不撤销可变对象内部的任意修改。这些更新不能放进 `afterCommitTasks`。
 
 全局开启：
 
@@ -3290,8 +3315,8 @@ yulinlin:
 <a id="ai-write-sync-incremental-执行语义"></a>
 #### 执行语义
 
-1. 业务通过 Model/Request 正常写入，无须改每个调用点。
-2. RouteSession 的 `before` 已确定最终源组、表名和节点；实际写后过滤器生成独立快照，不保留业务 root。事务回滚会丢弃提交回调。
+1. 普通写入保持 Model/Request 用法；命中同步规则的 `.batch()` 请求必须放进显式 `route.transaction(...)`，否则在写入前拒绝。独立批次部分成功时无法准确重放整批，因此同步源不使用这一模式。
+2. RouteSession 的 `before` 已确定最终源组、表名和节点；实际写后过滤器生成独立快照，不保留业务 root。事务或嵌套保存点回滚会丢弃所属范围的提交回调。
 3. 最外层提交成功后立即尝试入队，不等待凑批。每条规则只有一个顺序消费者，不同规则可并发。
 4. 目标通过 `RouteSession.replayWrite` 直接重放已准备节点：保留源 ID/字段值，跳过业务 before/after 过滤器，不再次补 ID/默认时间，不递归产生同步任务。目标事务、缓存失效和 SQL 日志仍然生效。
 
@@ -3301,7 +3326,7 @@ yulinlin:
 | --- | --- |
 | 插入 | 重放相同 ID/值，不是 upsert；目标有重复主键时正常报错并暂停 |
 | 任意条件更新/删除 | 重放相同条件与字段节点，包括 inc/dec；影响行数为 0 也可以重放 |
-| 批量操作 | 一个任务携带原请求的节点集合与 batch 选项；容量按节点数计 |
+| 批量操作 | 源端须有显式事务；一个任务携带该请求的节点集合，目标 JDBC 单连接提交，不继承独立 batch 提示；容量按节点数计 |
 | `.queue()` | 排队时不捕获，后台实际执行、事务提交后才入同步队列 |
 | EntityCounter | 捕获聚合后实际执行的写请求，不捕获每一次 submit |
 | 懒同步代理 | 代理在提交阶段实际刷出的框架写请求也登记同步任务 |
@@ -3520,11 +3545,22 @@ yulinlin:
 
 这些数都必须是正整数，并按数据库模块独立生效。MySQL、PostgreSQL 与 H2 默认最多 4 个连接；调用 `.batch()` 时，把整批数据均匀分成最多 4 个大组，一组一个任务/连接。同 SQL 复用 PreparedStatement，每满配置行数执行一次 executeBatch，尾批也执行。SQLite 固定单写连接，但仍可独立设置 execute-batch-size。
 
-只有 .batch()、执行器、请求阈值和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池会自动限制有效并发数，其他连接池应按其容量设置 parallel-connections。H2 可拆组，但多个连接仍受文件锁、索引和写入热点影响。4 是每 Session、每框架事务的上限，不是整个应用并发上限，也不保证 4 倍速度。
+只有事务外 batch、执行器和 supportsParallelWrites 等条件满足才并发；SQLite 或有效并发数为 1 时不拆组。Hikari 池限制有效并发数，其他连接池应按容量设置 parallel-connections。这个值是单次请求的连接并发上限，不是应用全局上限，也不保证线性提速。
 
-executeBatch 不是 commit。所有已提交任务结束后再提交/回滚及释放；失败不能让工作线程继续在已归还连接上执行。解析仍持有完整输入集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
+事务外 batch 使用独立自动提交连接，等待全部已派发任务完成后返回。任一任务失败则抛出首个异常，其余放 suppressed；已成功写入保留，相关缓存仍会失效。不能在任务还运行时归还连接，也不能把整体抛错理解成全部回滚。解析仍持有完整集合，不是流式导入。SUCCESS_NO_INFO 按成功命令计数，不保证精确行数。
 
-多个连接有各自的本地事务，中途提交失败无法撤销已成功提交的连接；跨连接未提交数据也不保证可读。严格单库原子性和事务内读己之写使用 parallel-connections: 1。
+需要整批原子性时使用显式事务：
+
+```java
+SessionUtil.route().transaction(() -> {
+    ModelInsertWrapper.newInstance("mysql", usersToInsert).batch().execute();
+    return null;
+});
+```
+
+事务内自动固定单连接，batch 不拆线程，但 execute-batch-size 仍控制 JDBC 发送批次。全部 SQL 成功后外层提交；异常逃出范围则回滚。普通非 batch 写请求在没有外层事务时也会自动包单连接事务。仅设置 parallel-connections: 1 不会改变事务外 batch 的独立自动提交语义。
+
+启用 data-sync 增量同步的源实体，batch 必须像上例一样包进显式事务；框架会在 before 阶段拒绝不满足条件的请求，避免部分成功后错误重放整批。
 
 ---
 
@@ -3587,9 +3623,11 @@ EntityCounter.update(VideoEntity.class, videoId)
 | 方法 | 行为 | 返回值 | 事务 |
 | --- | --- | --- | --- |
 | `execute()` | 立即生成 `column = column + ?` 原子更新 | 数据库影响行数 | 加入当前路由事务，包括适配后的 `@Transactional` |
-| `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用，后台使用独立事务 |
+| `submit()` | 合并进进程内计数区，定时或达到阈值后批量写入 | `void` | 必须在事务外调用；后台每个数据源/实体分组使用独立单连接 JDBC 事务 |
 
 聚合键是“调用线程解析出的数据源组 + 实体类型 + 主键”，字段增量保存在该行下面。默认选库和显式指定相同组时可以合并，模型更新与链式更新也共用聚合区。因此相同视频的一百次 `viewCount + 1` 最终可以变成一次 `view_count = view_count + 100`；同一行的 `viewCount`、`hotValue` 等字段也会进入一条 UPDATE。刷新时再按数据源和实体合成批量请求，底层继续使用现有 SQL 解析、JDBC batch、缓存失效和日志能力。
+
+后台更新和插入都不自动开启多连接 batch；其性能来自内存合并增量、减少 SQL 条数以及 JDBC 批处理。一个 JDBC 分组中普通 SQL 执行失败会回滚该组，之后再恢复增量或保留插入批次重试，避免独立多连接部分成功后整组重试导致重复累加。不同分组仍独立提交，整个 flush 不构成跨组事务。
 
 ```yaml
 yulinlin:
@@ -3600,7 +3638,9 @@ yulinlin:
       clear-cache: false
 ```
 
-`flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。
+`flush-size` 统计待刷新的更新行、插入维度组及待重试插入行总数，不是调用次数；达到阈值立即异步刷新。刷新采用稳定快照，新提交进入下一轮；更新分组失败时把增量合回活动区，插入分组失败则保留原批次等待重试。Spring 正常关闭会尝试最后刷新。可以注入 `EntityCounterManager` 调用 `flush()` 手动刷新或用 `pendingRows()` 查看待处理行数（不包括正在执行的首次刷新快照）。手动 flush 必须在 ORM 业务事务外调用，否则在取走缓冲区之前拒绝，避免计数被加入外层事务后随业务回滚而丢失。
+
+单连接事务不提供 exactly-once：连接断开导致提交结果不确定、提交后通知异常、非事务存储等情况下，重试仍可能重复。进程异常退出也可能丢失未落库增量；资金等关键账务不能直接依赖这个内存聚合器。
 
 上述按主键更新模式要求字段是可更新的数值属性，实体必须有且只有框架可识别的主键；`@JoinField(exist=false)`、`@JoinField(update=false)` 和主键字段不能作为更新计数器。`inc(field, x)` 表示加上 x，`dec(field, x)` 表示减去 x，两者都支持正负整数、小数，零不变；`dec(field, -0.5)` 等价于 `inc(field, 0.5)`。不传数量默认 1。
 
@@ -3768,7 +3808,7 @@ yulinlin:
 
 `flush-size` 按当前活动队列的 Node 总数计算，不按 Wrapper 调用次数，也不按单个分组计算。总数达到阈值时会立即异步刷新当前整个队列快照，不必等待 `flush-interval`；例如多个分组各有数百个 Node，合计达到默认的 `1024` 也会立即刷新。刷新快照再按实际 `EntitySession` 实例、请求类型和 `fromClass` 统一分组；该阈值不拆分请求，也不改变事务边界。
 
-不同 `EntitySession` 最多按 `concurrency` 并发刷新，同一 `EntitySession` 内的分组仍依次执行；单个分组调用过 `.batch()` 时，仍由该数据源的 `parallel-connections` 决定组内多连接。因此 `concurrency=4` 是同时处理的 Session 上限，不是全局物理连接上限。某组失败只重试该组，不阻塞其他 Session；写入成功后才按 `clearCache` 规则清理查询缓存。队列合并同组请求时，任一请求显式 `clearCache(true)` 就清理；全部显式为 `false` 才不清理；其余组合继续继承全局配置。
+不同 EntitySession 最多按 concurrency 并发刷新，同一 Session 内分组依次执行。单组显式 batch 在事务外按 parallel-connections 使用独立连接，部分失败不能撤销成功写入，后续重试可能重复执行，必须使用业务幂等；需要原子性的队列请求不要启用 batch。普通组独立事务。cache 清理在成功提交后执行；独立 batch 部分失败也清理。clearCache 合并规则仍是显式 true 优先，全部 false 才关闭。
 
 这是进程内队列，应用异常退出可能丢失尚未刷新数据，不替代消息队列。队列没有硬容量上限；如果持续生产速度高于数据库写入速度，待执行和待重试 Node 会继续占用内存，应在业务入口限流并监控积压。`.queue()` 面向零散小写入的定时聚合，不是大数据导入器；大集合直接在业务异步任务中调用 `.batch().execute()`。`.queue()` 必须在事务外调用，因为延迟任务不能加入调用线程的原事务；依赖严格先后关系、自增 ID、实时影响行数或强一致读取的写操作继续同步执行。应用正常关闭时框架会尝试最后刷新一次；数据库失败按 `retry-count` 在后续刷新中重试，超过次数后记录错误并丢弃。
 
@@ -5420,7 +5460,13 @@ public class VideoController {
 }
 ```
 
-interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。超出限制时返回 HTTP `429`、`Retry-After` 响应头和未加密的统一 JSON：
+只写 `@ApiLimit(count = 20)` 等价于 `count=20, interval="1m", by=LimitBy.IP`：同一 IP 对同一接口在本机一个 60 秒固定窗口内最多放行 20 次，第 21 次拒绝。窗口从该客户端的首次请求开始计时，满 interval 后下一次请求开启新窗口。
+
+interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。
+
+超限时拦截器抛出 `com.yulinlin.security.limit.ApiLimitException`，不写响应体、不提交响应，Controller 不会执行。异常继承 ResponseStatusException，默认 HTTP 429，携带 Retry-After 响应头。业务方可通过 @ExceptionHandler 自己决定提示文案、返回结构和状态码。异常提供 getCount()、getInterval()、getBy() 和 getRetryAfterSeconds()；重试时间为距离本窗口结束的秒数，向上取整且至少为 1。
+
+引入 starter 且没有自定义处理器时，StarterExceptionHandler 保留 Retry-After 并返回默认 JSON：
 
 ```json
 {
@@ -5432,6 +5478,36 @@ interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@A
   "timestamp": 1792070400000
 }
 ```
+
+业务自定义示例（优先于 starter 的默认处理器）：
+
+```java
+import com.yulinlin.security.annotation.ApiCrypto;
+import com.yulinlin.security.limit.ApiLimitException;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import java.util.Map;
+
+@Order(Ordered.HIGHEST_PRECEDENCE)
+@RestControllerAdvice
+public class BusinessExceptionHandler {
+    @ApiCrypto(false) // 使用全局加密时，明确让这份错误提示保持明文
+    @ExceptionHandler(ApiLimitException.class)
+    public ResponseEntity<Map<String, Object>> limited(ApiLimitException error) {
+        return ResponseEntity.status(429)
+                .headers(error.getHeaders())
+                .body(Map.of(
+                        "code", "VIDEO_REQUEST_TOO_FAST",
+                        "message", "操作太频繁，请稍后再试",
+                        "retryAfterSeconds", error.getRetryAfterSeconds()));
+    }
+}
+```
+
+自定义处理器通过 headers(error.getHeaders()) 保留重试提示，也可按业务协议自行设置；不依赖 starter 时，同样可以使用上述处理器。不提供自定义处理器时由 Spring MVC 默认处理 HTTP 429，响应体采用应用自己的默认错误配置。
 
 各接口按 IP 或设备 ID 独立计数，不活跃记录随 interval 到期淘汰。maximum-size 限制本机保留的计数器数量；达到容量上限而被提前淘汰的客户端再次访问时会重新计数。多实例各自计数，不提供全局统一额度。
 
@@ -5611,7 +5687,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 class VideoController {
     @GetMapping("/video/{videoId}/play-url")
-    @ApiRisk(value = "video-play-url", resourceParam = "videoId")
+    @ApiRisk(value = "video-play-url", resource = "videoId")
     public String playUrl(@PathVariable String videoId) {
         // 只有风控允许才执行到这里，再调用业务 Service 生成链接。
         return "...";
@@ -5619,13 +5695,13 @@ class VideoController {
 }
 ```
 
-resourceParam 读取同名 MVC 路径变量或请求参数，路径变量优先。JSON 请求使用 resourceBody：
+资源统一用 resource 指定字段名，按“路径变量 → 请求参数（query/form）→ JSON 请求体”的顺序提取。GET、表单、JSON 都使用同一个注解属性；JSON 示例：
 
 ```java
 public record PlayRequest(String videoId) {}
 
 @PostMapping("/video/play-url")
-@ApiRisk(value = "video-play-url", resourceBody = "videoId")
+@ApiRisk(value = "video-play-url", resource = "videoId")
 public String playUrl(@RequestBody PlayRequest request) {
     // 风控已通过，请求体仍可正常使用；业务事务放在这里调用的 Service。
     return videoService.playUrl(request.videoId());
@@ -5638,29 +5714,29 @@ public String playUrl(@RequestBody PlayRequest request) {
 {"videoId":"video-123"}
 ```
 
-- resourceBody 支持点分隔嵌套字段，例如 video.id 对应 {"video":{"id":"video-123"}}；与 resourceParam 互斥。
-- 使用 @RequestBody DTO、Map、JsonNode、JSON 字符串或 HttpEntity<DTO> 接收。字段从转换后的对象提取，不消费或替换 Servlet 请求流；兼容已有 CryptoRequestBodyAdvice 解密。按应用 ObjectMapper 的字段命名规则读取。
-- 资源 ID 接受字符串或数字。字段缺失/null 时仍按登录用户＋行为统计，资源记为 null；空白、超过 256 字符、对象、数组或布尔值返回 400。
-- resourceBody 要求非空 JSON 对象（Content-Type 为 application/json 或 +json）；空请求体、无效 JSON 返回 400，非 JSON 类型返回 415。即使 @RequestBody(required=false)，空正文也不能绕过检查。反序列化失败的请求不计入这种行为；后续参数校验或业务失败不会撤回已记录行为。
-- 两个资源配置都不填时，只按登录用户＋行为统计，不必提取资源。JSON 中的 userId、behaviorType 不用于决定身份和规则。
+- resource 支持点分隔嵌套 JSON 字段，例如 video.id 对应 {"video":{"id":"video-123"}}；路径变量和请求参数则按完整字段名查找。
+- 同名值同时存在时，路径变量优先，其次请求参数，最后 JSON。已存在但为空白或不合法的值返回 400，不向后回退。一次请求只记录一次行为。
+- JSON 请求声明 Content-Type 为 application/json 或 +json，使用 @RequestBody DTO、Map、JsonNode、JSON 字符串或 HttpEntity<DTO> 接收。先完成现有 CryptoRequestBodyAdvice 解密和转换，再按应用 ObjectMapper 的字段命名规则提取；Controller 收到的对象保持正常。
+- 资源 ID 接受字符串或数字。所有来源均未找到/null 时，仍按登录用户＋行为统计，资源记为 null。空白、超过 256 字符、JSON 字段为对象/数组/布尔值时返回 400。
+- 空的可选请求体、无 Content-Type 或非 JSON 正文同样经过风控，只是不从正文提取资源。请求体是否必填、是否支持该格式仍由 Spring MVC 决定；无效 JSON 在转换/解析时返回 400。已经记录的行为不会因后续参数校验或业务失败撤回。
+- 不填写 resource 时，只按登录用户＋行为统计。客户端提交的 userId、behaviorType 不用于决定身份和规则。
 
-静态资源和 OPTIONS 不计入；MVC 异步再派发不会重复记录同一个请求。resourceBody 配置在没有 @RequestBody/HttpEntity 参数的方法上会报配置错误，避免静默跳过检查。
+静态资源和 OPTIONS 不计入；MVC 异步再派发不会重复记录。原先两个资源来源属性已统一为 resource，调用方直接替换属性名即可。
 
 需要自定义资源提取、明确分开续签/预加载或复用已验证身份时，采用 Java 接口：
 
 ```java
 import com.yulinlin.security.auth.ISecurityManager;
 import com.yulinlin.security.risk.RiskService;
+import com.yulinlin.security.risk.ApiRiskException;
 import com.yulinlin.security.risk.RiskModels.BehaviorEvent;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 // 在不带业务事务的入口中：
 String userId = securityManager.requireUser().getUserId();
-var decision = riskService.checkAndRecord(
-        new BehaviorEvent(userId, "video-play-url", videoId));
+var event = new BehaviorEvent(userId, "video-play-url", videoId);
+var decision = riskService.checkAndRecord(event);
 if (!decision.allowed()) {
-    throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "访问暂时受限");
+    throw new ApiRiskException(event, decision);
 }
 // 再调用带事务的业务 Service。
 ```
@@ -5670,6 +5746,41 @@ if (!decision.allowed()) {
 本模块统计的是已认证的重要接口调用尝试，不能把记录当成“确实成功取得播放地址”。业务后续失败仍保留行为。播放心跳、正常续签、预加载应使用其他行为或不接入该规则；资源相同的不同请求仍分别计数。
 
 BehaviorEvent 的第四个可选参数 eventId 只能由可信服务端提供。本机使用有界缓存，在保留期内尽量复用同一事件的结果；缓存淘汰或重启、跨实例后不保证计数层去重。数据库写入与后台重试按事件 ID 幂等。不要把任意客户端提供的固定 ID 用作事件 ID，否则会把不同请求错误合并。userId 最大 128 字符，resourceId 最大 256，eventId 最大 128；空白 ID 拒绝，resourceId/eventId 可为 null。
+
+<a id="ai-security-risk-自定义风控拦截提示"></a>
+### 自定义风控拦截提示
+
+@ApiRisk 判定不允许访问时，抛出 com.yulinlin.security.risk.ApiRiskException，参数、表单和 JSON 请求使用同一种异常。检查入口不设置响应头、不提交响应体，Controller/业务方法不会执行；业务方可以使用 @ExceptionHandler 自行决定状态码、文案和返回结构。
+
+ApiRiskException 继承 ResponseStatusException，默认 HTTP 429。getHeaders() 提供 Retry-After，按判定的 blockedUntil 与抛出时刻之差向上取整为秒，至少 1 秒；不再固定为 60 秒。getRetryAfterSeconds() 返回该值，getEvent() 返回行为信息，getDecision() 返回判定结果（含限制截止时间和命中规则）。这些详情供服务端处理，不要把整个异常或判定直接序列化给客户端。
+
+```java
+import com.yulinlin.security.annotation.ApiCrypto;
+import com.yulinlin.security.risk.ApiRiskException;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import java.util.Map;
+
+@Order(Ordered.HIGHEST_PRECEDENCE)
+@RestControllerAdvice
+public class BusinessRiskExceptionHandler {
+    @ApiCrypto(false) // 启用全局加密时，让这份错误提示保持明文
+    @ExceptionHandler(ApiRiskException.class)
+    public ResponseEntity<Map<String, Object>> riskBlocked(ApiRiskException error) {
+        return ResponseEntity.status(429)
+                .headers(error.getHeaders())
+                .body(Map.of(
+                        "code", "VIDEO_RISK_BLOCKED",
+                        "message", "访问过于频繁，请稍后再获取播放链接",
+                        "retryAfterSeconds", error.getRetryAfterSeconds()));
+    }
+}
+```
+
+使用 starter 且没有自定义处理器时，StarterExceptionHandler 保留 HTTP 429、Retry-After 并返回默认 R 错误结构；不使用 starter 时，交给 Spring MVC 默认异常处理。OBSERVE 模式仍放行；匿名请求和参数错误分别维持 401、400。手工调用 checkAndRecord 仍返回 Decision，上面的 Java 示例可在拒绝时抛出同一种异常。
 
 <a id="ai-security-risk-规则语义"></a>
 ### 规则语义
@@ -5745,10 +5856,10 @@ DefaultRiskService 不承担 JWT 撤销，亦不自动踢人；自定义处置�
 <a id="ai-security-risk-验证"></a>
 ### 验证
 
-模块测试覆盖两类规则、窗口边界、跨分钟间隔、同一用户并发、队列溢出、写入失败重试、MVC 拦截、JSON DTO/嵌套字段/解密请求体、配置绑定、H2 实际建表/恢复/清理与版本防回退。H2 同时验证普通模式与 MYSQL 兼容模式，不等于真实 MySQL 服务端验证；模块不再维护 MySQL 专用 SQL。RiskPostgresqlIntegrationTest 在显式提供 pg.test.url 时使用独立随机 Schema 验证真实 PG，并清理该 Schema。
+模块测试覆盖两类规则、窗口边界、跨分钟间隔、同一用户并发、队列溢出、写入失败重试、MVC 拦截、专用风控异常及业务自定义响应、JSON DTO/嵌套字段/解密请求体、配置绑定、H2 实际建表/恢复/清理与版本防回退。H2 同时验证普通模式与 MYSQL 兼容模式，不等于真实 MySQL 服务端验证；模块不再维护 MySQL 专用 SQL。RiskPostgresqlIntegrationTest 在显式提供 pg.test.url 时使用独立随机 Schema 验证真实 PG，并清理该 Schema。
 
 ```text
-mvn -pl security-risk -am test -Dtest=Risk*Test,OrmBehaviorStoreTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn -pl security-risk -am test -Dtest=Risk*Test,ApiRiskExceptionTest,OrmBehaviorStoreTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 性能参数需结合实际用户数、调用频率、数据库吞吐压测，不承诺固定 QPS。
@@ -8044,11 +8155,11 @@ public void changeProfile(String id, String username) {
 }
 ```
 
-- `@Transactional` 经默认的 `yulinlinTransactionManager` 委托 RouteSession；连接由框架独立提交，不复用 Spring JDBC 事务。`@JoinSync` 只决定作用域内查询是否返回自动更新代理。
-- 默认只对 RuntimeException/Error 回滚，受检异常也需回滚时写 `@Transactional(rollbackFor = Exception.class)`。目前只支持 REQUIRED 及默认隔离/超时、非只读语义，完整边界见[事务注解兼容](#ai-relations-transactions-spring-事务注解兼容)。
+- `@Transactional` 和 `@JoinTransaction` 由同一个 ORM Advisor 委托 RouteSession，嵌套使用 JDBC 保存点，不注册 Spring 事务管理器。`@JoinSync` 只决定查询是否返回自动更新代理。
+- 默认对所有逃出事务范围的异常回滚，包括受检异常；显式 noRollbackFor 可覆盖普通业务异常。非默认 Spring 传播、隔离、超时、只读或事务管理器配置会报错，详见[注解兼容](#ai-relations-transactions-spring-事务注解兼容)。
 - 必须通过 Spring Bean 从外部调用 public 方法；`this.changeProfile(...)` 式自调用会绕过 Spring AOP。
 - 不要将代理 Entity 传给异步任务、虚拟线程或事务外的 Controller。它只能在创建它的原线程和原事务中 setter。
-- 业务失败让异常离开事务方法。如果必须捕获，应继续抛出或明确设置 rollback-only，不要吞掉后继提交。
+- 业务失败让异常离开事务范围；可忽略的操作包进内层 transaction，并在外层捕获。内层回滚后外层可继续，致命资源错误除外。
 - 只读方法不加 `@JoinSync`。全局 `yulinlin.data.auto-update=true` 适合对边界非常一致的项目；一般项目优先显式方法注解。
 - Repository 方法可使用 `@JoinSync` 只增强特定查询，但仍需外层 Service 活动事务。推荐默认放在 Service，避免事务和更新意图分散。
 
@@ -8142,7 +8253,7 @@ public int importUsers(List<UserEntity> users) {
 }
 ```
 
-- 普通集合写入先使用 JDBC batch；数据足够大、数据库与连接池有余量时，才启用 `.batch()` 多连接拆分。
+- 普通集合写入先使用 JDBC batch；事务外显式 batch 可拆独立连接并允许部分成功。需要整批原子性时包进 transaction，事务内自动单连接。
 - `parallel-connections` 控制一个框架事务的最大物理连接数，`execute-batch-size` 控制一次 `executeBatch()` 的行数，都应结合连接池和数据库实测。
 - SQLite 单文件只有一个写者，Session 会拒绝多连接拆组；不要用增加写线程的方式解决 SQLite 锁竞争。
 - 业务上可以每批 128 个对象提交给上层，底层仍由 `execute-batch-size` 限制 JDBC 批大小。不为每 128 条数据创建一个新线程或新事务。

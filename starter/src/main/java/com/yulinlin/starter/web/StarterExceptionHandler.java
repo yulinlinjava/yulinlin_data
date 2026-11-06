@@ -51,7 +51,8 @@ public class StarterExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<R<Void>> handleResponseStatus(ResponseStatusException error) {
         HttpStatusCode status = error.getStatusCode();
-        return response(status, status.value(), message(error.getReason(), "请求处理失败"));
+        return ResponseEntity.status(status).headers(error.getHeaders())
+                .body(R.fail(status.value(), message(error.getReason(), "请求处理失败")));
     }
 
     @ExceptionHandler(Exception.class)

@@ -1,5 +1,7 @@
 # Admin ORM 事务人工验证
 
+本目录用于 admin 应用集成与人工验证案例，包括事务验证、行为回放和报告导出。各库模块的单元测试与模块集成回归放在各自的 `src/test/java`，资源放在各自的 `src/test/resources`；目录约定见[测试代码布局](../../../doc/internal/maintenance.md#测试代码布局)。
+
 直接运行 [AdminOrmTransactionTest](java/com/yulinlin/admin/jdbc/AdminOrmTransactionTest.java)。
 
 这是使用真实内存 H2 的 JUnit 5 测试，不使用 `@SpringBootTest`，不启动 admin，也不读取业务数据源配置。每个方法使用独立临时数据库，结束后释放连接；已有 admin 数据库不受影响。不需要配置 Redis、MySQL、PG 或 JWT 密钥。

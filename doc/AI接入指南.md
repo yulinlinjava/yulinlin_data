@@ -3522,7 +3522,7 @@ syncManager.resumeAfterRepair("video-search", true);  // 丢弃该失败头任�
 - 不做双向冲突处理，也不做级联转发：A→B 的重放不会触发 B→C。需要多个目标时直接配置 A→B、A→C。
 - 全量是按实体主键复制/覆盖，不删除目标额外记录，不是完整数据库备份；只提供人工 API，不提供启动自动全量、创建时间筛选、在线一致性快照或自动对账。全量检查点不等于增量队列具备持久化可靠性。
 
-新增模块本轮仅完成代码和静态核对，回归测试源码位于 admin 测试目录，按要求未编译、未运行测试；尚未验证真实 MySQL/PostgreSQL 服务端组合。
+模块回归位于 data-sync/src/test/java；[事务范围测试](../data-sync/src/test/java/com/yulinlin/sync/SyncTransactionScopeTest.java)覆盖嵌套回滚、提交后入队、独立写入及查询/写入拦截分离。内存回归不等于真实 MySQL/PostgreSQL 服务端组合验证。
 
 ---
 
@@ -7786,7 +7786,7 @@ HttpUtil.setClient(client);
 - 不在每次请求中创建连接池，也不按无限多超时值缓存客户端。
 - 测试普通请求、错误截断、未知长度上传、状态检查、下载失败保护、并发超时和 close 所有权。
 - 测试自定义 Bean 退让、@Primary、静态/注入一致、关闭后解绑；初始化阶段优先注入。
-- 测试源码放在 admin/src/test。新增测试不代表已执行；遵守用户关于不编译、不运行测试和不运行 YAML 属性绑定测试的要求。
+- HTTP 执行器的模块回归放在 core/src/test/java，资源放在 core/src/test/resources；admin 只保留示例应用的集成验证。新增测试不代表已执行；遵守用户关于不编译、不运行测试和不运行 YAML 属性绑定测试的要求。
 
 ---
 

@@ -50,6 +50,8 @@
 
 小专题是唯一正文源；旧的十篇大专题已拆分移除，不保留平行版本。文件清单与 AI 导出范围由 [topics.json](topics.json) 管理，新增页面同时更新所属主题导航与清单。
 
+测试随被测模块维护，源码和资源分别放在各模块的 `src/test/java`、`src/test/resources`；admin 保留应用集成和人工验证案例，详见[测试代码布局](internal/maintenance.md#测试代码布局)。
+
 文档导出使用 `./doc/build-ai-docs.ps1`，只生成文档并检查相对链接、章节锚点和代码围栏，不编译 Java、不执行测试。详见[维护约定](internal/maintenance.md)。
 
 历史性能和测试结果保留原日期与环境，不代表本次文档迁移重新执行过验证。目录内的 admin.sql、code.sql、quartz.sql 是历史脚本，不是当前迁移方案，不自动执行。

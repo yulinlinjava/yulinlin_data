@@ -117,7 +117,7 @@ syncManager.resumeAfterRepair("video-search", true);  // 丢弃该失败头任�
 - 不做双向冲突处理，也不做级联转发：A→B 的重放不会触发 B→C。需要多个目标时直接配置 A→B、A→C。
 - 全量是按实体主键复制/覆盖，不删除目标额外记录，不是完整数据库备份；只提供人工 API，不提供启动自动全量、创建时间筛选、在线一致性快照或自动对账。全量检查点不等于增量队列具备持久化可靠性。
 
-新增模块本轮仅完成代码和静态核对，回归测试源码位于 admin 测试目录，按要求未编译、未运行测试；尚未验证真实 MySQL/PostgreSQL 服务端组合。
+模块回归位于 data-sync/src/test/java；[事务范围测试](../../data-sync/src/test/java/com/yulinlin/sync/SyncTransactionScopeTest.java)覆盖嵌套回滚、提交后入队、独立写入及查询/写入拦截分离。内存回归不等于真实 MySQL/PostgreSQL 服务端组合验证。
 
 ---
 

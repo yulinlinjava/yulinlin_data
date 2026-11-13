@@ -197,7 +197,7 @@ com.yulinlin.jdbc.mydb.MydbAutoConfiguration
 
 `EntitySession` 只暴露执行与资源协议，不声明 `setQueryCache`。继承 AbstractSession 的实现由工厂调用具体类的初始化方法；CacheCoreAutoConfiguration 收集 QueryCache Bean 并构造 CacheRegistry。工厂和 RouteSession 统一注入 registry.defaultCache()，分别负责查询缓存与写后失效，不在注册时互相覆盖。无实现且未指定默认值使用 NoOpQueryCache，单实现自动选中；多个实现通过 yulinlin.cache.default 选择，名称重复或显式选择不存在的名称时报错。新 Provider 应提供稳定且唯一的 providerName；三个现有模块固定为 caffeine/ehcache/redis，不增加 group 属性。
 
-CacheRegistry 不是 QueryCache，不能再作为 Provider 注册，否则会重复计数或形成循环依赖。CacheClient 只负责 getCache()/getCache(name) 选择及只读清单，RoutingCacheClient 为每个实现复用一个 DefaultCache（实现 Cache），由 Cache 提供业务读写、泛型回源、批量和清理。不提供 ORM 表/实体手动清理入口，不引入 ORM 路由/注解桥接。批量默认逐条调用，不保证原子性；不新增调度层。ORM 不增加缓存名参数，也不广播失效。无 Provider 时默认返回空 Cache，ORM 保持无缓存运行。旧 QueryCaches.single 仅用于无显式默认配置的手动装配兼容，Spring 工厂不再使用。Provider 的资源仍由原 Bean 销毁方法关闭，注册表/客户端不能重复关闭。缓存选择、批量/泛型操作与清理隔离的回归源码位于 admin/src/test/java/com/yulinlin/regression/cache/CacheRegistryTest.java；按要求未编译、未运行，未新增 Spring YAML 绑定测试。
+CacheRegistry 不是 QueryCache，不能再作为 Provider 注册，否则会重复计数或形成循环依赖。CacheClient 只负责 getCache()/getCache(name) 选择及只读清单，RoutingCacheClient 为每个实现复用一个 DefaultCache（实现 Cache），由 Cache 提供业务读写、泛型回源、批量和清理。不提供 ORM 表/实体手动清理入口，不引入 ORM 路由/注解桥接。批量默认逐条调用，不保证原子性；不新增调度层。ORM 不增加缓存名参数，也不广播失效。无 Provider 时默认返回空 Cache，ORM 保持无缓存运行。旧 QueryCaches.single 仅用于无显式默认配置的手动装配兼容，Spring 工厂不再使用。Provider 的资源仍由原 Bean 销毁方法关闭，注册表/客户端不能重复关闭。缓存选择、批量/泛型操作与清理隔离的模块回归按被测实现归属 cache-core 或对应 Provider 的 src/test；仅验证 admin 应用接入的案例放在 admin。
 
 多个模块都可能注入同一 @Primary DataSource。group 名不同不代表物理源已隔离；业务应显式绑定工厂、池和组，完整例子在 [数据源接入](../datasources/routing.md#多数据源注册)。
 

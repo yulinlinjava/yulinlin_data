@@ -15,12 +15,12 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 
 ```text
 业务 → Model / Wrapper → INode → QueryRequest / ExecuteRequest
-  → RouteSession：初选节点 → before → 按最终请求调整路由
+  → RouteSession：初选节点 → beforeQuery / beforeWrite → 按最终请求调整路由
   → EntitySession / AbstractSession：公共执行流程
       → ParseManager + 编码 Buffer → SQL / SDK 请求
       → 查询缓存命中，或调用数据库执行器 → 解码为实体
       → 查询结果关联加载、代理增强
-  → RouteSession：after → 返回
+  → RouteSession：查询逐行 afterRow / 写入 afterWrite → 返回
 
 写入事务与保存点由 RouteSession 协调；
 实际连接、SQL / DSL 和驱动行为由数据库模块负责。
@@ -81,7 +81,8 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 
 - 已删除整文件注释的 `BufferToBean`、ES `CommandNodeParse` 及失效的注册注释，并清理编解码、Wrapper、工具和 Admin 中被注释的旧实现；这些原本不参与编译或运行。另移除 lang、repository、admin 的 POM 中已注释的旧依赖或打包配置，不改变生效的依赖和打包方式。
 - 已删除未接入任何实现或解析器的 `IConditionObjectWrapper`，以及 `IMetricsWrapper` / `MetricsWrapper` 中只返回 `null` 的 `object(...)` 占位方法。它们没有可用的内置查询功能，但删除仍属于源码/API 不兼容变更；相关调用方须迁移、统一模块版本并重新编译。
-- 保留 `IEntityFilter` 的实体类型匹配、`IEvent` 的默认事件发布、`LoginInterceptor` 的替换协议、`INode` 等标记接口，以及 MySQL 解析兼容类和 `AbstractAnnotationBeanPostProcessor` 继承桥。这些类型不能按“空壳”处理。
+- `IRequestFilter`、`IEntityFilter`、`IFilter/IFilterManager.before/after` 和管理器的整结果入口已移除；IFilter 只保留 test/order，查询和写入使用 `IQueryFilter`、`IWriteFilter`。实体类型匹配直接由 test 实现，对象增强统一 afterRow，afterWrite 只接收实际影响行数，不修改返回结果。
+- 保留 `IEvent` 的默认事件发布、`LoginInterceptor` 的替换协议、`INode` 等标记接口，以及 MySQL 解析兼容类和 `AbstractAnnotationBeanPostProcessor` 继承桥。这些类型不能按“空壳”处理。
 - 抽象执行协议中尚未完善的方法不等于废弃方法。例如 ES `executeCount` 属于会话协议，不能按无用方法删除；现已通过 CountWrapper 解析器和原生 Count API 补齐普通文档计数。分组计数仍明确不支持，边界与回归说明见 [ES 普通查询计数与分页](../datasources/elasticsearch.md#普通查询计数与分页)。
 
 清理回归覆盖：[core API 与扩展保留](../../core/src/test/java/com/yulinlin/data/core/wrapper/CoreApiCleanupTest.java)、[ES 入口边界](../../elasticsearch/src/test/java/com/yulinlin/elasticsearch/EsQueryBoundaryTest.java)、[MongoDB 原生文档条件与更新](../../mongodb/src/test/java/com/yulinlin/mongodb/MongoDocumentCompatibilityTest.java)。构建时应清理已删除类型对应的旧 class 文件，避免被重新打包。

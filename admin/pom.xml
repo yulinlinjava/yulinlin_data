@@ -74,6 +74,25 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>security-risk</artifactId>
+            <version>${yulinlin.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- 本地历史库回放使用对应 ORM 方言，不改变 admin 运行时数据源。 -->
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>mysql</artifactId>
+            <version>${yulinlin.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${yulinlin.version}</version>
+            <scope>test</scope>
+        </dependency>
 
 
 

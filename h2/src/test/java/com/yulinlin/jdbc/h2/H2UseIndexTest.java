@@ -216,7 +216,7 @@ class H2UseIndexTest {
             var source = QueryRequest.newInstance(Fact.class, new SelectWrapper<>().table("repro_minute"))
                     .useIndex(INDEX).autoUpdate(false);
             var route = f.route(new IFilterManager() {
-                @Override public BaseRequest before(String group, BaseRequest original) {
+                @Override public QueryRequest<?> beforeQuery(String group, QueryRequest<?> original) {
                     var select = new SelectWrapper<>().table("repro_minute");
                     select.fields().field("id");
                     select.where().eq("projectCode", "123");
@@ -226,7 +226,7 @@ class H2UseIndexTest {
             assertEquals(9, route.count(source));
             assertTrue(f.lastSql().getSql().contains(hint()));
             var other = f.route(new IFilterManager() {
-                @Override public BaseRequest before(String group, BaseRequest original) {
+                @Override public QueryRequest<?> beforeQuery(String group, QueryRequest<?> original) {
                     return QueryRequest.newInstance(Fact.class, new SelectWrapper<>().table("other_table"));
                 }
             });

@@ -338,11 +338,10 @@ class H2TransactionFailureTest {
 
     @Test void tenantFilterCanChooseTheFinalDatasourceBeforeTransactionBinding() throws Exception {
         var filter = new com.yulinlin.data.core.filter.IFilterManager() {
-            @Override public com.yulinlin.data.core.request.BaseRequest before(String group, com.yulinlin.data.core.request.BaseRequest request) {
+            @Override public com.yulinlin.data.core.request.ExecuteRequest<?> beforeWrite(String group, com.yulinlin.data.core.request.ExecuteRequest<?> request) {
                 request.setSession("other");
                 return request;
             }
-            @Override public Object after(String group, com.yulinlin.data.core.request.BaseRequest request, Object data) { return data; }
         };
         try (var f = new Fixture("", filter); var other = new Fixture("")) {
             other.session.setGroup("other");

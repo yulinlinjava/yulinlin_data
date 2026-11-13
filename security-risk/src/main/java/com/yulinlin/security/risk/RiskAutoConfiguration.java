@@ -20,8 +20,8 @@ public class RiskAutoConfiguration {
     }
     @Bean(destroyMethod = "close") @ConditionalOnMissingBean(RiskService.class)
     public DefaultRiskService riskService(RiskProperties properties, BehaviorStore store,
-                                          ObjectProvider<RiskRule> rules, ObjectProvider<RiskActionHandler> handlers) {
-        return new DefaultRiskService(properties, store, rules.orderedStream().toList(), handlers.orderedStream().toList());
+                                          ObjectProvider<RiskDetector> detectors, ObjectProvider<RiskControl> controls) {
+        return new DefaultRiskService(properties, store, detectors.orderedStream().toList(), controls.getIfAvailable());
     }
     @Bean
     public SmartInitializingSingleton riskInitializer(ObjectProvider<RiskService> services) {

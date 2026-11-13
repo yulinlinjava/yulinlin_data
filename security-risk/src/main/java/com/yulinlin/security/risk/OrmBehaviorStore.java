@@ -19,7 +19,7 @@ import java.util.function.Function;
 /** Ordinary ORM CRUD only. Live decisions never call this store. */
 public final class OrmBehaviorStore implements BehaviorStore {
     private final RiskProperties properties;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json = new ObjectMapper().configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private RouteSession route;
     private String group;
 
@@ -29,11 +29,11 @@ public final class OrmBehaviorStore implements BehaviorStore {
 
     @Override public void initialize() {
         route = Objects.requireNonNull(SessionUtil.route(), "请先配置 ORM 数据源");
-        var session = route.session(properties.getStorage().getGroup());
+        var session = route.session(properties.getGroup());
         group = session.group();
         // Use the datasource's existing CREATE / VALIDATE / NONE policy.
-        session.initializeSchema(List.of(EventRow.class, MinuteRow.class, StateRow.class));
-        for (Class<?> type : List.of(EventRow.class, MinuteRow.class, StateRow.class)) {
+        session.initializeSchema(List.of(EventRow.class, StateRow.class));
+        for (Class<?> type : List.of(EventRow.class, StateRow.class)) {
             select(type).page(1, 1).selectList(); // Fail at startup if required tables are unavailable.
         }
     }
@@ -67,25 +67,9 @@ public final class OrmBehaviorStore implements BehaviorStore {
             var previous = select(StateRow.class).eq("id", state.streamId()).selectOne();
             if (previous != null && previous.version >= state.version()) return null;
 
-            List<MinuteRow> minutes = new ArrayList<>();
-            for (Minute minute : snapshot.minutes()) {
-                var row = new MinuteRow();
-                row.id = DefaultRiskService.hash(state.streamId() + ":" + minute.start());
-                row.streamId = state.streamId(); row.minuteStart = minute.start();
-                row.version = minute.version(); row.payload = json.writeValueAsString(minute);
-                minutes.add(row);
-            }
-            if (!minutes.isEmpty()) {
-                Set<String> existing = new HashSet<>();
-                select(MinuteRow.class).in("id", minutes.stream().map(row -> row.id).toList())
-                        .selectList().forEach(row -> existing.add(row.id));
-                ModelInsertWrapper.newInstance(group, minutes.stream().filter(row -> !existing.contains(row.id)).toList()).execute();
-                ModelUpdateWrapper.newInstance(group, minutes.stream().filter(row -> existing.contains(row.id)).toList()).execute();
-            }
-
             var row = new StateRow();
             row.id = state.streamId(); row.subjectKey = subjectKey(state.subject()); row.version = state.version();
-            row.updatedAt = state.updatedAt(); row.retainUntil = Math.max(state.blockedUntil(), state.exemptUntil());
+            row.updatedAt = state.updatedAt(); row.retainUntil = state.exemptUntil();
             row.payload = json.writeValueAsString(state);
             if (previous == null) ModelInsertWrapper.newInstance(group, row).execute();
             else ModelUpdateWrapper.newInstance(group, row).execute();
@@ -103,13 +87,10 @@ public final class OrmBehaviorStore implements BehaviorStore {
             if (states.isEmpty()) break;
             for (StateRow row : states) {
                 if (!seen.add(row.subjectKey)) continue;
+                // V1 minute-based state is incompatible; keep old history and start fresh observation.
+                if (!json.readTree(row.payload).has("detectorStates")) continue;
                 State state = json.readValue(row.payload, State.class);
-                var rows = select(MinuteRow.class).eq("streamId", state.streamId())
-                        .gte("minuteStart", Math.max(cutoff, state.resetAt())).lte("version", state.version())
-                        .orderBy("minuteStart", true).selectList();
-                List<Minute> minutes = new ArrayList<>();
-                for (MinuteRow minute : rows) minutes.add(json.readValue(minute.payload, Minute.class));
-                consumer.accept(new Restored(state, minutes));
+                consumer.accept(new Restored(state));
                 if (seen.size() >= limit) break;
             }
         }
@@ -132,7 +113,6 @@ public final class OrmBehaviorStore implements BehaviorStore {
 
     @Override public void cleanup(long cutoff, long now) {
         cleanup(EventRow.class, "occurredAt", cutoff, now, row -> row.id);
-        cleanup(MinuteRow.class, "minuteStart", cutoff, now, row -> row.id);
         cleanup(StateRow.class, "updatedAt", cutoff, now, row -> row.id);
     }
 

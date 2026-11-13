@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class QueryRequest<E> extends BaseRequest<E> {
 
@@ -154,6 +155,22 @@ public class QueryRequest<E> extends BaseRequest<E> {
 
         return SessionUtil.route().page(this);
 
+    }
+
+    /** Consumes plain entities synchronously, without caching, association loading or auto-update. */
+    public long selectEach(Consumer<? super E> consumer) {
+        return SessionUtil.route().selectEach(this, consumer);
+    }
+
+    /** Validates explicit options without mutating the request. Global auto-update is not inherited. */
+    public void validateSelectEach() {
+        if (getCacheMode() != CacheMode.NONE)
+            throw new IllegalArgumentException("selectEach 不支持查询缓存，请使用 cache(false)");
+        if (Boolean.TRUE.equals(autoUpdate))
+            throw new IllegalArgumentException("selectEach 不支持自动更新，请使用 autoUpdate(false)");
+        if (!(wrapper instanceof com.yulinlin.data.core.wrapper.ISelectWrapper)
+                && !(wrapper instanceof CommandNode<?> command && command.getType() == ParseType.select))
+            throw new UnsupportedOperationException("selectEach 仅支持普通 SELECT 或原生查询 SQL");
     }
 
 

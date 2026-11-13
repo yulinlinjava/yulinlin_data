@@ -6,7 +6,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface RiskService {
-    /** Trusted server-side entry, before the business transaction. No database IO on the calling thread. */
+    /** Trusted server-side entry before the business transaction. Default detection has no IO;
+     * business RiskControl is synchronous, BehaviorStore writes are asynchronous. */
     Decision checkAndRecord(BehaviorEvent event);
     Optional<View> inspect(Subject subject);
     List<View> listRisks(int offset, int limit);

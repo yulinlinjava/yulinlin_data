@@ -93,6 +93,11 @@ public class BaseModelSelectWrapper<E,
         return  request.selectList();
     }
 
+    /** Reads plain entities one at a time; does not create proxies or load associations. */
+    public long selectEach(Consumer<? super E> consumer) {
+        return request.selectEach(consumer);
+    }
+
     public Page<E> selectPage(int pageNumber,int pageSize){
         page(pageNumber,pageSize);
         return selectPage();

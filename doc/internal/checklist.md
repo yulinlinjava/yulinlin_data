@@ -13,7 +13,7 @@
 
 1. 先识别改动属于入口编排、公共执行流程、事务生命周期、节点解析、类型转换还是数据库资源；不要将所有逻辑堆到 RouteSession。
 2. 同时查看查询、count、分页、立即写入、queue 和并行批次是否经过改动入口，避免只修单一路径。
-3. before 必须先于 SQL/缓存 Key 生成；after 不等于 afterCommit，事务回调不能由日志或监控代替。
+3. beforeQuery/beforeWrite 必须先于 SQL/缓存 Key 生成；对象统一经 afterRow 增强，afterWrite 不等于 afterCommit，事务回调不能由日志或监控代替。
 4. 查询缓存发生在代理增强之前；提交前 flush 代理，提交后处理缓存失效；不得缓存或跨线程复用事务代理。
 5. 具体 Session 不得反向协调业务事务；它只管理自己的连接/客户端资源。工厂应完整初始化依赖，路由注册不负责补齐。
 6. 数据库专属语法放 Parse，类型转换放本模块 CoderManager/ICoder，驱动绑定/读取放 Session；公共转换工具可复用，不让一个数据库规则影响其他数据库。

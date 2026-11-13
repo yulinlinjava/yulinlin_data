@@ -1,21 +1,19 @@
 package com.yulinlin.sync;
 
-import com.yulinlin.data.core.filter.IRequestFilter;
-import com.yulinlin.data.core.request.BaseRequest;
+import com.yulinlin.data.core.filter.IWriteFilter;
 import com.yulinlin.data.core.request.ExecuteRequest;
 
 /** RouteSession 的实际写后通知，不在 queue() 接收请求时触发。 */
-public final class SyncRequestFilter implements IRequestFilter {
+public final class SyncRequestFilter implements IWriteFilter {
     private final SyncManager manager;
     public SyncRequestFilter(SyncManager manager) { this.manager = manager; }
-    @Override public ExecuteRequest<?> updateBefore(String session, ExecuteRequest<?> request) {
+    @Override public ExecuteRequest<?> beforeWrite(String session, ExecuteRequest<?> request) {
         String source = request.getSession();
         manager.validateWrite(source == null || source.isBlank() ? session : source, request);
         return request;
     }
-    @Override public Object updateAfter(String session, BaseRequest<?> request, Object result) {
-        manager.capture(session, (ExecuteRequest<?>) request);
-        return result;
+    @Override public void afterWrite(String session, ExecuteRequest<?> request, int affectedRows) {
+        manager.capture(session, request);
     }
     @Override public int order() { return Integer.MAX_VALUE; }
 }

@@ -4,7 +4,7 @@ import com.yulinlin.security.risk.RiskModels.*;
 import java.util.List;
 import java.util.function.Consumer;
 
-/** Called only by background workers, except explicit administrative history queries. */
+/** Initialization/recovery runs at startup, writes and cleanup on workers, history on its admin caller. */
 public interface BehaviorStore {
     void initialize() throws Exception;
     /** Idempotent by Event.id. One batch must either commit entirely or roll back. */

@@ -7,6 +7,7 @@ import com.yulinlin.data.lang.util.Page;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.function.Consumer;
 
 /** 数据源执行与资源协议；业务 CRUD 和事务必须通过 RouteSession，不作为独立业务入口。 */
 public interface EntitySession extends LoadBalanceNode,TransactionSession {
@@ -38,6 +39,11 @@ public interface EntitySession extends LoadBalanceNode,TransactionSession {
     <E> Page<E> page(QueryRequest<E> request );
 
     <E> List<E> select(QueryRequest<E> request );
+
+    /** Synchronous plain-row consumption; no cache, relations or managed proxies. Returns consumed rows. */
+    default <E> long selectEach(QueryRequest<E> request, Consumer<? super E> consumer) {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " 不支持 selectEach");
+    }
 
     <E> Integer count(QueryRequest<E> request );
 

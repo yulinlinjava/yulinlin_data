@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 @Slf4j
 public abstract class AbstractJdbcSession extends AbstractSession implements EntitySession {
@@ -35,6 +36,18 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     private volatile int parallelConnections = properties.getParallelConnections();
     private volatile int executeBatchSize = properties.getExecuteBatchSize();
     private final ThreadLocal<JdbcTransactionResources> transactionResources = new ThreadLocal<>();
+    private final ThreadLocal<Boolean> consumingRow = new ThreadLocal<>();
+
+    private void checkNotConsumingRow() {
+        if (Boolean.TRUE.equals(consumingRow.get()))
+            throw new IllegalStateException("selectEach 消费者内不能重入当前 Session 的查询、写入或事务操作");
+    }
+
+    protected final void consumeSelectEachRow(IDataBuffer row, Consumer<IDataBuffer> consumer) {
+        consumingRow.set(true);
+        try { consumer.accept(row); }
+        finally { consumingRow.remove(); }
+    }
 
     protected DataSource dataSource;
 
@@ -95,10 +108,14 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
 
     protected List<IDataBuffer> resultSetToBuffer(ResultSet resultSet ) throws Exception {
+        var list = new ArrayList<IDataBuffer>();
+        consumeResultSet(resultSet, list::add);
+        return list;
+    }
 
-
-
-        ArrayList<IDataBuffer> list =  new ArrayList<>();
+    /** Shared forward reader: metadata once per query, a fresh decoder buffer for every row. */
+    protected final long consumeResultSet(ResultSet resultSet, Consumer<IDataBuffer> consumer) throws Exception {
+        long consumed = 0;
         ResultSetMetaData metaData = resultSet.getMetaData();
         int columnTotal = metaData.getColumnCount();
         String[] labels = new String[columnTotal];
@@ -110,7 +127,6 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
         while (resultSet.next()) {
             IDataBuffer buffer = getCoderManager().createDecoderBuffer();
 
-            list.add(buffer);
 
 
             for (int i = 1; i <= columnTotal; i++) {
@@ -130,15 +146,17 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
                 }
                 buffer.put(columnName,value);
             }
-
+            consumer.accept(buffer);
+            consumed++;
         }
 
-        return list;
+        return consumed;
     }
 
 
     @Override
     protected CompletableFuture<Integer> executeUpdateAsync(List<ParseResult> results, RequestType requestType) {
+        checkNotConsumingRow();
         if (isOpenTransaction()) return CompletableFuture.completedFuture(executeUpdate(results, requestType));
         return CompletableFuture.supplyAsync(() -> executeIndependentUpdate(results), getThreadPoolExecutor());
     }
@@ -150,6 +168,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     protected Integer executeUpdate(List<ParseResult> results, RequestType requestType) {
+        checkNotConsumingRow();
         if (!isOpenTransaction()) return executeIndependentUpdate(results);
         JdbcTransactionResources resources = transactionConnections();
         Connection connection = resources.getConnection();
@@ -192,6 +211,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     /** Queries and diagnostics share the same transaction resource and connection lifetime. */
     @lombok.SneakyThrows
     protected final <T> T withQueryConnection(QueryConnectionWork<T> work) {
+        checkNotConsumingRow();
         JdbcTransactionResources resources = isOpenTransaction() ? transactionConnections() : null;
         if (resources == null) {
             try (Connection connection = dataSource.getConnection()) {
@@ -234,6 +254,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
     @Override
     public void startTransaction() {
+        checkNotConsumingRow();
         if (transactionResources.get() == null)
             transactionResources.set(new JdbcTransactionResources(dataSource, group(), String.valueOf(cluster())));
     }
@@ -249,6 +270,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     }
 
     private void finishTransactionResource(boolean rollback) {
+        checkNotConsumingRow();
         JdbcTransactionResources resources = transactionResources.get();
         transactionResources.remove();
         if (resources != null) resources.finish(rollback);
@@ -267,6 +289,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     }
 
     protected final JdbcTransactionResources transactionConnections() {
+        checkNotConsumingRow();
         JdbcTransactionResources resources = transactionResources.get();
         if (resources == null) throw new IllegalStateException("JDBC 事务资源尚未开启，请通过 RouteSession 执行写操作");
         // 同一业务线程内延迟取得唯一物理连接，保存点也使用该连接。
@@ -280,6 +303,7 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
     @Override public void releaseSavepoint(Object savepoint) { transactionConnections().releaseSavepoint(savepoint); }
 
     @Override public void rollbackToSavepoint(Object savepoint) {
+        checkNotConsumingRow();
         JdbcTransactionResources resources = transactionResources.get();
         if (resources == null) throw new IllegalStateException("JDBC 事务资源尚未开启");
         resources.rollbackToSavepoint(savepoint);

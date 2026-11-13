@@ -12,7 +12,7 @@ class ApiRiskExceptionTest {
     private static final BehaviorEvent EVENT = new BehaviorEvent("user", "video", "v123");
 
     @Test void preservesServerDetailsAndRoundsRetryAfterToSeconds() {
-        var match = new Match("continuous", 0, 120_000, 20, 2, 19, 18);
+        var match = new Match("active-access", "continuous", 0, 120_000, "命中", java.util.Map.of("requests",20L));
         var decision = new Decision(false, Status.BLOCKED, 161_001, List.of(match));
         var error = new ApiRiskException(EVENT, decision, 100_000);
         assertSame(EVENT, error.getEvent());

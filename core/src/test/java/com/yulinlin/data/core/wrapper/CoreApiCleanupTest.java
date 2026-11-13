@@ -2,9 +2,15 @@ package com.yulinlin.data.core.wrapper;
 
 import com.yulinlin.data.core.anno.MetricsEnum;
 import com.yulinlin.data.core.aop.AbstractAnnotationBeanPostProcessor;
-import com.yulinlin.data.core.filter.IEntityFilter;
+import com.yulinlin.data.core.filter.IQueryFilter;
+import com.yulinlin.data.core.filter.IWriteFilter;
+import com.yulinlin.data.core.filter.IFilter;
+import com.yulinlin.data.core.filter.IFilterManager;
+import com.yulinlin.data.core.filter.SimpFilterManager;
 import com.yulinlin.data.core.node.metrics.*;
+import com.yulinlin.data.core.request.BaseRequest;
 import com.yulinlin.data.core.request.QueryRequest;
+import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.wrapper.impl.MetricsWrapper;
 import com.yulinlin.data.lang.aop.BaseAnnotationBeanPostProcessor;
 import com.yulinlin.data.lang.event.EventPublishManager;
@@ -16,6 +22,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -25,7 +32,9 @@ class CoreApiCleanupTest {
     @ParameterizedTest
     @ValueSource(strings = {
             "com.yulinlin.data.core.wrapper.IConditionObjectWrapper",
-            "com.yulinlin.data.core.session.BufferToBean"
+            "com.yulinlin.data.core.session.BufferToBean",
+            "com.yulinlin.data.core.filter.IRequestFilter",
+            "com.yulinlin.data.core.filter.IEntityFilter"
     })
     void removedLegacyTypesAreNotPackaged(String name) {
         assertThrows(ClassNotFoundException.class, () -> Class.forName(name));
@@ -59,13 +68,59 @@ class CoreApiCleanupTest {
     }
 
     @Test
-    void entityFilterRemainsAUsableBusinessExtension() {
-        var filter = new IEntityFilter<Sample>() { };
+    void queryFilterCanMatchEntityAndSubtypesExplicitly() {
+        var calls = new AtomicInteger();
+        class EntityQueryFilter implements IQueryFilter {
+            @Override public boolean test(String group, BaseRequest request) {
+                Class<?> type = request.getEntityClass();
+                return type != null && Sample.class.isAssignableFrom(type);
+            }
+            @Override public void afterRow(String group, QueryRequest<?> request, Object row) { calls.incrementAndGet(); }
+        }
+        var filter = new EntityQueryFilter();
         assertTrue(filter.test("test", request(Sample.class)));
         assertTrue(filter.test("test", request(SampleChild.class)));
         assertFalse(filter.test("test", request(String.class)));
         var request = request(Sample.class);
-        assertSame(request, filter.before("test", request));
+        var manager = new SimpFilterManager(List.of(filter));
+        assertSame(request, manager.beforeQuery("test", request));
+        manager.checkSelectEach("test", request);
+        manager.afterRow("test", request, new Sample());
+        manager.afterRow("test", request(SampleChild.class), new SampleChild());
+        manager.afterRow("test", request(String.class), "unmatched");
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void writeFilterCanMatchEntityAndSubtypesExplicitly() {
+        var affected = new AtomicInteger();
+        class EntityWriteFilter implements IWriteFilter {
+            @Override public boolean test(String group, BaseRequest request) {
+                Class<?> type = request.getEntityClass();
+                return type != null && Sample.class.isAssignableFrom(type);
+            }
+            @Override public void afterWrite(String group, ExecuteRequest<?> request, int count) { affected.addAndGet(count); }
+        }
+        var manager = new SimpFilterManager(List.of(new EntityWriteFilter()));
+        manager.afterWrite("test", ExecuteRequest.ofInsert(Sample.class), 1);
+        manager.afterWrite("test", ExecuteRequest.ofInsert(SampleChild.class), 2);
+        manager.afterWrite("test", ExecuteRequest.ofInsert(String.class), 4);
+        manager.checkSelectEach("test", request(Sample.class));
+        manager.afterRow("test", request(Sample.class), new Sample());
+        assertEquals(3, affected.get());
+    }
+
+    @Test
+    void filtersNoLongerExposeMixedRequestOrWholeResultHooks() throws Exception {
+        for (Class<?> type : List.of(IFilter.class, IQueryFilter.class, IWriteFilter.class,
+                IFilterManager.class, SimpFilterManager.class)) {
+            assertFalse(Arrays.stream(type.getMethods()).anyMatch(method ->
+                    List.of("before", "after", "afterQuery").contains(method.getName())), type.getSimpleName());
+        }
+        assertEquals(List.of("order", "test"), Arrays.stream(IFilter.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName).sorted().toList());
+        assertEquals(void.class, IFilterManager.class.getMethod("afterWrite", String.class, ExecuteRequest.class, int.class).getReturnType());
+        assertEquals(IQueryFilter.class, IQueryFilter.class.getMethod("supportsSelectEach").getDeclaringClass());
     }
 
     @Test

@@ -51,16 +51,35 @@ class SyncTransactionScopeTest {
     @Test void matchedParallelSourceRequiresExplicitAtomicScopeBeforeWriting() {
         try (var manager = manager(new MemorySyncTaskStore())) {
             var filter = new SyncRequestFilter(manager);
-            assertThrows(IllegalStateException.class, () -> filter.updateBefore("source", request(true)));
-            assertDoesNotThrow(() -> filter.updateBefore("other", request(true)));
+            assertThrows(IllegalStateException.class, () -> filter.beforeWrite("source", request(true)));
+            assertDoesNotThrow(() -> filter.beforeWrite("other", request(true)));
             var rerouted = request(true);
             rerouted.setSession("source");
-            assertThrows(IllegalStateException.class, () -> filter.updateBefore("other", rerouted));
-            assertDoesNotThrow(() -> filter.updateBefore("source", request(false)));
+            assertThrows(IllegalStateException.class, () -> filter.beforeWrite("other", rerouted));
+            assertDoesNotThrow(() -> filter.beforeWrite("source", request(false)));
             RouteSession.builder().build().transaction(() -> {
-                assertDoesNotThrow(() -> filter.updateBefore("source", request(true)));
+                assertDoesNotThrow(() -> filter.beforeWrite("source", request(true)));
                 return null;
             });
+        }
+    }
+
+    @Test void writeOnlyFilterCapturesOnCommitAndDoesNotParticipateInQueries() {
+        var store = new MemorySyncTaskStore();
+        try (var manager = manager(store)) {
+            var filters = new com.yulinlin.data.core.filter.SimpFilterManager(List.of(new SyncRequestFilter(manager)));
+            var query = com.yulinlin.data.core.request.QueryRequest.newInstance("select 1", java.util.Map.of(), Row.class);
+            assertDoesNotThrow(() -> filters.checkSelectEach("source", query));
+            assertSame(query, filters.beforeQuery("source", query));
+            filters.afterRow("source", query, new Row());
+            assertEquals(0, store.pendingTasks("test"));
+            RouteSession.builder().build().transaction(() -> {
+                var write = filters.beforeWrite("source", request(false));
+                filters.afterWrite("source", write, 1);
+                assertEquals(0, store.pendingTasks("test"));
+                return null;
+            });
+            assertEquals(1, store.pendingTasks("test"));
         }
     }
 }

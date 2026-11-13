@@ -32,13 +32,12 @@ class RiskPostgresqlIntegrationTest extends OrmTestSupport {
             var event=new Event("stable",RiskServiceTest.USER,"video",1000,result);
             store.writeEvents(List.of(event));store.writeEvents(List.of(event));
             assertEquals(1,store.history(RiskServiceTest.USER,0,2000,0,10).size());
-            State state=new State(RiskServiceTest.USER,"stream","signature",2,0,1000,0,0,0,List.of(),1000);
-            store.writeSnapshot(new Snapshot(state,List.of(new Minute(0,20,19,0,Map.of("dense",19L),2))));
-            store.writeSnapshot(new Snapshot(new State(RiskServiceTest.USER,"stream","signature",1,0,0,0,0,0,List.of(),0),
-                    List.of(new Minute(0,1,0,-1,Map.of(),1))));
+            State state=OrmBehaviorStoreTest.state(2,1000,0);
+            store.writeSnapshot(new Snapshot(state));
+            store.writeSnapshot(new Snapshot(OrmBehaviorStoreTest.state(1,0,0)));
             var restored=new ArrayList<Restored>();store.restore(0,10,restored::add);
             assertEquals(2,restored.getFirst().state().version());
-            assertEquals(20,restored.getFirst().minutes().getFirst().requests());
+            assertEquals(state,restored.getFirst().state());
             store.cleanup(3000,3000);
             assertTrue(store.history(RiskServiceTest.USER,0,3000,0,10).isEmpty());
         } finally {

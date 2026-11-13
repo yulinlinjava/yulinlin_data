@@ -39,6 +39,8 @@
 !/admin/src/test/**
 # 保留历史本地手工调试脚本的忽略行为。
 /admin/src/test/java/com/yulinlin/admin/A.java
+# 本机风控历史库连接信息；公开模板单独保留。
+/admin/src/test/resources/application-risk-local.yml
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/

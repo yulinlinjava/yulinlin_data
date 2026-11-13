@@ -11,6 +11,8 @@ import java.util.List;
 
 /** Shared JDBC execution with H2 SQL and startup schema initialization. */
 public class H2Session extends JdbcSession {
+    @Override protected int selectEachFetchSize() { return 1000; }
+
     @Override
     protected String explainPrefix() { return "EXPLAIN "; }
 

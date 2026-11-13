@@ -25,9 +25,9 @@ public final class ApiRiskException extends ResponseStatusException {
         this.decision = Objects.requireNonNull(decision, "decision");
         if (decision.allowed()) throw new IllegalArgumentException("放行结果不能构造 ApiRiskException");
         long remainingMillis = Math.max(0, decision.blockedUntil() - now);
-        this.retryAfterSeconds = Math.max(1, Math.ceilDiv(remainingMillis, 1_000));
+        this.retryAfterSeconds = decision.blockedUntil() <= 0 ? 0 : Math.max(1, Math.ceilDiv(remainingMillis, 1_000));
         var values = new HttpHeaders();
-        values.set(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
+        if (retryAfterSeconds > 0) values.set(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
         this.headers = HttpHeaders.readOnlyHttpHeaders(values);
     }
 

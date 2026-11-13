@@ -1647,6 +1647,7 @@ int affected = ModelUpdateWrapper.newInstance("mysql", patch)
 ### 本页导航
 
 - [查询条件与结果组织](#ai-orm-query-查询条件与结果组织)
+- [大结果集逐条消费](#ai-orm-query-大结果集逐条消费)
 - [计数与分页总数](#ai-orm-query-计数与分页总数)
 - [查看执行计划](#ai-orm-query-查看执行计划)
 - [查询条件对象](#ai-orm-query-查询条件对象)
@@ -1676,11 +1677,66 @@ var users = query.selectList();
 | and / not / where | 条件组合；按实际 Wrapper 接口使用 |
 | selectOne | 无结果返回 null；取第一条，不自动保证唯一 |
 | selectList / count | 列表 / 计数 |
+| selectEach(consumer) | H2、MySQL、PG 的普通查询逐条消费；返回 long 类型的成功消费条数，不查询总数 |
 | selectPage(page, size) | 数据库分页，调用前校验页码和大小 |
 | useIndex("idx_name", ...) | 仅 H2 生效，支持普通/分组查询、分页及派生 count；MySQL、PostgreSQL 等其他后端忽略合法提示、不报不支持错误，继续由数据库自动选择索引，详见 [H2 索引提示](#ai-datasources-h2-单次查询索引提示) |
 | explain() / explainCount() | H2、MySQL、PG 的普通 EXPLAIN：分别查看当前查询和派生 count 的原生计划，详见[查看执行计划](#ai-orm-query-查看执行计划) |
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
+
+<a id="ai-orm-query-大结果集逐条消费"></a>
+### 大结果集逐条消费
+
+`ModelSelectWrapper`、`QueryRequest` 和 `RouteSession` 提供 `selectEach`。底层 `EntitySession` 是数据源实现协议，业务仍通过 Wrapper／RouteSession 调用。当前支持 H2、MySQL、PostgreSQL 的普通查询及原生查询 SQL；分组 Wrapper 和其他数据源明确报不支持，不退回全量 List。
+
+```java
+long consumed = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+        .eq("status", 1)
+        .orderByAsc("id")
+        .selectEach(user -> {
+            // 当前线程中逐条处理，例如计算统计值、写入导出文件。
+            System.out.println(user.getUsername());
+        });
+```
+
+也可使用原生 SQL；参数仍走现有绑定和编解码，不拼接值：
+
+```java
+var request = QueryRequest.newInstance(
+        "select id, username from ai_demo_user where status = #{status} order by id",
+        java.util.Map.of("status", 1), DemoUser.class);
+request.setSession("mysql");
+long consumed = request.selectEach(user -> System.out.println(user.getUsername()));
+```
+
+- 边读取、边解码为新的普通实体／DTO、边调用消费者，不先构造完整 List。同步执行，消费者返回后才处理下一行；方法在全部消费结束后返回成功条数，空结果为 0，不额外执行 COUNT。
+- 条件、字段投影、排序、显式分页和 useIndex 保持原语义；没有分页时读取整个结果集。需要稳定顺序时显式排序，框架不改写为多次分页查询，也不自动重试已经交付过的行。
+- 不读取或写入查询缓存。显式 `.cache()`（含 CACHE_ONLY／REFRESH）报错，改用 `.cache(false)`；没有缓存也不需要额外配置。
+- 不调用关联增强，不创建懒加载／自动更新代理。仅映射查询返回的字段，关联字段保留模型默认值；对普通对象的修改不会自动写库。忽略全局／注解作用域的自动更新默认值，显式 `.autoUpdate(true)` 报错，使用 `.autoUpdate(false)`。不会修改请求选项，后续 `selectList` 仍按原配置执行。
+- RouteSession 保留 `IQueryFilter.beforeQuery` 与最终数据源路由；逐条解码后执行和列表共用的 `afterRow`，再交给消费者。默认 `InitFilter` 会对每个实现 `IInitEvent` 的实体调用一次 `init()`；内置 `TableLogicFilter` 继续在 SQL 中添加逻辑删除条件。查询过滤器默认支持，依赖关联或额外 SQL 时可通过 supportsSelectEach 返回 false，读取前即拒绝执行。纯写入过滤器不参与查询；见[流式查询与过滤器](#ai-orm-filters-流式查询与过滤器)。
+- 消费者、`afterRow` 和 `init()` 中都不能重入当前 RouteSession 的 ORM 查询、写入或事务操作；直接重入当前 JDBC Session 也会被拒绝。主结果集尚未关闭，不能在回调里查询关联、提交事务或开启嵌套事务。需要写库时在消费结束后另行处理，或显式设计独立的分批业务流程。
+- 已开启 ORM 事务时复用事务连接，不自行提交／回滚外层事务；消费者异常会原样向外传播，关闭结果集和语句并归还连接借用权，由现有事务边界决定业务回滚。已执行的消费者副作用不会自动撤销。事务外关闭本次取得的连接。
+- 复用原有 SQL 日志、慢查询阈值和执行监听器；成功或失败各记录一次执行。此入口的耗时包含读取、解码和消费者处理时间，不能直接当成纯数据库耗时。
+
+三种 JDBC 适配的资源处理：
+
+| 数据源 | selectEach 读取方式 |
+| --- | --- |
+| H2 | 前向、只读 ResultSet，fetchSize 提示 1000；ORM 不保留完整结果，H2 内部是否物化由执行计划决定 |
+| MySQL | Connector/J 前向、只读 ResultSet，fetchSize 使用驱动逐行读取标记，不要求修改 JDBC URL |
+| PostgreSQL | 前向、只读 ResultSet，fetchSize 为 1000；事务外临时关闭自动提交，读取结束后回滚只读查询事务并恢复原自动提交状态，再归还连接；已有 ORM 事务不做这段提交／回滚 |
+
+这些设置仅作用于 `selectEach` 的语句／连接生命周期，`selectList` 的语句设置、整结果缓存、关联和代理保持原样；对象后置增强统一使用 `afterRow`。驱动前提参见 [MySQL 流式读取](https://dev.mysql.com/doc/connector-j/en/connector-j-reference-implementation-notes.html)、[PG 游标读取](https://jdbc.postgresql.org/documentation/query/)。
+
+消费者保存所有对象仍会占用大量内存。数据库排序、聚合及驱动缓冲也可能占用资源，流式消费不保证总耗时更短或立即取得第一行。普通原生 SQL 的可执行内容仍由业务负责；不要传多条语句或把写入命令当成查询。
+
+测试覆盖逐行交付顺序、共享读取与解码、空结果、日期／NULL、参数绑定、分页／索引、异常资源释放、过滤器、事务复用、关联与列表行为回归。MySQL／PG 驱动调用协议有无外部库测试，另有可选真实服务器验证：
+
+```text
+mvn -pl h2,mysql,postgresql -am test -Dtest=JdbcSelectEachTest,H2SelectEachTest,MysqlSelectEachTest,PostgresqlSelectEachTest -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+真实 MySQL 测试使用 `-Dmysql.test.url=... -Dmysql.test.user=...` 和环境变量 `MYSQL_TEST_PASSWORD`；真实 PG 使用 `-Dpg.test.url=... -Dpg.test.user=...` 和 `PG_TEST_PASSWORD`。未提供 URL 时跳过对应真实服务器用例；这些 selectEach 用例只运行查询，不建表或修改数据。
 
 <a id="ai-orm-query-计数与分页总数"></a>
 #### 计数与分页总数
@@ -2451,34 +2507,50 @@ MongoDB 当前 `month` 的格式字符串为 `%Y-%m)`，结果多一个右括号
 
 [文档首页](README.md) / [ORM 开发](orm/README.md)
 
-通过 RouteSession 增强修改表名、请求和结果。
+查询和写入使用独立接口，对象后置增强统一使用 `afterRow`，全部由 RouteSession 调用。
 
-示例使用的基础模型见[实体映射与最小模型](#ai-orm-entity)；数据库配置见[数据源](datasources/README.md)。
+示例基础模型见[实体映射与最小模型](#ai-orm-entity)，数据库配置见[数据源](datasources/README.md)。
 
 <a id="ai-orm-filters-本页导航"></a>
 ### 本页导航
 
 - [请求与结果增强（过滤器）](#ai-orm-filters-请求与结果增强过滤器)
+- [查询拦截与对象增强](#ai-orm-filters-查询拦截与对象增强)
+- [写入拦截](#ai-orm-filters-写入拦截)
+- [流式查询与过滤器](#ai-orm-filters-流式查询与过滤器)
+- [迁移与自定义管理器](#ai-orm-filters-迁移与自定义管理器)
 
 <a id="ai-orm-filters-请求与结果增强过滤器"></a>
 ### 请求与结果增强（过滤器）
 
-实现 `IFilter` 或 `IRequestFilter` 并注册成 Spring Bean，即可自动加入过滤链。`order()` 从小到大执行，同序保留注册顺序。过滤器是共享实例，不要将当前用户、请求或分表名存入实例字段。
-
-增强统一由 RouteSession 执行，具体 Session 和 JdbcSessionFactory 不再注入过滤器管理器：
+实现 `IQueryFilter` 或 `IWriteFilter` 并注册成 Spring Bean，即可自动加入过滤链；一个 Bean 也可同时实现两者。`IFilter` 只保留 `test(group, request)` 和 `order()`，仅实现 IFilter 的 Bean 会在注册时被拒绝。order 从小到大执行，同序保留注册顺序；仅查询过滤器参与查询，仅写入过滤器参与写入，另一类的 test 也不会被调用。过滤器是共享实例，不要将当前用户、请求或分表名存入实例字段。
 
 ```text
-RouteSession.before → 最终 Request/数据源 → Session 解析、缓存/数据库、解码/代理 → RouteSession.after
+查询：RouteSession.beforeQuery → 最终请求/数据源 → EntitySession 查询与解码 → afterRow → 返回
+流式：RouteSession.beforeQuery → EntitySession.selectEach → afterRow → 业务 consumer
+写入：RouteSession.beforeWrite → 最终请求/数据源 → EntitySession 执行 → afterWrite
 ```
 
-`before` 在 SQL 解析和缓存 Key 构造之前执行，可以原地修改节点，也可以返回新的同类 Request，用于动态表名、租户条件或数据源选择。查询仍须返回 QueryRequest，写入仍须返回 ExecuteRequest，允许将删除转换为逻辑更新，不能返回 null。以下为配置方法片段，DemoUser 是本文示例实体，固定后缀仅演示可信的业务分表规则：
+| 接口 | 方法 | 约定 |
+| --- | --- | --- |
+| IQueryFilter | `QueryRequest<?> beforeQuery(String group, QueryRequest<?> request)` | 每个查询入口一次，SQL 解析、缓存 Key 生成之前处理 |
+| IQueryFilter | `void afterRow(String group, QueryRequest<?> request, Object row)` | 每个返回对象一次；原地增强，不替换、丢弃行或改分页总数 |
+| IWriteFilter | `ExecuteRequest<?> beforeWrite(String group, ExecuteRequest<?> request)` | 插入、更新、删除执行前处理，可将删除替换为逻辑更新 |
+| IWriteFilter | `void afterWrite(String group, ExecuteRequest<?> request, int affectedRows)` | 实际执行完成通知，不修改影响行数，不等于事务提交成功 |
+
+EntitySession/JdbcSession 不注入或调用过滤器，业务通过 Wrapper、QueryRequest 或 RouteSession 进入。普通列表的缓存、关联加载、懒加载和自动更新代理处理保持原有位置；过滤器拿到的是该入口完成这些处理后的对象。直接调用底层 EntitySession 不执行业务过滤。
+
+<a id="ai-orm-filters-查询拦截与对象增强"></a>
+### 查询拦截与对象增强
+
+`beforeQuery` 可以原地修改节点，也可以返回新的 QueryRequest，用于动态表名、租户条件或数据源选择，不能返回 null。以下为配置方法片段，固定后缀仅演示可信的业务分表规则：
 
 ```java
 @Bean
-public com.yulinlin.data.core.filter.IRequestFilter userTableFilter() {
-    return new com.yulinlin.data.core.filter.IRequestFilter() {
+public com.yulinlin.data.core.filter.IQueryFilter userTableFilter() {
+    return new com.yulinlin.data.core.filter.IQueryFilter() {
         @Override
-        public QueryRequest selectBefore(String group, QueryRequest<?> request) {
+        public QueryRequest<?> beforeQuery(String group, QueryRequest<?> request) {
             if (request.getFromClass() != DemoUser.class) return request;
             var node = request.getWrapper();
             if (node instanceof com.yulinlin.data.core.wrapper.ICountWrapper count) {
@@ -2493,20 +2565,97 @@ public com.yulinlin.data.core.filter.IRequestFilter userTableFilter() {
 }
 ```
 
-表名必须来自服务端可信规则，不能直接拼接客户端输入。改表名不改变 `fromClass`，它仍负责实体映射和编解码。插入、更新、删除、聚合同样修改各自的节点，批量请求须处理全部节点。替换查询节点优先使用 `request.copy(newWrapper)`，保留模型、fromClass、参数、路由、缓存和代理选项。最终请求改变 group 或 master/slave 时重新选库；后续 SQL、Key 和失效范围使用最终请求。
+表名必须来自服务端可信规则，不能直接拼接客户端输入。改表名不改变 fromClass，它仍负责实体映射和编解码。替换查询节点优先用 `request.copy(newWrapper)` 保留模型、参数、路由、缓存、索引和代理选项。最终请求改变 group 或 master/slave 时重新选库；SQL、缓存 Key 和失效范围使用最终请求。写入节点的替换遵循相同规则，批量请求须处理全部节点。
 
-| 入口 | `IFilter.after` 收到/返回 | `IRequestFilter` 默认分发 |
+| 查询入口 | beforeQuery | afterRow |
 | --- | --- | --- |
-| select、group | List | 调用一次 selectAfter |
-| page | Page | 对 Page.list 调用一次 selectAfter；替换列表时保留 total、extra |
-| count | Integer | 保持计数不变；需要增强时覆盖普通 IFilter.after |
-| insert、update、delete | Integer | 调用 updateAfter |
+| selectList、selectOne、group 的列表 | 一次 | 每条非 null 对象一次，空结果不执行 |
+| selectPage | 一次 | 仅当前页每条对象一次，内部 count/select 不重复增强 |
+| count | 一次 | 不执行 |
+| explain、explainCount | 一次 | 不执行，保留原生执行计划 |
+| selectEach | 一次 | 每条解码后、consumer 之前执行 |
 
-`after` 的新结果会真正返回给调用者；普通 IFilter 可以替换整个 Page。返回值须符合入口类型，计数和影响行数不能为 null；不要伪造乐观锁校验依赖的影响行数。分页内部 count/select 不重复增强。缓存命中同样执行 after，基础缓存不会保存后处理结果或事务代理；分页过滤当前页列表不重算数据库 total。
+例如为查询 DTO 补充展示字段，`UserView.displayName` 是 `@JoinField(exist = false)` 字段：
 
-延迟队列入队前执行一次 before 并保存增强后节点，后台刷新不再次改表名或选库；after 只在实际执行后调用。后台写后过滤器的 RuntimeException 只记录中文日志，保留实际执行结果，不因此重试已经执行的 Node。普通写入后处理失败则向外传播，并标记路由事务回滚。
+```java
+@Bean
+public com.yulinlin.data.core.filter.IQueryFilter userViewFilter() {
+    return new com.yulinlin.data.core.filter.IQueryFilter() {
+        @Override
+        public void afterRow(String group, QueryRequest<?> request, Object row) {
+            if (row instanceof UserView user) {
+                user.setDisplayName("用户：" + user.getUsername());
+            }
+        }
+    };
+}
+```
 
-after 不代表事务已经提交，提交成功通知使用 `TransactionUtil.afterCommit`。路由作用域按实际入栈次数清理，复用 Request 或过滤器异常不会通过旧 `sessionChange` 标记误弹外层路由。
+框架默认注册 `InitFilter`（order 为 9999），统一通过 afterRow 对实现 `IInitEvent` 的对象调用 `init()`；业务无需再手动调用。缓存命中也重新解码并增强，基础缓存不保存后处理结果或事务代理。增强顺序遵守 order，分页 total、extra 保持原样。修改自动更新代理的持久化字段仍遵守原有自动更新语义，展示数据宜放在非持久化字段或 DTO 中。
+
+<a id="ai-orm-filters-写入拦截"></a>
+### 写入拦截
+
+```java
+@Bean
+public com.yulinlin.data.core.filter.IWriteFilter writeLogFilter() {
+    return new com.yulinlin.data.core.filter.IWriteFilter() {
+        @Override
+        public void afterWrite(String group, ExecuteRequest<?> request, int affectedRows) {
+            org.slf4j.LoggerFactory.getLogger("business.write").info(
+                    "group={} operation={} affectedRows={}",
+                    group, request.getRequestType(), affectedRows);
+        }
+    };
+}
+```
+
+没有影响任何行的成功写入仍通知，SQL 执行失败不通知。批量请求按实际执行请求通知，不承诺每个对象单独通知。`TableLogicFilter` 同时实现查询与写入接口，查询前添加逻辑删除条件，删除前改成更新；`SyncRequestFilter` 仅实现写入接口，不影响查询或阻止流式读取。
+
+延迟队列入队前执行一次 beforeWrite 并保存增强后节点，后台刷新不再次改表名或选库；afterWrite 只在实际执行后调用。后台写后过滤器的 RuntimeException 只记录日志，保留实际执行结果，不因此重试已经执行的节点。普通写入后处理失败则向外传播，并标记当前路由事务回滚。事务外独立 batch 已成功执行的 SQL 不能因此撤销。
+
+afterWrite 不代表事务已经提交，提交成功通知使用 `TransactionUtil.afterCommit`。路由作用域按实际入栈次数清理，复用 Request 或过滤器异常不会误弹外层路由。
+
+<a id="ai-orm-filters-流式查询与过滤器"></a>
+### 流式查询与过滤器
+
+RouteSession 组合消费者：先执行 `filterManager.afterRow(group, request, row)`，然后调用业务 `consumer.accept(row)`。底层只负责读取、解码、调用消费者和释放资源，不知道过滤器的存在，不收集完整列表。查询前仍执行一次 beforeQuery，使用最终请求解析 SQL。
+
+新 IQueryFilter 默认支持流式查询。若对象增强依赖关联字段、懒加载或需要额外查库，应明确拒绝流式入口：
+
+```java
+@Override
+public boolean supportsSelectEach() {
+    return false; // 此过滤器依赖关联加载或需要额外执行 SQL。
+}
+```
+
+SimpFilterManager 检查最终请求匹配的查询过滤器；未允许时，在读取任何行或调用消费者之前抛出异常。supportsSelectEach 仅属于 IQueryFilter，纯写入过滤器不参与此检查。权限和租户限制必须在读取前完成，不能用返回 true 来跳过必要过滤。
+
+afterRow 不提供丢弃行、整列表排序或汇总语义；权限和租户过滤条件应在 beforeQuery 中加入 SQL。抛出异常时立即停止，本条不交给消费者，底层关闭读取资源并原样传播异常；已经执行的消费者副作用不会自动撤销。
+
+afterRow、init() 同消费者一样不能重入当前 RouteSession/底层 JDBC Session 的查询、写入或事务操作。如果 init 原本会查询数据库或依赖关联增强，请继续用 selectList。流式仍不提供缓存、关联查询、懒加载、自动更新；详见[大结果集逐条消费](#ai-orm-query-大结果集逐条消费)。
+
+<a id="ai-orm-filters-迁移与自定义管理器"></a>
+### 迁移与自定义管理器
+
+`IRequestFilter`、`IEntityFilter` 已移除。查询使用 `IQueryFilter.beforeQuery/afterRow`，写入使用 `IWriteFilter.beforeWrite/afterWrite`；原来的 selectAfter 整列表处理应迁移为逐行 afterRow，不再提供额外的混合请求接口。需要按实体匹配时，直接在查询或写入过滤器中实现 test：
+
+```java
+@Override
+public boolean test(String group, com.yulinlin.data.core.request.BaseRequest request) {
+    Class<?> type = request.getEntityClass();
+    return type != null && DemoUser.class.isAssignableFrom(type);
+}
+```
+
+此例匹配 DemoUser 及其子类；只匹配某个具体类型可使用 `type == DemoUser.class`。这里的 entityClass 是返回/操作对象类型；要按底层映射实体筛选，则使用 request.getFromClass()。
+
+`IFilter` 和 `IFilterManager` 的旧 before/after 已删除，没有兼容分发。旧 before 根据请求类别迁移到 beforeQuery 或 beforeWrite；旧 after 的对象处理迁移到 afterRow，写入通知迁移到 afterWrite。afterRow、afterWrite 都返回 void，不再提供替换整个 List/Page 或改写 count/影响行数的钩子。需要排序、汇总等整列表操作时，在业务拿到查询结果后处理。
+
+之前试用版的 afterEach 已统一为 `IQueryFilter.afterRow`，列表和流式共享同一实现。RouteSession 对 List/Page 中的非 null 对象逐条调用管理器 afterRow，保留原容器、total 和 extra；count 和执行计划不经过对象增强。管理器不再提供 afterQuery 整结果入口。
+
+直接自定义 IFilterManager 时分别实现 beforeQuery、beforeWrite、afterRow、afterWrite：前置方法默认返回原请求，两个后置方法默认无操作。`checkSelectEach(String group, QueryRequest<?> request)` 默认允许，自定义管理器若依赖关联加载或额外 SQL，可覆盖该方法并抛出异常。替换管理器后，过滤器和 InitFilter 的执行由自定义实现负责；一般直接注册过滤器 Bean，无需替换管理器。
 
 ---
 
@@ -3318,7 +3467,7 @@ yulinlin:
 1. 普通写入保持 Model/Request 用法；命中同步规则的 `.batch()` 请求必须放进显式 `route.transaction(...)`，否则在写入前拒绝。独立批次部分成功时无法准确重放整批，因此同步源不使用这一模式。
 2. RouteSession 的 `before` 已确定最终源组、表名和节点；实际写后过滤器生成独立快照，不保留业务 root。事务或嵌套保存点回滚会丢弃所属范围的提交回调。
 3. 最外层提交成功后立即尝试入队，不等待凑批。每条规则只有一个顺序消费者，不同规则可并发。
-4. 目标通过 `RouteSession.replayWrite` 直接重放已准备节点：保留源 ID/字段值，跳过业务 before/after 过滤器，不再次补 ID/默认时间，不递归产生同步任务。目标事务、缓存失效和 SQL 日志仍然生效。
+4. 目标通过 `RouteSession.replayWrite` 直接重放已准备节点：保留源 ID/字段值，跳过业务 beforeWrite/afterWrite 过滤器，不再次补 ID/默认时间，不递归产生同步任务。目标事务、缓存失效和 SQL 日志仍然生效。
 
 目标的租户隔离、改表名等业务过滤器也不会执行，因此只向明确授权、结构映射兼容的目标组同步。两个数据源应使用相容的字段映射与命名规则，不能借目标过滤器重新改写源表名。目标缓存失效默认跟随其配置，请求显式 clearCache 值会保留。
 
@@ -5611,12 +5760,12 @@ location /api/ {
 
 [接口安全](security/README.md) / 行为风控
 
-独立可选模块，保护获取播放链接等重要接口。按已认证用户和行为类型在内存中记录、判定；行为明细与统计异步批量写库。可以搭配 JWT、Sa-Token、Spring 或自定义认证实现，不注册第二个 ISecurityManager。
+独立可选模块，统计用户主动进入播放时获取播放链接的行为。快切按不同资源统计，全天候按时间覆盖统计；列表、预加载、心跳和续签应使用其他行为类型。组件负责识别，业务 RiskControl 负责是否限制、限制多久和存储限制状态。异步行为历史不作为限制是否有效的权威来源。
 
 <a id="ai-security-risk-依赖与最小配置"></a>
 ### 依赖与最小配置
 
-引入 com.yulinlin:security-risk:3.0，并选择已有的 mysql、h2 或 postgresql 数据源模块。默认 disabled，不创建队列、线程或表。默认 OrmBehaviorStore 只调用现有 ModelSelectWrapper、ModelInsertWrapper、ModelUpdateWrapper、ModelDeleteWrapper 与 RouteSession 事务；SQL 生成、参数绑定、批量执行、日志都交给 ORM。没有数据库方言分支或手写业务 SQL。
+引入 com.yulinlin:security-risk:3.0。默认 disabled；默认 ORM 行为存储配合 mysql、h2 或 postgresql，业务也可以提供自己的 BehaviorStore。
 
 ```xml
 <dependency>
@@ -5628,57 +5777,68 @@ location /api/ {
 
 ```yaml
 yulinlin:
-  mysql:
-    schema-mode: CREATE        # 复用已有数据源配置；使用 PG/H2 时改为对应模块
+  h2:
+    schema-mode: CREATE
   security:
     risk:
       enabled: true
-      mode: OBSERVE             # 默认；BLOCK 才临时拒绝
-      block-duration: 30m
-      memory:
-        maximum-size: 10000     # 用户＋行为的统计对象上限
-        retention: 24h          # 最多 7d
-        restore-on-startup: true
-      storage:
-        group: mysql           # 省略则使用 ORM 默认组
-        retention: 24h
-        cleanup-interval: 1h
-      async:
-        batch-size: 500
-        flush-interval: 1s
-        queue-capacity: 50000
-        overflow-policy: DROP_NEWEST
-        snapshot-interval: 5s
-        retry-count: 3
-        retry-interval: 5s
-        shutdown-timeout: 10s
+      mode: BLOCK          # 必须提供 RiskControl；OBSERVE 只观察新命中
+      group: risk-db       # ORM 数据源组名称，省略则默认组
       behaviors:
         video-play-url:
-          enabled: true
-          rules:
-            - id: continuous-access
-              type: ACTIVE_MINUTES
-              enabled: true
-              window: 120m
-              min-active-minutes: 120
-            - id: dense-access
-              type: DENSE_ACCESS
-              enabled: true
-              window: 120m
-              min-requests: 500
-              min-active-minutes: 60
-              short-gap: 10s
-              min-short-gap-ratio: 0.70
+          components: [fast-switch, active-access]
+          fast-switch:
+            rapid:
+              window: 5m
+              gap: 2s
+              min-videos: 50
+            normal:
+              window: 15m
+              gap: 5s
+              min-videos: 200
+              min-ratio: 0.70
+          active-access:
+            window: 6h
+            active-ratio: 0.90
+            min-requests: 60
 ```
 
-以上数值是观察起点，不是适合所有业务的封禁标准。先回放正常用户与采集样本，再切换 BLOCK。程序启动后不自动热加载配置。
+以上就是两个默认组件的默认阈值；可只配置行为名及 components。mode 未配置时为 OBSERVE。每个行为可设置 enabled=false；components 可为空以停用识别。已提供 RiskControl 时，即使当前组件只观察或行为已关闭，业务返回的已有有效限制仍会拦截。
 
-behaviorType 精确匹配配置键，仅接受小写字母、数字和短横线；首字符必须为字母，长度不超过 64。未配置的行为明确报错；enabled=false 的行为返回 DISABLED 并停止记录。规则 ID 在一个行为内唯一。窗口为整分钟、不超过内存保留期，storage.retention 不得短于 memory.retention；min-active-minutes 不超过窗口分钟数，比例为 0..1，queue-capacity 不小于 batch-size。
+内置组件可分别设置 fast-switch.mode / active-access.mode 覆盖全局模式。自定义组件使用 component-modes，例如 component-modes.business-check: OBSERVE；覆盖项必须引用已选择的自定义组件。只要任一启用行为的组件最终模式为 BLOCK，就必须提供唯一的 RiskControl Bean，否则启动失败。组件重复、未知组件、无效窗口、比例或容量配置同样启动报错。
+
+group 仅供默认 OrmBehaviorStore 选择数据源。自定义 BehaviorStore 可自行读取或忽略它，RiskControl 的存储不受 group 限制。框架没有 block-duration，也不代替业务默认封禁三十分钟。
+
+<a id="ai-security-risk-规则语义"></a>
+### 规则语义
+
+| 组件／档位 | 条件 |
+| --- | --- |
+| fast-switch / rapid | 最近 5 分钟内，切入间隔严格小于 2 秒的不同目标视频至少 50 个；不额外检查比例 |
+| fast-switch / normal | 最近 15 分钟至少 200 个不同视频，其中切入间隔小于或等于 5 秒的视频比例至少 70% |
+| active-access / continuous | 最近完整 6 小时中，36 个十分钟段至少 33 个有请求，并且请求总量至少 60 |
+
+快切每次有效事件都判断，不需要等待窗口满。两个快切窗口均为 [当前时刻-window, 当前时刻]，计算一条切换时前后两个事件都必须在对应窗口内；恰好等于左边界仍计入，超出边界的前驱不能贡献快切。
+
+先根据同一用户＋行为的原始有效事件计算相邻间隔，再按 resourceId 去重。相邻资源不同才能产生快切；同一视频在窗口内只计一份，存在符合条件的切入记录就计为快切视频。重复访问不会增加不同视频数量，但仍更新原始事件的相邻关系。第一条只建立前驱，最早第 51 条请求产生第 50 个极速目标。资源为 null 的事件不能判断快切，并中断可判定的资源前驱；全天候组件仍记录它。
+
+普通档比例是窗口内快切不同视频数／全部不同视频数；200 是最低样本数，不是仅保留最后 200 个。一次慢切换不清零，旧事件按时间退出窗口。极速阈值恰好 2 秒不计入，普通阈值恰好 5 秒计入。
+
+全天候只使用已完成的十分钟段，当前段记录但不参与本次判断。窗口为十分钟的整数倍，不超过 memory.retention。首次事件不在段起点时，第一次完整判断可能比六小时稍晚、不足十分钟；没有新请求时不自动触发。大量请求不能替代空闲时间：每小时访问十分钟、休息五十分钟，六小时只有 6 个活跃段。
+
+| 示例（均为不同视频） | 默认规则结果 |
+| --- | --- |
+| 每秒一个 | 约五十秒达到极速档 50 个目标 |
+| 每四秒一个 | 第 200 条、首条后 796 秒达到普通档 |
+| 每隔一、三、五分钟，持续六小时 | 完整窗口形成后命中全天候 |
+| 每小时访问十分钟，其余休息 | 不因总量大就命中全天候 |
+
+这些是业务访问限制信号，不证明用户一定使用机器人。阈值应以正常访问和采集记录共同回放验证。
 
 <a id="ai-security-risk-接入重要接口"></a>
 ### 接入重要接口
 
-使用 ApiRisk 时，身份来自 ISecurityManager，不读取前端提交的 userId。参数方式的顺序为登录恢复 → 风控 → 现有 ApiLimit → Controller/业务事务。JSON 方式先校验登录，待请求体完成解密和反序列化后执行风控，仍在 Controller 方法和业务事务执行前；ApiLimit 在请求体读取前执行。匿名调用受保护接口返回 401，BLOCK 命中返回 429；具体规则和统计只供服务端查询。
+使用 ApiRisk 时，身份来自 ISecurityManager，不读取前端提交的 userId。参数方式的顺序为登录恢复 → 风控 → 现有 ApiLimit → Controller/业务事务。JSON 方式先校验登录，待请求体完成解密和反序列化后执行风控，仍在 Controller 方法和业务事务执行前；ApiLimit 在请求体读取前执行。匿名调用受保护接口返回 401，业务返回有效限制时抛出默认 HTTP 429 的异常；具体规则和统计只供服务端查询。
 
 ```java
 import com.yulinlin.security.risk.ApiRisk;
@@ -5743,126 +5903,271 @@ if (!decision.allowed()) {
 
 同一次行为选择注解或手工入口之一，不叠加记录。Java 入口是可信服务端 API；多租户可把租户和用户组合成稳定的 userId。调用时若已有框架事务或原生 Spring 活动事务，会明确报错，避免把检查放在已经执行的业务之后。
 
-本模块统计的是已认证的重要接口调用尝试，不能把记录当成“确实成功取得播放地址”。业务后续失败仍保留行为。播放心跳、正常续签、预加载应使用其他行为或不接入该规则；资源相同的不同请求仍分别计数。
+本模块统计的是已认证的重要接口调用尝试，不能把记录当成“确实成功取得播放地址”。业务后续失败仍保留行为。播放心跳、正常续签、预加载应使用其他行为或不接入该规则；资源相同的不同请求仍计入全天候请求数，但不重复增加快切视频数。
 
 BehaviorEvent 的第四个可选参数 eventId 只能由可信服务端提供。本机使用有界缓存，在保留期内尽量复用同一事件的结果；缓存淘汰或重启、跨实例后不保证计数层去重。数据库写入与后台重试按事件 ID 幂等。不要把任意客户端提供的固定 ID 用作事件 ID，否则会把不同请求错误合并。userId 最大 128 字符，resourceId 最大 256，eventId 最大 128；空白 ID 拒绝，resourceId/eventId 可为 null。
 
-<a id="ai-security-risk-自定义风控拦截提示"></a>
-### 自定义风控拦截提示
+<a id="ai-security-risk-业务-riskcontrol"></a>
+### 业务 RiskControl
 
-@ApiRisk 判定不允许访问时，抛出 com.yulinlin.security.risk.ApiRiskException，参数、表单和 JSON 请求使用同一种异常。检查入口不设置响应头、不提交响应体，Controller/业务方法不会执行；业务方可以使用 @ExceptionHandler 自行决定状态码、文案和返回结构。
-
-ApiRiskException 继承 ResponseStatusException，默认 HTTP 429。getHeaders() 提供 Retry-After，按判定的 blockedUntil 与抛出时刻之差向上取整为秒，至少 1 秒；不再固定为 60 秒。getRetryAfterSeconds() 返回该值，getEvent() 返回行为信息，getDecision() 返回判定结果（含限制截止时间和命中规则）。这些详情供服务端处理，不要把整个异常或判定直接序列化给客户端。
+RiskControl 是限制状态的权威来源，方法均同步调用：
 
 ```java
-import com.yulinlin.security.annotation.ApiCrypto;
-import com.yulinlin.security.risk.ApiRiskException;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.RestControllerAdvice;
+public interface RiskControl {
+    Optional<Restriction> findRestriction(Subject subject);
+    Optional<Restriction> onRisk(Subject subject, List<Match> hits);
+    void release(Subject subject);
+}
+```
+
+- findRestriction 只返回当前仍有效的限制，过期判断由业务完成。框架不会从审计快照恢复出一个实际有效的封禁。
+- onRisk 每次命中请求最多调用一次，参数包含所有 BLOCK 组件的命中；观察组件仍执行并写入结果，但不进入处罚参数。业务自行决定限制时间、永久限制、存储位置及重复命中是否延长。
+- 返回 Optional.empty() 表示业务不限制，本次继续以 SUSPECTED 放行；返回 Restriction 则拦截当前请求。查询／处置异常直接传播，不会静默当作放行。
+- Restriction(id, reason, expiresAt)：id 标识同一份有效限制，expiresAt 是 epoch 毫秒；null 表示永久或不提供截止时间。到期时间供响应和审计使用，后续是否有效仍以业务查询为准。
+- 建立限制后重置组件统计；已有有效限制的请求不再送入判断组件。解除或业务确认到期后重新观察。
+- 方法在本机同一主体锁内调用，应快速返回，优先接入已有缓存／业务服务。框架不会替业务保证跨节点幂等；多实例同时命中、网络失败后重试必须由业务正确处理。
+- 同一稳定 eventId 在本机缓存未淘汰时，onRisk 失败后重试不重复计算组件；没有 eventId、进程重启或跨节点重试，仍由业务保证处置幂等。
+
+可直接运行 [AdminRiskControlTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskControlTest.java)：示例业务自行限制十分钟，验证到期、永久限制及人工解除。里面的内存 Map 只用于测试，生产替换为业务 DAO／缓存。业务注册该接口的 Bean 即可，框架不提供默认处罚实现。
+
+<a id="ai-security-risk-自定义组件"></a>
+### 自定义组件
+
+RiskDetector 的同一 Subject 调用由服务串行化，不同主体可以并发。业务以 Bean 注册后，在 components 中选择其 id；仅注册而未选择的组件不会执行。使用自己的 ID 代替某个内置 ID 即可替换判断；同 ID 重复注册启动报错。
+
+```java
+import com.yulinlin.security.risk.RiskDetector;
+import com.yulinlin.security.risk.RiskModels.*;
+import org.springframework.stereotype.Component;
+import java.util.List;
 import java.util.Map;
 
-@Order(Ordered.HIGHEST_PRECEDENCE)
-@RestControllerAdvice
-public class BusinessRiskExceptionHandler {
-    @ApiCrypto(false) // 启用全局加密时，让这份错误提示保持明文
-    @ExceptionHandler(ApiRiskException.class)
-    public ResponseEntity<Map<String, Object>> riskBlocked(ApiRiskException error) {
-        return ResponseEntity.status(429)
-                .headers(error.getHeaders())
-                .body(Map.of(
-                        "code", "VIDEO_RISK_BLOCKED",
-                        "message", "访问过于频繁，请稍后再获取播放链接",
-                        "retryAfterSeconds", error.getRetryAfterSeconds()));
+@Component
+public class BusinessRiskDetector implements RiskDetector {
+    public String id() { return "business-check"; }
+
+    public Detection detect(BehaviorEvent event, long occurredAt) {
+        boolean hit = "sensitive".equals(event.resourceId());
+        var matches = hit
+                ? List.of(new Match(id(), "sensitive-resource", occurredAt, occurredAt,
+                        "命中业务资源规则", Map.of()))
+                : List.<Match>of();
+        return new Detection(id(),
+                hit ? DetectionStatus.MATCHED : DetectionStatus.NORMAL,
+                null, matches, Map.of());
+    }
+
+    public void reset(Subject subject) {
+        // 有状态组件在这里清理指定主体；这个示例无状态。
     }
 }
 ```
 
-使用 starter 且没有自定义处理器时，StarterExceptionHandler 保留 HTTP 429、Retry-After 并返回默认 R 错误结构；不使用 starter 时，交给 Spring MVC 默认异常处理。OBSERVE 模式仍放行；匿名请求和参数错误分别维持 401、400。手工调用 checkAndRecord 仍返回 Decision，上面的 Java 示例可在拒绝时抛出同一种异常。
+配置 components: [fast-switch, active-access, business-check] 即可启用。自定义参数由业务配置类管理；默认服务不会自动发现或序列化自定义组件内部对象。需要 Redis、分布式统计或重启恢复时，组件自己管理，且应考虑同步调用耗时。
 
-<a id="ai-security-risk-规则语义"></a>
-### 规则语义
+组件返回 Detection(componentId, status, reason, matches, statistics)。状态为 OBSERVING、NORMAL、MATCHED、CAPACITY；只有 MATCHED 能携带且必须携带 Match。Match 包含组件 ID、档位 ID、窗口、原因、计数指标。快切指标 videos/fastVideos，全天候指标 requests/activeBuckets/totalBuckets；比例可从计数计算。所有启用组件都会收到事件，不因第一个命中而短路。
 
-| 类型 | 命中条件 |
-| --- | --- |
-| ACTIVE_MINUTES | 完整窗口内活跃分钟数达到 min-active-minutes |
-| DENSE_ACCESS | 请求数、活跃分钟数、短间隔比例三个条件同时达到阈值 |
+reset 必须幂等，在建立／发现新的限制、解除或豁免时调用。本机空闲回收及服务关闭调用可选 evict(subject)，默认委托 reset；使用共享 Redis 状态的组件可覆盖 evict，只释放本机资源并自行管理共享状态过期，避免一个节点退出就清掉其他节点的数据。自定义组件异常直接传播，不当作 NORMAL。内置两个组件由服务创建，业务传入的是额外组件列表。
 
-启用的规则之间为 OR。一个分钟有至少一次有效统计请求就属于活跃分钟。计算最近 N 个完整分钟，当前未结束分钟的请求会记录，但不参与当前窗口判定。第一次访问到完整观察窗口形成之前返回 OBSERVING；第一次请求不在分钟边界时，需要额外等待不足一分钟。每个用户、行为每个分钟边界后第一次请求重新评估一次，不定时扫描所有用户，也不会在没有请求时自动新封禁。
+<a id="ai-security-risk-自定义风控拦截提示"></a>
+### 自定义风控拦截提示
 
-短间隔跨分钟计算；时间恰好等于 short-gap 也计入。窗口第一条记录与窗口外前驱的间隔不计入分母；窗口内长暂停计入分母，不清空历史。窗口基于服务器毫秒时间，时钟回拨时本机同一主体使用不递减时间。不同实例间隔分别计算，不拼接成全局准确序列。
+@ApiRisk 在业务返回限制时抛出 ApiRiskException，不自行写响应；JSON、路径和参数入口一致。业务可以提供 @ExceptionHandler 决定状态码、文案及结构。手工入口仍返回 Decision，调用方检查 allowed 后自行抛出异常。
 
-默认规则不要求 resourceId，不自动推断视频长度、不同视频数量或播放完成情况。更复杂业务判断通过 RiskRule 扩展。
+```java
+@ExceptionHandler(ApiRiskException.class)
+public ResponseEntity<Map<String, String>> riskBlocked(ApiRiskException error) {
+    return ResponseEntity.status(429).headers(error.getHeaders())
+            .body(Map.of("code", "VIDEO_RISK", "message", "访问暂时受限，请稍后再试"));
+}
+```
 
-结果状态：
+ApiRiskException 默认 HTTP 429。只有业务提供正的截止时间时才生成 Retry-After，向上取整且至少一秒；永久／未知截止时间不发送该头，getRetryAfterSeconds() 返回 0。Decision.blockedUntil=0 不代表放行，必须看 allowed/status。公开播放接口的错误响应只返回业务提示；管理页面可通过下述有权限校验的报告接口查询规则与统计。启用全局响应加密时，可按已有 CryptoAdvice 规则决定错误是否加密。
 
-| 状态 | 是否允许 | 含义 |
+<a id="ai-security-risk-导入历史行为并回放"></a>
+### 导入历史行为并回放
+
+RiskReplay 接受 ReplayEvent(userId, behaviorType, resourceId, eventId, occurredAt)。历史时间必须为原始 epoch 毫秒；不要循环调用在线 checkAndRecord 导入旧记录，它使用当前服务器时间。
+
+```java
+var replay = new RiskReplay(riskProperties);
+var results = replay.replay(events);
+
+results.forEach(row -> System.out.printf("原始下标=%d 时间=%d 组件=%s 命中=%s%n",
+        row.inputIndex(), row.event().occurredAt(),
+        row.decision().components(), row.decision().matches()));
+
+// 每次 replay 都调用工厂，不能传线上正在使用的组件实例。
+var customReplay = new RiskReplay(riskProperties,
+        () -> List.of(new BusinessRiskDetector()));
+```
+
+每次回放使用空白独立状态，稳定按时间升序排序，同一毫秒保留输入顺序，不修改输入 List。inputIndex 是排序前从零开始的下标。事件时间驱动窗口和去重缓存到期，不需要 sleep，不自动补造结尾请求。
+
+回放只验证识别：不初始化数据库、不创建后台工作线程、不恢复线上快照、不调用 RiskControl。即使配置 BLOCK，也只返回允许访问的 SUSPECTED 及完整命中结果，不伪造业务封禁时长、到期或解除。在线与回放复用相同组件，但业务限制后暂停统计的效果不在离线回放里模拟。
+
+自定义工厂必须返回新的隔离实例；框架不能阻止用户组件自行访问线上 Redis，因此应使用独立状态空间或测试实现。重复调用 replay 会重置观察窗口，不能把一段连续历史分批 replay 后拼成同一次统计。一次回放持有输入、排序副本和逐条结果，适合受控规模的样本。
+
+Date / DateTime 用 getTime()；LocalDateTime 或无时区字符串按来源时区转换为 epoch 毫秒。不要依赖运行机器默认时区。可直接运行 [AdminRiskReplayTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskReplayTest.java)，包含极速、普通、六小时、间歇访问、自定义组件及真实 JSON 导入，格式见 [admin 测试说明](../admin/src/test/README.md#行为风控历史回放)。
+
+直接连接历史库验证时，填写 admin 的本地配置 `src/test/resources/application-risk-local.yml`，运行 [AdminRiskDatabaseReplayTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskDatabaseReplayTest.java)。[公开模板](../admin/src/test/resources/application-risk-local.example.yml)包含 MySQL／PG／H2 连接、字段映射和规则阈值；实际本地文件忽略 Git。默认读取配置时区下今天零点至运行时间的全部用户，也可指定用户及历史时间范围。ORM 在同一只读快照中分页读取全部记录，逐用户独立回放，输出 Markdown／JSON 用户报告及首次命中依据，不建表、不写库。完整步骤及内存边界见[本地数据源回放](../admin/src/test/README.md#从本地配置的数据源读取历史)。
+
+<a id="ai-security-risk-返回给管理页面的分析报告"></a>
+### 返回给管理页面的分析报告
+
+`RiskReplay.report` 返回可直接由 Jackson 序列化的 `RiskReport`，用于命中原因、统计卡片、小时分组和趋势图。它复用同一组检测组件，不改变阈值，也不调用 RiskControl；`suspected=true` 表示这段历史命中过规则，当前是否封禁仍由业务 RiskControl 决定。
+
+```java
+var subject = new RiskModels.Subject(userId, "video-play-url");
+RiskReport report = new RiskReplay(riskProperties).report(
+        subject, from, to, ZoneId.of("Asia/Shanghai"), events);
+// Controller 直接 return report，或者放入业务已有的响应包装。
+```
+
+`from / to` 为 epoch 毫秒，范围 `[from,to)`。调用方必须提供这个用户、这个行为、这个范围的完整历史，不能只传页面当前一页；混入其他主体或范围外事件会报错。事件按时间稳定排序，同一时刻按输入顺序处理，建议查询按 `crt_time,id` 排序。相同非空 eventId 在本次报告内只保留排序后的首条，并统计重复及内容冲突；无 ID 的事件不去重。每次调用从空白状态观察，不自动补出结尾请求。
+
+业务 HTTP 接口示例（路径、权限码和历史查询实现由业务定义，框架不会自动注册此 URL）：
+
+```java
+import com.yulinlin.security.annotation.ApiPerm;
+import com.yulinlin.security.risk.*;
+import com.yulinlin.security.risk.RiskModels.*;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.*;
+import org.springframework.web.bind.annotation.*;
+import java.time.ZoneId;
+import java.util.List;
+
+@Configuration
+@EnableConfigurationProperties(RiskProperties.class)
+class RiskReportConfiguration {
+    @Bean
+    RiskReplay riskReplay(RiskProperties properties) {
+        return new RiskReplay(properties);
+        // 自定义组件沿用上节的 Supplier，每次提供隔离实例。
+    }
+}
+
+// 业务实现并注册 Bean：用 ORM 查询完整历史并转换为 ReplayEvent。
+interface RiskHistorySource {
+    List<ReplayEvent> loadAll(Subject subject, long from, long to);
+}
+
+@RestController
+class RiskReportController {
+    private final RiskReplay replay;
+    private final RiskHistorySource history;
+
+    RiskReportController(RiskReplay replay, RiskHistorySource history) {
+        this.replay = replay;
+        this.history = history;
+    }
+
+    @ApiPerm("risk:read")
+    @GetMapping("/admin/risk/users/{userId}/report")
+    public RiskReport report(@PathVariable("userId") String userId,
+                             @RequestParam("from") long from,
+                             @RequestParam("to") long to) {
+        if (from < 0 || to <= from || to - from > 86_400_000L)
+            throw new IllegalArgumentException("请选择不超过一天的有效范围");
+        var subject = new Subject(userId, "video-play-url");
+        return replay.report(subject, from, to, ZoneId.of("Asia/Shanghai"),
+                history.loadAll(subject, from, to));
+    }
+}
+```
+
+这里的一天是管理查询的样例上限，业务可调整，并应限定单次记录量及租户可访问范围。只做离线分析时无需启用线上 risk.enabled；仍需配置 behaviors。报告会持有历史与逐条检测结果，较大范围可由业务离线生成并缓存。框架不查询视频标题，页面记录列表、标题和翻页仍使用业务原有接口。
+
+| 页面内容 | 返回字段 | 含义 |
 | --- | --- | --- |
-| OBSERVING | 是 | 完整窗口尚未形成 |
-| ALLOWED | 是 | 当前未命中 |
-| SUSPECTED | 是 | OBSERVE 模式命中 |
-| BLOCKED | 否 | BLOCK 模式命中或已有本机限制未到期 |
-| EXEMPT | 是 | 本机临时豁免 |
-| DISABLED | 是 | 行为已关闭 |
-| CAPACITY | 是 | 达到内存主体上限，新增主体暂时无法统计 |
+| 状态标签、命中原因 | `status / suspected / incomplete / hits` | NO_DATA 无记录；DISABLED 行为未开启；OBSERVING 观察不足；NOT_MATCHED 未命中；SUSPECTED 曾命中；INCOMPLETE 存在容量缺口。曾命中也可能同时 incomplete，未命中不等于确定正常 |
+| 请求数、不同视频数、起止时间 | `summary` | 去重后的 requestCount、distinctResources、firstEventAt / lastEventAt；重复 ID 和缺失视频 ID 单独计数 |
+| 两档快切次数及占比 | `switches.rapid / switches.normal` | count 是原始相邻不同视频的快切次数；ratio 的分母为 differentResourceSwitches；longestRun 是最长连续快切次数 |
+| 最长连续访问 | `activity.longestVisit` | start / end / durationMillis / requestCount；相邻请求间隔严格超过五分钟才断开，是请求序列跨度，不代表观看时长 |
+| 活跃分钟与峰值 | `activity` | activeMinutes、longestConsecutiveMinutes、peakMinuteRequests、peakFiveMinuteRequests；五分钟峰值按连续五个自然分钟求和 |
+| 首次命中证据 | `hits[].fastSwitch / activeAccess / statistics` | 保存首次触发时的窗口；同一毫秒后续请求不计入首次证据。firstMatchedAt / lastMatchedAt 表示该规则首次／末次命中；matchedRequestCount 是命中请求数，不是独立攻击次数 |
+| 六小时覆盖图 | `bestActiveWindow` | 检测时已经形成的完整窗口中，优先覆盖桶最多、再请求最多的窗口；没有完整窗口时为 null |
+| 分钟趋势与小时分组 | `minutes / hours` | `{start,end,count}`，包含起点、不包含终点；分钟／小时只返回非空桶，页面可补零；小时按 zoneId 分桶 |
+| 实际阈值说明 | `rules` | 本次配置快照。极速 minRatio 为 null，表示没有占比要求；禁用的内置组件规则为 null，自定义组件 ID 单独列出 |
+
+所有时间／时长都是毫秒，比例是 `0..1`，分母为零时为 null；页面展示百分比时乘以 100。不传 ZoneId 的重载使用 UTC，建议明确传入业务时区。
+
+注意两种占比不同：`switches.normal.ratio` 是**所选范围的快切次数 / 不同视频切换次数**；`hits[].fastSwitch.fastVideoRatio` 是**首次命中窗口内的不同快切目标视频数 / 不同视频数**，后者才是普通档 70% 判定的依据。极速仍为五分钟内 `<2秒` 的不同快切目标视频至少 50 个，没有占比条件；普通档包含恰好五秒。
+
+全天候按完整六小时里的十分钟桶覆盖计算，不表示六小时内每分钟都在访问。`activeAccess` 同时返回 activeBuckets / totalBuckets、实际 activeMinutes、含窗口边界的最长无请求间隔、包含零计数的 buckets，供人工复核。`complete` 仅说明检测器的观察时间足够，不能证明来源数据库没有漏记。`hits[].endInclusive` 在快切为 true、全天候为 false；自定义组件为 null，保留其 reason / statistics 而不猜测窗口语义。
+
+现有本地名单可运行 [AdminRiskReportTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskReportTest.java) 导出单用户 JSON、多人 JSON 与详细依据，步骤见 [admin 测试说明](../admin/src/test/README.md#导出给页面使用的详细报告)。
 
 <a id="ai-security-risk-存储与性能边界"></a>
 ### 存储与性能边界
 
-- 请求入口不查询/写入数据库。每个用户＋行为有独立内存锁，保证本机并发不丢计数；规则扩展和回调也必须避免阻塞 IO。
-- 明细使用有界队列，达到 batch-size 或 flush-interval 后刷库。queue-capacity 不含工作线程当前正在处理/重试的最多一批。满时丢弃新明细，增加 droppedEvents；内存统计继续更新。
-- 明细首次失败后最多重试 retry-count 次，间隔 retry-interval，耗尽后丢弃并记录错误。统计只刷脏分钟和状态；失败保留脏数据，按 retry-interval 重试最新快照，不套用明细丢弃规则。
-- 已限制请求保留明细，但不继续增加判断样本或自动延长限制。到期/人工解除后开始新的观察窗口，不因旧证据立即再封；历史记录保留。豁免到期同样开始新窗口。
-- 建表复用选中数据源的 schema-mode（CREATE / VALIDATE / NONE），风控不再提供独立的 storage.schema-mode。开启模块后把三个内部实体交给已有 initializeSchema 接口；无需额外加入 schema-packages。MySQL、PG 默认 NONE，需要自动建表时设置对应数据源为 CREATE；H2 默认 CREATE。该配置同时约束数据源原有的业务建表行为，详见[自动建表与索引](#ai-datasources-schema)。NONE 时由用户先准备表；启动会检查表是否可读。
-- 表为 yulinlin_risk_event、yulinlin_risk_minute、yulinlin_risk_state。时间字段用 epoch 毫秒 BIGINT，payload 是整字段 JSON 文本，不依赖数据库 JSON 查询。
-- 统计快照按独立 streamId、版本持久化。每个进程的单个后台线程顺序保存，用普通 ORM 查询判断新增/更新，批量插入或按主键更新脏分钟；同批状态与分钟通过 RouteSession.transaction 提交。版本比较在 Java 中完成，不依赖 SQL upsert。事件批量查询已有 ID 后只插入新增记录，重试不会重复追加明细。
-- 默认多实例各自判断和封禁，不保证跨节点即时一致。重启只恢复每个主体最近的一份有效实例快照，不能把包含继承历史的多个快照直接求和。此恢复不是全局准确统计；本机在后台恢复完成前从新观察窗口开始，已保存的限制在恢复后生效。
-- 后台恢复最多 memory.maximum-size 个主体。恢复期间已经发生的本机请求保留；本机刚执行的人工解除/豁免优先。规则定义改变时不恢复旧规则快照。
-- 内存满时不淘汰仍有效的限制，新增主体返回 CAPACITY 并累计 capacityBypasses。过期且已持久化的空闲主体后台移除。需监控容量，否则持续满载会降低识别覆盖。
-- 数据库运行中不可用不阻塞业务，内存继续判断；启动建表/校验失败则启动报错。进程崩溃可能丢失未刷库数据。正常停机等待最多 shutdown-timeout，超时中断工作线程，驱动是否及时响应中断取决于驱动。
-- 历史清理由独立线程分批删除，单批最多 1000 行，避免占用明细写入线程。活动限制/豁免不随历史保留期提前删除。
+默认 BehaviorStore 使用现有 ORM 的普通查询、批量插入、按主键更新及事务，没有手写复杂 SQL、数据库 JSON 查询或方言分支。自定义 Bean 自动替换默认实现。
+
+- 只有 yulinlin_risk_event 和 yulinlin_risk_state 两张当前使用的表。复用数据源 schema-mode（CREATE / VALIDATE / NONE），无需额外 schema-packages；初始化和可读性检查失败阻止启动。详见[自动建表与索引](#ai-datasources-schema)。
+- 时间为 epoch 毫秒 BIGINT，payload 为完整 JSON 文本。事件按 ID 幂等，快照按进程 streamId 与版本单调更新；快照保存默认组件的完整有界状态，旧版本不能覆盖新版本。
+- 启动阶段完成默认组件快照恢复后才接受检查，避免恢复与在线事件合并造成重复统计。恢复失败记录错误，未恢复主体从新窗口观察。配置签名变化时旧统计失效；多实例只恢复主体最新一份，不累加继承快照。
+- 快照中的 restriction 只用于审计；当前是否限制始终查询业务 RiskControl。快照和业务限制不是同一事务。
+- 请求线程不访问 BehaviorStore，但会同步访问业务 RiskControl 和自定义组件；默认识别在内存执行。
+- 明细队列满时丢弃新增明细并增加 droppedEvents，内存统计继续；写入失败有限重试。快照失败保留脏状态，稍后保存最新完整版本。
+- 内存默认最多 10000 个主体，单主体每个快切窗口最多 20000 条资源事件；容量满时返回 CAPACITY 并说明统计不完整。某档容量不完整时不据其比例判定命中，另一完整档仍可独立命中。新增主体容量不足也不会绕过 RiskControl 已有有效限制。
+- 空闲超过 memory.retention 且快照已保存的主体可回收，之后重新观察。资源事件窗口会自行淘汰旧记录，全天候只保留必要十分钟桶。
+- 默认单机统计，多实例不保证即时一致。进程崩溃可能丢失尚未落库的明细和统计；正常关闭等待 shutdown-timeout，超时不承诺全部保存。
+
+可选调优配置，通常不必填写：
+
+```yaml
+yulinlin:
+  security:
+    risk:
+      memory:
+        maximum-size: 10000
+        maximum-events-per-subject: 20000
+        retention: 24h                 # 最多 7d，必须覆盖组件窗口
+        restore-on-startup: true
+      storage:
+        retention: 24h                 # >= memory.retention；这里没有 group
+        cleanup-interval: 1h
+      async:
+        batch-size: 500
+        queue-capacity: 50000
+        flush-interval: 1s
+        snapshot-interval: 5s
+        retry-count: 3
+        retry-interval: 5s
+        shutdown-timeout: 10s
+```
 
 <a id="ai-security-risk-管理接口与扩展"></a>
 ### 管理接口与扩展
 
-以下接口不自动暴露 HTTP 管理端点；业务必须自行加管理权限和审计：
+RiskService.inspect / listRisks 返回本机最后观察的统计与限制审计信息，不代表业务当前权威限制列表；业务当前状态应查询 RiskControl。history 是同步数据库管理查询，分页 limit 为 1..1000，时间范围 [from,to)，按时间、事件 ID 排序。业务自行给管理入口加权限。
 
-```java
-import com.yulinlin.security.risk.RiskModels.Subject;
-import java.time.Duration;
+release 调用业务 RiskControl.release，再重置组件。exempt 保留本机临时豁免能力，但不会覆盖业务已有有效限制；若需解除，先由业务解除限制。管理变化不自动广播其他实例。metrics 提供主体数、待写队列、丢弃、存储失败、容量绕过及恢复状态。
 
-var subject = new Subject(userId, "video-play-url");
-riskService.inspect(subject);                   // 本机状态和分钟趋势
-riskService.listRisks(0, 20);                    // 本机风险分页
-riskService.history(subject, fromMillis, toMillis, 0, 100); // 数据库历史：[from,to)
-riskService.release(subject);                   // 本机解除，异步保存
-riskService.exempt(subject, Duration.ofMinutes(30));
-riskService.metrics();                          // 队列、丢弃、失败、容量不足、恢复状态
-```
+完整替换 RiskService Bean 时，业务自行管理生命周期、识别和处置流程。框架不自动踢登录会话，也不实现 JWT 撤销。
 
-管理分页 limit 为 1..1000，历史结果按时间、事件 ID 排序。history 是显式同步数据库查询，不属于实时检查路径。解除和豁免不自动广播其他实例。未配置签名相同的行为不恢复旧状态；活动限制过期后旧统计不立即重新封禁。
+<a id="ai-security-risk-从旧版迁移"></a>
+### 从旧版迁移
 
-| 扩展 Bean | 约定 |
-| --- | --- |
-| BehaviorStore | 替换默认数据库存储；写入幂等，快照版本单调，恢复不重复累加，需支持清理线程和管理查询并发 |
-| RiskRule | type 唯一，纯内存 evaluate；可替换同名内置类型；规则变化时更新规则 id 以使历史失效 |
-| RiskActionHandler | 新命中状态通知；必须快速非阻塞；异常记录但不改变已作出的放行判断 |
-| RiskService | 完整替换内存风控服务，自己管理生命周期 |
-
-DefaultRiskService 不承担 JWT 撤销，亦不自动踢人；自定义处置可按能力调用已有 LoginSessionManager。本机临时限制生效与登录会话生命周期相互独立。
+- storage.group 改为顶层 risk.group。
+- 删除 block-duration；BLOCK 必须提供业务 RiskControl。旧的框架临时限制不自动迁移为业务处罚记录。
+- behaviors.*.rules、ACTIVE_MINUTES / DENSE_ACCESS 改为 components 和上述两类组件配置。
+- RiskRule、RiskActionHandler 已移除，分别迁移至 RiskDetector、RiskControl。旧配置会明确绑定失败，避免静默失效。
+- Match 改为组件／档位／统计指标；Decision 增加 components 与 restriction。Snapshot / Restored / View 改为完整组件状态，不再暴露旧 Minute 列表；自定义 BehaviorStore 需同步调整。
+- 旧分钟快照不兼容，首次升级重新观察；旧 yulinlin_risk_minute 表不再使用，框架不会擅自删除。旧行为明细仍可读取，其旧计数字段不会映射为新版组件统计。
+- RiskReplay 的自定义扩展改为 Supplier<List<RiskDetector>>，每次回放创建新实例。回放不再模拟固定封禁时长。
 
 <a id="ai-security-risk-验证"></a>
 ### 验证
 
-模块测试覆盖两类规则、窗口边界、跨分钟间隔、同一用户并发、队列溢出、写入失败重试、MVC 拦截、专用风控异常及业务自定义响应、JSON DTO/嵌套字段/解密请求体、配置绑定、H2 实际建表/恢复/清理与版本防回退。H2 同时验证普通模式与 MYSQL 兼容模式，不等于真实 MySQL 服务端验证；模块不再维护 MySQL 专用 SQL。RiskPostgresqlIntegrationTest 在显式提供 pg.test.url 时使用独立随机 Schema 验证真实 PG，并清理该 Schema。
+覆盖严格两秒、五秒包含边界、200 个视频与比例边界、50 个不同快切目标、重复视频、缺失资源、窗口外前驱、六小时覆盖率与请求数、首次不完整时间段、状态容量、快照恢复、业务期限／永久限制／拒绝处罚、重复处置失败重试、组件模式、自定义组件、配置绑定、MVC JSON／解密／异常响应、ORM 实际存储及回放隔离。
 
 ```text
-mvn -pl security-risk -am test -Dtest=Risk*Test,ApiRiskExceptionTest,OrmBehaviorStoreTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn -pl security-risk,admin -am test -Dtest=Risk*Test,ApiRiskExceptionTest,OrmBehaviorStoreTest,AdminRisk*Test -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
-性能参数需结合实际用户数、调用频率、数据库吞吐压测，不承诺固定 QPS。
+H2 覆盖普通模式和 MYSQL 兼容模式，不等于真实 MySQL 服务验证。RiskPostgresqlIntegrationTest 需要显式提供 pg.test.url，使用随机 Schema 并在结束后清理。性能需按实际主体数、事件量和快照吞吐压测。
 
 ---
 

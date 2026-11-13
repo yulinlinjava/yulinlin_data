@@ -1,22 +1,25 @@
 package com.yulinlin.data.core.filter;
 
-import com.yulinlin.data.core.request.BaseRequest;
+import com.yulinlin.data.core.request.ExecuteRequest;
+import com.yulinlin.data.core.request.QueryRequest;
 
-/** 由 RouteSession 统一调用；具体 Session 不执行过滤器。 */
+/** 只由 RouteSession 调用；具体 EntitySession 不依赖过滤器。 */
 public interface IFilterManager {
     IFilterManager NONE = new IFilterManager() { };
-    /**
-     * SQL 解析和缓存 Key 构造之前增强请求，允许改表名、条件和路由，或返回同类新请求。
-     */
-    default BaseRequest before(String session,BaseRequest request){
 
+    default QueryRequest<?> beforeQuery(String group, QueryRequest<?> request) {
         return request;
     }
 
-    /** 后端执行或缓存命中后增强返回值，不等于事务提交成功；分页收到整个 Page。 */
-    default Object after(String session, BaseRequest request, Object data){
-        return data;
+    default ExecuteRequest<?> beforeWrite(String group, ExecuteRequest<?> request) {
+        return request;
     }
 
+    default void afterRow(String group, QueryRequest<?> request, Object row) { }
 
+    /** 实际执行完成通知，不改变影响行数，也不代表事务已提交。 */
+    default void afterWrite(String group, ExecuteRequest<?> request, int affectedRows) { }
+
+    /** 在读取前检查流式支持；依赖关联或额外 SQL 的自定义管理器可覆盖并拒绝。 */
+    default void checkSelectEach(String group, QueryRequest<?> request) { }
 }

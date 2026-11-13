@@ -29,15 +29,5 @@ public final class RiskTables {
         @JoinField(name = "retain_until") public Long retainUntil;
         @JoinField(textType = TextTypeEnum.text) public String payload;
     }
-    @JoinTable(value = "yulinlin_risk_minute", autoSchema = true)
-    @JoinIndex(fields = {"streamId", "minuteStart"})
-    @JoinIndex(fields = "minuteStart")
-    @Data public static class MinuteRow {
-        @JoinMeta(primaryKey = true) @JoinField(textLength = 64) public String id;
-        @JoinField(name = "stream_id", textLength = 64) public String streamId;
-        @JoinField(name = "minute_start") public Long minuteStart;
-        public Long version;
-        @JoinField(textType = TextTypeEnum.text) public String payload;
-    }
 }
 

@@ -84,7 +84,7 @@ class H2ExplainTest {
         try (var f = new Fixture("")) {
             AtomicInteger before = new AtomicInteger();
             var route = f.route(new IFilterManager() {
-                @Override public BaseRequest before(String group, BaseRequest request) {
+                @Override public QueryRequest<?> beforeQuery(String group, QueryRequest<?> request) {
                     assertEquals("h2", group);
                     before.incrementAndGet();
                     var select = new SelectWrapper<>().table("repro_minute").page(2, 2);
@@ -92,9 +92,8 @@ class H2ExplainTest {
                     select.where().eq("projectCode", "123");
                     return QueryRequest.newInstance(Fact.class, select);
                 }
-                @Override public Object after(String group, BaseRequest request, Object data) {
+                @Override public void afterRow(String group, QueryRequest<?> request, Object row) {
                     fail("Native plans must not be passed to entity-result filters");
-                    return data;
                 }
             });
             new SessionUtil(route);

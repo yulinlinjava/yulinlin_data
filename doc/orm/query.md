@@ -9,6 +9,7 @@
 ## 本页导航
 
 - [查询条件与结果组织](#查询条件与结果组织)
+- [大结果集逐条消费](#大结果集逐条消费)
 - [计数与分页总数](#计数与分页总数)
 - [查看执行计划](#查看执行计划)
 - [查询条件对象](#查询条件对象)
@@ -37,11 +38,65 @@ var users = query.selectList();
 | and / not / where | 条件组合；按实际 Wrapper 接口使用 |
 | selectOne | 无结果返回 null；取第一条，不自动保证唯一 |
 | selectList / count | 列表 / 计数 |
+| selectEach(consumer) | H2、MySQL、PG 的普通查询逐条消费；返回 long 类型的成功消费条数，不查询总数 |
 | selectPage(page, size) | 数据库分页，调用前校验页码和大小 |
 | useIndex("idx_name", ...) | 仅 H2 生效，支持普通/分组查询、分页及派生 count；MySQL、PostgreSQL 等其他后端忽略合法提示、不报不支持错误，继续由数据库自动选择索引，详见 [H2 索引提示](../datasources/h2.md#单次查询索引提示) |
 | explain() / explainCount() | H2、MySQL、PG 的普通 EXPLAIN：分别查看当前查询和派生 count 的原生计划，详见[查看执行计划](#查看执行计划) |
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
+
+## 大结果集逐条消费
+
+`ModelSelectWrapper`、`QueryRequest` 和 `RouteSession` 提供 `selectEach`。底层 `EntitySession` 是数据源实现协议，业务仍通过 Wrapper／RouteSession 调用。当前支持 H2、MySQL、PostgreSQL 的普通查询及原生查询 SQL；分组 Wrapper 和其他数据源明确报不支持，不退回全量 List。
+
+```java
+long consumed = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+        .eq("status", 1)
+        .orderByAsc("id")
+        .selectEach(user -> {
+            // 当前线程中逐条处理，例如计算统计值、写入导出文件。
+            System.out.println(user.getUsername());
+        });
+```
+
+也可使用原生 SQL；参数仍走现有绑定和编解码，不拼接值：
+
+```java
+var request = QueryRequest.newInstance(
+        "select id, username from ai_demo_user where status = #{status} order by id",
+        java.util.Map.of("status", 1), DemoUser.class);
+request.setSession("mysql");
+long consumed = request.selectEach(user -> System.out.println(user.getUsername()));
+```
+
+- 边读取、边解码为新的普通实体／DTO、边调用消费者，不先构造完整 List。同步执行，消费者返回后才处理下一行；方法在全部消费结束后返回成功条数，空结果为 0，不额外执行 COUNT。
+- 条件、字段投影、排序、显式分页和 useIndex 保持原语义；没有分页时读取整个结果集。需要稳定顺序时显式排序，框架不改写为多次分页查询，也不自动重试已经交付过的行。
+- 不读取或写入查询缓存。显式 `.cache()`（含 CACHE_ONLY／REFRESH）报错，改用 `.cache(false)`；没有缓存也不需要额外配置。
+- 不调用关联增强，不创建懒加载／自动更新代理。仅映射查询返回的字段，关联字段保留模型默认值；对普通对象的修改不会自动写库。忽略全局／注解作用域的自动更新默认值，显式 `.autoUpdate(true)` 报错，使用 `.autoUpdate(false)`。不会修改请求选项，后续 `selectList` 仍按原配置执行。
+- RouteSession 保留 `IQueryFilter.beforeQuery` 与最终数据源路由；逐条解码后执行和列表共用的 `afterRow`，再交给消费者。默认 `InitFilter` 会对每个实现 `IInitEvent` 的实体调用一次 `init()`；内置 `TableLogicFilter` 继续在 SQL 中添加逻辑删除条件。查询过滤器默认支持，依赖关联或额外 SQL 时可通过 supportsSelectEach 返回 false，读取前即拒绝执行。纯写入过滤器不参与查询；见[流式查询与过滤器](filters.md#流式查询与过滤器)。
+- 消费者、`afterRow` 和 `init()` 中都不能重入当前 RouteSession 的 ORM 查询、写入或事务操作；直接重入当前 JDBC Session 也会被拒绝。主结果集尚未关闭，不能在回调里查询关联、提交事务或开启嵌套事务。需要写库时在消费结束后另行处理，或显式设计独立的分批业务流程。
+- 已开启 ORM 事务时复用事务连接，不自行提交／回滚外层事务；消费者异常会原样向外传播，关闭结果集和语句并归还连接借用权，由现有事务边界决定业务回滚。已执行的消费者副作用不会自动撤销。事务外关闭本次取得的连接。
+- 复用原有 SQL 日志、慢查询阈值和执行监听器；成功或失败各记录一次执行。此入口的耗时包含读取、解码和消费者处理时间，不能直接当成纯数据库耗时。
+
+三种 JDBC 适配的资源处理：
+
+| 数据源 | selectEach 读取方式 |
+| --- | --- |
+| H2 | 前向、只读 ResultSet，fetchSize 提示 1000；ORM 不保留完整结果，H2 内部是否物化由执行计划决定 |
+| MySQL | Connector/J 前向、只读 ResultSet，fetchSize 使用驱动逐行读取标记，不要求修改 JDBC URL |
+| PostgreSQL | 前向、只读 ResultSet，fetchSize 为 1000；事务外临时关闭自动提交，读取结束后回滚只读查询事务并恢复原自动提交状态，再归还连接；已有 ORM 事务不做这段提交／回滚 |
+
+这些设置仅作用于 `selectEach` 的语句／连接生命周期，`selectList` 的语句设置、整结果缓存、关联和代理保持原样；对象后置增强统一使用 `afterRow`。驱动前提参见 [MySQL 流式读取](https://dev.mysql.com/doc/connector-j/en/connector-j-reference-implementation-notes.html)、[PG 游标读取](https://jdbc.postgresql.org/documentation/query/)。
+
+消费者保存所有对象仍会占用大量内存。数据库排序、聚合及驱动缓冲也可能占用资源，流式消费不保证总耗时更短或立即取得第一行。普通原生 SQL 的可执行内容仍由业务负责；不要传多条语句或把写入命令当成查询。
+
+测试覆盖逐行交付顺序、共享读取与解码、空结果、日期／NULL、参数绑定、分页／索引、异常资源释放、过滤器、事务复用、关联与列表行为回归。MySQL／PG 驱动调用协议有无外部库测试，另有可选真实服务器验证：
+
+```text
+mvn -pl h2,mysql,postgresql -am test -Dtest=JdbcSelectEachTest,H2SelectEachTest,MysqlSelectEachTest,PostgresqlSelectEachTest -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+真实 MySQL 测试使用 `-Dmysql.test.url=... -Dmysql.test.user=...` 和环境变量 `MYSQL_TEST_PASSWORD`；真实 PG 使用 `-Dpg.test.url=... -Dpg.test.user=...` 和 `PG_TEST_PASSWORD`。未提供 URL 时跳过对应真实服务器用例；这些 selectEach 用例只运行查询，不建表或修改数据。
 
 ### 计数与分页总数
 

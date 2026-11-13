@@ -37,7 +37,7 @@ SQL 错误分类在持有连接的 JDBC 入口完成。MySQL/H2 普通语句错�
 
 事务外普通 JDBC 写请求由 RouteSession 自动包装单连接事务。显式 batch 请求直接执行独立自动提交任务：每个任务借自己的连接，用完关闭；AbstractSession 等待全部已派发任务，合并异常后返回。部分成功不回滚；RouteSession 在 finally 清理该请求缓存。有效连接并发数由 parallel-connections 和 Hikari 容量共同限制，SQLite 不拆组。
 
-before/after 过滤器、编解码与 SQL 日志保留。事务中写入前登记缓存失效，覆盖业务捕获部分执行错误后提交的情况；回滚帧丢弃自身失效记录。事务外 batch 的 after 仅在全部执行成功后调用，不能当成原子提交通知。
+beforeQuery/afterRow、beforeWrite/afterWrite 过滤器、编解码与 SQL 日志保留。事务中写入前登记缓存失效，覆盖业务捕获部分执行错误后提交的情况；回滚帧丢弃自身失效记录。事务外 batch 的 afterWrite 仅在全部执行成功后调用，不能当成原子提交通知。
 
 ## 完成与释放
 

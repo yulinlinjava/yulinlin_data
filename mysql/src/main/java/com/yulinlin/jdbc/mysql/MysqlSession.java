@@ -11,6 +11,9 @@ import java.util.List;
 
 /** MySQL execution plus optional startup-only schema creation/validation. */
 public class MysqlSession extends JdbcSession {
+    /** Connector/J's forward-only row streaming; no URL changes required. */
+    @Override protected int selectEachFetchSize() { return Integer.MIN_VALUE; }
+
     @Override
     protected String explainPrefix() { return "EXPLAIN "; }
 

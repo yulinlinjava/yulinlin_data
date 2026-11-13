@@ -11,7 +11,7 @@
 
 ## RouteSession 执行链
 
-**同步重放例外入口：** `replayWrite(targetGroup, request)` 仅供内部适配器重放已经完成业务加工的节点。强制明确目标组及 master，不走 before/after、不进入普通延迟队列，因此不重复改表名、补默认值，也不会触发下一层同步。仍由 executeNow 管理事务参与、缓存失效和具体 Session 执行/日志。普通业务 CRUD 不应调用此入口绕过过滤器，目标权限及租户隔离必须由同步配置保证。
+**同步重放例外入口：** `replayWrite(targetGroup, request)` 仅供内部适配器重放已经完成业务加工的节点。强制明确目标组及 master，不走 beforeWrite/afterWrite、不进入普通延迟队列，因此不重复改表名、补默认值，也不会触发下一层同步。仍由 executeNow 管理事务参与、缓存失效和具体 Session 执行/日志。普通业务 CRUD 不应调用此入口绕过过滤器，目标权限及租户隔离必须由同步配置保证。
 
 **增量通知：** data-sync 写后过滤器在源事务内保存快照并登记 afterCommit；保存点回滚时丢弃本帧快照，最外层提交后入队。命中同步规则的事务外 batch 在 before 阶段拒绝，需显式 transaction，避免部分成功无法准确重放。无事务的独立操作在全部成功后立即入队。目标请求独立提交；失败任务不越过、不自动重试。内存队列不提供持久化恢复和原子源事件记录。
 
@@ -21,7 +21,9 @@
 
 ManualGuard 对本进程所有写向目标 group 的规则提供维护保护：进入前要求空闲且无积压/暂停，未满足直接拒绝，不等待排空；全量期间停止调度，退出时恢复正常规则调度，但不解除错误暂停。它不会阻止源业务提交或停止其他实例；业务必须先停写、结束在途事务并排空后台写任务及增量，成功核对后再恢复写入。普通全量失败也会释放维护保护，所以调用方必须继续保持停写以便续传；检测冲突时需人工修复，不能自动重放可能重复的 inc/dec。持久化检查点只属于全量任务，不等于增量已具备可靠投递；提交结果不确定时仅更新错误状态，不用内存中的旧游标覆盖数据库进度。
 
-**查询：** `RouteSession.executeList` 应用实体路由、初选 Session、执行 before；过滤器可以改表名或指定新的 group/cluster，路由据此重选。自动更新查询要求活动事务。之后委托具体 Session 的 select/page/group/count，最后执行 after 并在 finally 恢复选库作用域。递归关联查询受路由深度限制。
+**查询：** `RouteSession.executeList` 应用实体路由、初选 Session、执行 beforeQuery；过滤器可以改表名或指定新的 group/cluster，路由据此重选。自动更新查询要求活动事务。之后委托具体 Session 的 select/page/group/count，由 RouteSession 遍历列表/Page 的每条非 null 对象，调用管理器 afterRow，最后在 finally 恢复选库作用域。count 和执行计划不调用 afterRow。递归关联查询受路由深度限制。
+
+**流式查询：** `RouteSession.selectEach` 执行 beforeQuery 并检查查询过滤器的流式支持；以 `afterRow → consumer` 组合消费者传给 EntitySession.selectEach。EntitySession 不依赖过滤器，只读取、解码并交付普通对象。afterRow、init 和消费者期间禁止重入当前 ORM 查询、写入与事务操作；异常由读取层释放结果集/语句并传播。流式不使用缓存、关联或自动更新代理。
 
 **查询缓存与代理的位置：** 缓存读取、Key/TTL 处理、并发回源锁位于 `AbstractSession.getCacheValue`，不是 RouteSession。缓存未命中时，Session 执行得到 IDataBuffer，再由本 Session 的 CoderManager 解码；select/group 随后调用 `enhanceQueryResults`。缓存保存代理增强前的实体结果；缓存路径返回前复制对象，再增强关联与代理，不缓存事务绑定的代理。事务内查询和行锁查询绕过全局缓存，CACHE_ONLY 在这些场景拒绝执行。分页由 Session 分别 count 和 select，各自有缓存与实际执行边界。
 
@@ -31,9 +33,9 @@ RoutingCacheClient 仅管理缓存选择与只读清单：getCache()、getCache(
 
 CacheClient 不提供 ORM 表/实体清理入口，不依赖 ORM 注解解析或路由桥接。查询读写仍由具体 Session 完成，普通业务写入后的缓存失效仍由 RouteSession 协调事务提交；内部 CacheNamespaceResolver 和分区失效协议保留。需要刷新查询时通过 CacheMode.REFRESH，不使用业务缓存的 clear 操作代替。
 
-**立即写入：** RouteSession 对事务外普通 JDBC 写请求自动包装单连接事务；显式 batch 走独立自动提交路径。事务内普通 CRUD 加入当前范围，不自动创建新保存点。写入前登记缓存失效，事务提交后执行；独立 batch 在全部任务结束后失效缓存，部分失败也失效。after 是“执行后”，不是“提交后”，成功通知使用 TransactionUtil.afterCommit。
+**立即写入：** RouteSession 执行 beforeWrite，对事务外普通 JDBC 写请求自动包装单连接事务；显式 batch 走独立自动提交路径。事务内普通 CRUD 加入当前范围，不自动创建新保存点。写入前登记缓存失效，事务提交后执行；独立 batch 在全部任务结束后失效缓存，部分失败也失效。afterWrite 是“执行后”，不是“提交后”，成功通知使用 TransactionUtil.afterCommit。
 
-**延迟写入：** before 在入队前执行并固定 Session；queue() 不允许在活动事务内使用，返回 0 只表示接收成功。WriteQueueManager 按 Session 实例、操作和实体分组合并，每组回到 RouteSession；普通组使用独立事务，batch 组使用独立自动提交。失败重试可能重复部分已成功写入，需业务幂等。
+**延迟写入：** beforeWrite 在入队前执行并固定 Session；queue() 不允许在活动事务内使用，返回 0 只表示接收成功。WriteQueueManager 按 Session 实例、操作和实体分组合并，每组回到 RouteSession，实际成功后才调用 afterWrite；普通组使用独立事务，batch 组使用独立自动提交。失败重试可能重复部分已成功写入，需业务幂等。
 
 **批量与事务：** 事务内只有一条连接，batch 不拆并行任务；事务外 batch 根据 supportsParallelWrites 和配置拆组，每个任务取得独立自动提交连接。所有派发任务结束后汇总结果/异常。execute-batch-size 仅控制发送条数。SQLite 不拆并行组。业务异步线程不继承 TransactionContext。
 
@@ -60,11 +62,13 @@ CacheClient 不提供 ORM 表/实体清理入口，不依赖 ORM 注解解析或
 
 ## 过滤器边界
 
-查询与写入共用 PreparedRequest，携带最终 Request、Session 和真实入栈次数，不再用 Request.sessionChange 猜测清理次数。before 的新请求必须被采用，继承调用者路由/执行选项，同时检查 group 和 cluster。动态表名改写在 SQL 解析和缓存之前完成，fromClass 不必改变。具体 Session 的 `setFilterManager/getFilterManager` 已移除，第三方工厂也应停止配置这项依赖。
+查询与写入共用 PreparedRequest，携带最终 Request、Session 和真实入栈次数，不再用 Request.sessionChange 猜测清理次数。beforeQuery/beforeWrite 的新请求必须被采用，继承调用者路由/执行选项，同时检查 group 和 cluster。动态表名改写在 SQL 解析和缓存之前完成，fromClass 不必改变。具体 Session 的 `setFilterManager/getFilterManager` 已移除，第三方工厂也应停止配置这项依赖。
 
-after 的新结果必须返回给调用方，按列表、Page、Integer 校验类型；IRequestFilter 对分页列表分发 selectAfter，仅更换列表时才创建保留 total/extra 的新 Page。缓存命中也执行 after，Session 内部分页调用不重复增强。延迟写 before 在入队前执行，after 在后台实际执行后触发，普通后台后处理异常不重试已执行 Node。完整规则见[过滤器](../orm/filters.md#请求与结果增强过滤器)。
+IQueryFilter 和 IWriteFilter 只参与各自类型的请求；InitFilter 通过 afterRow 初始化，TableLogicFilter 同时处理两类请求，SyncRequestFilter 只处理写入。afterRow 返回 void，仅原地增强，缓存命中仍执行；分页内部 count/select 不重复增强，total/extra 不变。普通 afterWrite 异常仍向外传播并标记当前路由事务回滚；后台队列写后 RuntimeException 不重试已执行 Node。完整规则见[过滤器](../orm/filters.md#请求与结果增强过滤器)。
 
-SimpFilterManager 注册时复制并稳定排序，Comparator.comparingInt 避免 order 相减溢出；发布 volatile 数组快照，before/after 各自读取快照，无读锁、不创建迭代器。test 每次执行，不缓存依赖当前请求或用户的匹配结果。注册可与请求并发，但过滤器本身须无请求级共享状态。回归用例统一放在 admin/src/test/java，当前只做静态核对，未执行编译或测试。
+IRequestFilter、IEntityFilter、旧 before/after 以及管理器 afterQuery 整结果入口均已移除，没有兼容分支。IFilter 仅包含 test/order，查询和写入分别实现 IQueryFilter/IWriteFilter，实体类型匹配直接写在 test 中。supportsSelectEach 仅属于查询接口；自定义管理器可通过 checkSelectEach 拒绝流式请求，默认允许。afterRow、afterWrite 返回 void，RouteSession 保留结果容器及实际计数，后置钩子不改写 List/Page/count/影响行数。
+
+SimpFilterManager 注册时复制并稳定排序，Comparator.comparingInt 避免 order 相减溢出，发布 volatile 数组快照。test 每次执行，不缓存依赖当前请求或用户的匹配结果；过滤器本身须无请求级共享状态。回归测试包括 core 的 FilterManagerTest、h2 的 H2RouteFilterTest/H2SelectEachTest，以及 data-sync 的 SyncTransactionScopeTest，覆盖分流、顺序、缓存、分页、逐行初始化、异常和写后通知。
 
 ---
 

@@ -13,6 +13,19 @@ import java.util.List;
 
 /** Shared JDBC execution with PostgreSQL parsers and driver-specific value handling. */
 public class PostgresqlSession extends JdbcSession {
+    @Override protected int selectEachFetchSize() { return 1000; }
+
+    @Override protected AutoCloseable beginSelectEach(Connection connection) throws SQLException {
+        if (isOpenTransaction()) return () -> { };
+        boolean autoCommit = connection.getAutoCommit();
+        if (autoCommit) connection.setAutoCommit(false);
+        return () -> {
+            // End this local read transaction on success and failure. Do not implicitly commit if rollback fails.
+            connection.rollback();
+            if (autoCommit) connection.setAutoCommit(true);
+        };
+    }
+
     @Override
     protected String explainPrefix() { return "EXPLAIN "; }
 

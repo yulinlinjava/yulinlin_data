@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import javax.sql.DataSource;
 import java.sql.*;
 import java.util.*;
+import java.util.function.Consumer;
 
 /**
  * 循环依赖解决
@@ -39,6 +40,34 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
     /** Explicit dialect capability, independent of whether USE INDEX is implemented. */
     protected String explainPrefix() {
         throw new UnsupportedOperationException(getClass().getSimpleName() + " 不支持 explain");
+    }
+
+    /** Dialects opt in explicitly; unsupported backends must not silently materialize a list. */
+    protected int selectEachFetchSize() {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " 不支持 selectEach");
+    }
+
+    /** A driver may need a local cursor transaction. Never completes an enclosing ORM transaction. */
+    protected AutoCloseable beginSelectEach(Connection connection) throws SQLException { return () -> { }; }
+
+    @Override
+    public <E> long selectEach(QueryRequest<E> request, Consumer<? super E> consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        Objects.requireNonNull(request, "request").validateSelectEach();
+        int fetchSize = selectEachFetchSize();
+        ParseResult parsed = parseQueryNode(RequestType.select, request, request.getWrapper());
+        if (parsed.getType() != ParseType.select)
+            throw new UnsupportedOperationException("selectEach 仅支持普通 SELECT 或原生查询 SQL");
+        Consumer<IDataBuffer> deliver = row -> consumer.accept((E) bufferToBean(row, request.getEntityClass()));
+        return executeOperation(() -> {
+            beforeExecute(request);
+            return withQueryConnection(connection -> {
+                try (var cursorTransaction = beginSelectEach(connection)) {
+                    return readSelectEachNode(connection, (SqlNode) parsed.getRequest(), fetchSize,
+                            buffer -> consumeSelectEachRow(buffer, deliver));
+                }
+            });
+        }, parsed);
     }
 
     @Override
@@ -245,34 +274,32 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
 
 
     @SneakyThrows
-    public List<IDataBuffer> executeSelectNode(Connection connection , SqlNode node){
-
-
-
-
-      try (PreparedStatement preparedStatement =  connection.prepareStatement(node.getSql())){
-
-
-
-
-          if(node.getList() != null){
-              int index = 1;
-              for (Object row : node.getList()) {
-
-                  bindValue(preparedStatement, index, row);
-                  index++;
-
-              }
-
-          }
-
-            try (   ResultSet resultSet =  preparedStatement.executeQuery()){
-              return      resultSetToBuffer(resultSet);
+    public List<IDataBuffer> executeSelectNode(Connection connection, SqlNode node) {
+        try (PreparedStatement statement = connection.prepareStatement(node.getSql())) {
+            bindSelectParameters(statement, node);
+            try (ResultSet rows = statement.executeQuery()) {
+                return resultSetToBuffer(rows);
             }
-
         }
+    }
 
+    /** Lists and callbacks share parameter binding, metadata reading and row decoding. */
+    private long readSelectEachNode(Connection connection, SqlNode node, int fetchSize,
+                                Consumer<IDataBuffer> consumer) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(node.getSql(),
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            statement.setFetchSize(fetchSize);
+            bindSelectParameters(statement, node);
+            try (ResultSet rows = statement.executeQuery()) {
+                return consumeResultSet(rows, consumer);
+            }
+        }
+    }
 
+    private void bindSelectParameters(PreparedStatement statement, SqlNode node) throws SQLException {
+        if (node.getList() != null) {
+            for (int i = 0; i < node.getList().size(); i++) bindValue(statement, i + 1, node.getList().get(i));
+        }
     }
 
 

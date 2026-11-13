@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.function.Predicate;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.LongAdder;
 
 @Builder
@@ -68,6 +69,12 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     private boolean clearOnWrite = true;
 
     private final ThreadLocal<Integer> annotatedSessionDepth = ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Boolean> consumingRows = new ThreadLocal<>();
+
+    private void checkNotConsumingRows() {
+        if (Boolean.TRUE.equals(consumingRows.get()))
+            throw new IllegalStateException("selectEach 消费者内不能重入 ORM 查询、写入或事务操作；请在消费结束后执行");
+    }
 
     private TransactionContext context() {
         TransactionContext context = TransactionContext.current();
@@ -90,6 +97,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     @Override @SneakyThrows
     public void startTransaction() {
+        checkNotConsumingRows();
         TransactionContext context = context();
         if (context == null) {
             context = new TransactionContext(this, transactionLog);
@@ -150,6 +158,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     @Override @SneakyThrows
     public void commitTransaction() {
+        checkNotConsumingRows();
         TransactionContext context = context();
         if (context == null) throw new OrmException("没有可提交的 ORM 事务");
         if (context.depth() == 1) { finishTransaction(context, false); return; }
@@ -170,6 +179,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     }
 
     @Override public void rollbackTransaction() {
+        checkNotConsumingRows();
         TransactionContext context = context();
         if (context == null) throw new OrmException("没有可回滚的 ORM 事务");
         if (context.depth() == 1) finishTransaction(context, true);
@@ -280,13 +290,16 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     /** SQL、缓存 Key 和失效范围都只读取过滤后的请求；不通过 Request 标记猜测入栈次数。 */
     private PreparedRequest before(BaseRequest<?> original) {
+        checkNotConsumingRows();
         Objects.requireNonNull(original, "request");
         applyEntityRoute(original);
         EntitySession session = session(original);
         pushSession(session);
         int routeDepth = 1;
         try {
-            BaseRequest<?> request = Objects.requireNonNull(filterManager.before(session.group(), original),
+            BaseRequest<?> request = Objects.requireNonNull(original instanceof QueryRequest<?> query
+                            ? filterManager.beforeQuery(session.group(), query)
+                            : filterManager.beforeWrite(session.group(), (ExecuteRequest<?>) original),
                     "before 过滤器不能返回 null 请求");
             if (original instanceof ExecuteRequest<?> write) {
                 if (!(request instanceof ExecuteRequest<?> replacement))
@@ -318,19 +331,20 @@ public class RouteSession extends RegisterSession implements TransactionSession 
         for (int i = 0; i < prepared.routeDepth(); i++) popSession();
     }
 
-    private Object after(EntitySession session, BaseRequest<?> request, Object data, Class<?> expectedType) {
-        Object result = filterManager.after(session.group(), request, data);
-        if (data != null && result == null && expectedType == Integer.class)
-            throw new IllegalStateException("after 过滤器不能将计数或影响行数替换为 null");
-        if (result != null && !expectedType.isInstance(result))
-            throw new IllegalStateException("after 过滤器返回类型错误，预期 " + expectedType.getSimpleName()
-                    + "，实际 " + result.getClass().getName());
-        return result;
+    /** 只增强实体行，不替换 List/Page 或改写 count、分页 total。 */
+    private void afterRows(EntitySession session, QueryRequest<?> request, Object result) {
+        if (result instanceof Page<?> page) result = page.getList();
+        if (result instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (row != null) filterManager.afterRow(session.group(), request, row);
+            }
+        }
     }
 
 
     @SneakyThrows
     private  <E> E execute(BaseRequest request){
+        checkNotConsumingRows();
         ExecuteRequest<?> original = (ExecuteRequest<?>) request;
         if (original.isQueued() && isOpenTransaction()) {
             throw new NoticeException("Delayed write queue cannot be used inside an active transaction. 请在事务外调用 queue()。");
@@ -423,10 +437,12 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 return affected;
             }
             if (!delayed) {
-                return (Integer) after(session, request, affected, Integer.class);
+                filterManager.afterWrite(session.group(), request, affected);
+                return affected;
             }
             try {
-                return (Integer) after(session, request, affected, Integer.class);
+                filterManager.afterWrite(session.group(), request, affected);
+                return affected;
             } catch (RuntimeException error) {
                 // 不能仅因通知失败而重试已经执行的 Node，避免计数、自增等业务重复写入。
                 log.error("延迟写执行成功，但写后过滤器执行失败", error);
@@ -453,7 +469,10 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 default -> throw new IllegalArgumentException("Not a write request: " + request.getRequestType());
             };
             if (affected == null || replay) return affected;
-            try { return (Integer) after(session, request, affected, Integer.class); }
+            try {
+                filterManager.afterWrite(session.group(), request, affected);
+                return affected;
+            }
             catch (RuntimeException error) {
                 if (!delayed) throw error;
                 log.error("独立写入已完成，但写后过滤器失败", error);
@@ -554,9 +573,8 @@ public class RouteSession extends RegisterSession implements TransactionSession 
             };
             // Plans retain native rows; entity-result filters and proxies do not apply to diagnostics.
             if (diagnostic) return (E) data;
-            Class<?> expectedType = requestType == RequestType.page ? Page.class
-                    : requestType == RequestType.count ? Integer.class : List.class;
-            return (E) after(session, request, data, expectedType);
+            afterRows(session, request, data);
+            return (E) data;
         } finally {
             depth.decrement();
             if (depth.intValue() == 0) mapThreadLocal.get().remove(depthKey);
@@ -600,6 +618,27 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     public <E> List<E> select(QueryRequest<E> request) {
         return executeList(request,RequestType.select);
+    }
+
+    /** Plain-row consumption retains request filters/routing but never runs whole-result after filters. */
+    public <E> long selectEach(QueryRequest<E> request, Consumer<? super E> consumer) {
+        checkNotConsumingRows();
+        Objects.requireNonNull(consumer, "consumer");
+        Objects.requireNonNull(request, "request").validateSelectEach();
+        PreparedRequest prepared = before(request);
+        try {
+            var actual = (QueryRequest<E>) prepared.request();
+            actual.validateSelectEach();
+            filterManager.checkSelectEach(prepared.session().group(), actual);
+            return prepared.session().selectEach(actual, row -> {
+                consumingRows.set(true);
+                try {
+                    filterManager.afterRow(prepared.session().group(), actual, row);
+                    consumer.accept(row);
+                }
+                finally { consumingRows.remove(); }
+            });
+        } finally { release(prepared); }
     }
 
 

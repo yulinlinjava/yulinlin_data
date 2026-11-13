@@ -1,7 +1,8 @@
 package com.yulinlin.common.filter;
 
 import com.yulinlin.common.model.ModelUpdateWrapper;
-import com.yulinlin.data.core.filter.IRequestFilter;
+import com.yulinlin.data.core.filter.IQueryFilter;
+import com.yulinlin.data.core.filter.IWriteFilter;
 import com.yulinlin.data.core.node.INode;
 import com.yulinlin.data.core.request.ExecuteRequest;
 import com.yulinlin.data.core.request.QueryRequest;
@@ -14,7 +15,7 @@ import java.util.Map;
 /**
  * 基于类注解实现的逻辑删除
  */
-public class TableLogicFilter implements IRequestFilter {
+public class TableLogicFilter implements IQueryFilter, IWriteFilter {
 
 
 
@@ -45,7 +46,7 @@ public class TableLogicFilter implements IRequestFilter {
     }
 
     @Override
-    public ExecuteRequest updateBefore(String session, ExecuteRequest<?> request) {
+    public ExecuteRequest<?> beforeWrite(String session, ExecuteRequest<?> request) {
         if(request.getRequestType() == RequestType.delete){
             LogicNode logicNode = data.get(request.getFromClass());
             if(logicNode != null){
@@ -63,7 +64,7 @@ public class TableLogicFilter implements IRequestFilter {
     }
 
     @Override
-    public QueryRequest selectBefore(String session, QueryRequest<?> request) {
+    public QueryRequest<?> beforeQuery(String session, QueryRequest<?> request) {
 
         LogicNode logicNode = data.get(request.getFromClass());
         if(logicNode != null){

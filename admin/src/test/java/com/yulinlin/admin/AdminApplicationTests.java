@@ -43,8 +43,10 @@ public class AdminApplicationTests {
     public void go() throws Exception{
 
 
-        int count = ModelSelectWrapper.newInstance(UserInfoEntity.class)
-                .count();
+        long count = ModelSelectWrapper.newInstance(UserInfoEntity.class)
+                .selectEach((e) -> {
+
+                });
 
         List<UserInfoEntity> userInfoEntities = ModelSelectWrapper.newInstance(UserInfoEntity.class).selectList();
 

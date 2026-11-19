@@ -91,8 +91,57 @@ mvn -pl admin -am -Dtest=AdminRisk*Test -Dsurefire.failIfNoSpecifiedTests=false 
 
 填写 `admin/src/test/resources/application-risk-local.yml`，然后在 IDEA 直接运行
 [AdminRiskDatabaseReplayTest](java/com/yulinlin/admin/risk/AdminRiskDatabaseReplayTest.java)。
-本地配置已忽略 Git；其他开发者从[配置模板](resources/application-risk-local.example.yml)复制同名文件即可。
+本地配置已忽略 Git；首次使用时创建目录和文件，将下面的示例保存到该路径并填写实际连接信息。
 这是独立的历史回放数据源，不需要启动 admin 或激活 Spring profile，也不读取 application-dev.yml。
+
+```yaml
+spring:
+  datasource:
+    # MySQL: jdbc:mysql://127.0.0.1:3306/video?characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    # PG: jdbc:postgresql://127.0.0.1:5432/video
+    # H2: jdbc:h2:file:./data/video;IFEXISTS=TRUE
+    url: ""                 # 空值时跳过回放；也可填 ${RISK_REPLAY_DB_URL}
+    username: ""
+    password: ""
+
+risk-replay:
+  table: video_history      # 改为实际历史表名，支持 schema.table
+  user-column: user_id
+  resource-column: video_id
+  time-column: crt_time
+  id-column: id
+  user-id: ""               # 留空分析全部用户
+  start: ""                 # 起止都留空：今天零点到本次运行时间
+  end: ""                   # 手动指定时需同时填写，包含 start、不包含 end
+  zone: Asia/Shanghai
+  page-size: 5000
+  max-records: 0
+  report-directory: target/risk-replay
+  # report-requests-greater-than: 300
+  behavior-type: video-play-url
+
+yulinlin:
+  security:
+    risk:
+      mode: OBSERVE         # 回放只检测，不调用 RiskControl
+      behaviors:
+        video-play-url:
+          components: [fast-switch, active-access]
+          fast-switch:
+            rapid:
+              window: 5m
+              gap: 2s       # 严格小于
+              min-videos: 50
+            normal:
+              window: 15m
+              gap: 5s       # 小于等于
+              min-videos: 200
+              min-ratio: 0.70
+          active-access:
+            window: 6h
+            active-ratio: 0.90
+            min-requests: 60
+```
 
 需要填写：
 

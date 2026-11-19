@@ -6,7 +6,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 @Schema(description = "分页模型")
@@ -46,6 +45,7 @@ public class PagePo {
 
     @Data
     public static class Field{
+        @Schema(description = "实体 Java 属性名，必须与字段名一致，支持继承属性；不接受数据库列名或 SQL 表达式")
         private String name;
         private ConditionEnum condition;
         private Object value;

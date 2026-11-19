@@ -17,6 +17,22 @@ public class MonitorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public SqlRiskMonitor sqlRiskMonitor(MonitorProperties properties) {
+        return new SqlRiskMonitor(properties);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(SqlRiskDetector.class)
+    public SqlRiskDetector sqlRiskDetector() { return new DruidSqlRiskDetector(); }
+
+    @Bean
+    public SqlRiskExecutionGuard sqlRiskExecutionGuard(SqlRiskDetector detector, MonitorProperties properties,
+                                                       SqlRiskMonitor monitor) {
+        return new SqlRiskExecutionGuard(detector, properties, monitor);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public DatabaseMonitor databaseMonitor(MonitorProperties properties) {
         return new DefaultDatabaseMonitor(properties);
     }
@@ -30,6 +46,12 @@ public class MonitorAutoConfiguration {
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     static class WebConfiguration {
+        @Bean
+        @ConditionalOnMissingBean
+        SqlRiskApiController sqlRiskApiController(SqlRiskMonitor monitor) {
+            return new SqlRiskApiController(monitor);
+        }
+
         @Bean
         @ConditionalOnMissingBean
         MonitorWebMvcConfigurer monitorWebMvcConfigurer() {

@@ -11,6 +11,20 @@ public class MonitorProperties {
     private boolean enabled = true;
     private Duration threshold = Duration.ofSeconds(1);
     private int maxRecords = 1000;
+    private final SqlRisk sqlRisk = new SqlRisk();
+
+    public SqlRisk getSqlRisk() { return sqlRisk; }
+
+    public enum SqlRiskMode { OFF, OBSERVE, BLOCK }
+
+    public static final class SqlRisk {
+        private SqlRiskMode mode = SqlRiskMode.BLOCK;
+
+        public SqlRiskMode getMode() { return mode; }
+        public void setMode(SqlRiskMode mode) {
+            this.mode = java.util.Objects.requireNonNull(mode, "sql-risk.mode");
+        }
+    }
     /** Username accepted by the monitor page's built-in login dialog. */
     private String username = "admin";
     /** Password accepted by the monitor page. Empty disables login until configured. */

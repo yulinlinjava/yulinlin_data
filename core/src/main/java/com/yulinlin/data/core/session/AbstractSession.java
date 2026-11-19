@@ -235,6 +235,12 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     @SneakyThrows
     protected <E> E executeOperation(Callable<E> callable,ParseResult result){
+        // Guards run before database work and are not execution-result observers.
+        // Rejections still follow this session's normal transaction failure handling.
+        if (result != null) executeOperation(() -> {
+            beforeExecution(List.of(result));
+            return null;
+        });
         if (result != null) result.setTransactionId(TransactionLog.current().id());
         long started = System.nanoTime();
 
@@ -265,6 +271,9 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
 
     /** 各存储实现决定执行错误是否使资源失效；异常始终交给业务事务边界处理。 */
     protected void onExecutionFailure(Throwable error) { setRollbackOnly(); }
+
+    /** Optional preflight of a complete operation, before any physical execution or worker submission. */
+    protected void beforeExecution(List<ParseResult> requests) { }
 
     @Override
     public <E> Integer count(QueryRequest<E> request) {
@@ -314,6 +323,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
                     ? parseNodesAndGroup(requestType, request.getRoot(), request.getWrappers(), request.getFromClass())
                     : List.of(parseNodes(requestType, request.getRoot(), request.getWrappers(), request.getFromClass()));
             int rows = lists.stream().mapToInt(List::size).sum();
+            if (rows > 0) beforeExecution(lists.stream().flatMap(List::stream).toList());
             if (rows > 0) beforeExecute(request);
             int total = 0;
             Throwable failure = null;

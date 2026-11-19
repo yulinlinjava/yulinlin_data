@@ -84,20 +84,10 @@ public R<Page<PayChannelEntity>> page(@RequestBody PayChannelPo po) {
 }
 ```
 
-`ISuperService.page(po)`的核心过程是先把查询对象交给 Wrapper，再应用分页和排序（接口实现还会合并 `PagePo.and/or`中的运行时条件）：
+`ISuperService.page(po)`先使用 `ReflectionUtil.hasField(实体类, name)` 校验 `PagePo.and/or` 和 `orderList` 中的字段名，全部通过后再创建 Wrapper、解析查询对象、合并条件并应用分页和排序。业务使用服务入口即可：
 
 ```java
-Page<PayChannelEntity> result = ModelSelectWrapper
-        .newInstance(PayChannelEntity.class, po)
-        .page(po.getPageNumber(), po.getPageSize())
-        .orderBy(order -> {
-            if (po.getOrderList() != null) {
-                for (OrderItem item : po.getOrderList()) {
-                    order.orderBy(item.getName(), item.isAsc());
-                }
-            }
-        })
-        .selectPage();
+Page<PayChannelEntity> result = payChannelService.page(po);
 ```
 
 查询对象解析遵循以下规则：
@@ -106,10 +96,12 @@ Page<PayChannelEntity> result = ModelSelectWrapper
 - `@JoinWhere.name`省略时使用查询对象的 Java 属性名；查询属性与实体属性不同时显式填写实体属性名。
 - `between`传入按“起始、结束”排列的两个值，`in`传集合；字段类型继续使用框架现有 SQL 编解码规则。
 - `PagePo.and(...)`和 `or(...)`用于运行时才知道字段或操作符的补充条件，不是普通页面查询的必写步骤。
-- `orderList.name`应使用实体 Java 属性名。直接接收前端排序时，业务层应限制允许排序的属性，避免任意字段参与查询。
+- `and/or` 的 Field.name 和 `orderList.name` 必须精确匹配实体类的实例字段，包含父类字段，排除静态字段；只声明 getter 而没有字段也不接受。不转换大小写、不去除首尾空格，不接受 SQL 表达式、表名前缀、模板、引号或与属性名不同的数据库列名。例如属性 `crtTime` 映射列 `crt_time`，客户端应传 `crtTime`。
+- 非法字段、null 条目或缺失的条件运算符会在构造查询前抛出 `IllegalArgumentException`，不执行分页 count 或列表查询，由业务异常处理器返回提示。空列表和 null 列表仍表示不追加该类条件。
+- 这个校验只判断属性存在，不代表当前用户可以筛选密码、密钥等内部字段，也不检查该属性是否对应真实数据库列。接口需要字段权限时，业务进一步限制允许筛选、排序的属性。
 - 复杂嵌套 AND/OR、子查询或数据库专用表达式继续使用 Wrapper，不要把所有 SQL 逻辑塞进 PO。
 
-不通过 `ISuperService`时，也可以直接把同一个查询对象传给指定数据源：
+不通过 `ISuperService`时，也可以直接把同一个查询对象传给指定数据源；手动从前端参数拼装动态条件或排序的代码，应先调用 `ReflectionUtil.hasField(实体类, name)` 校验并拒绝不合法名称，底层 Wrapper 的字符串入口仍可表达服务端可信的 SQL：
 
 ```java
 Page<PayChannelEntity> result = ModelSelectWrapper

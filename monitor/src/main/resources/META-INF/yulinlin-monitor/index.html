@@ -175,7 +175,33 @@
             </div>
         </section>
 
-        <p class="footer-note">该页面只读，账号密码仅用于当前监控页面验证。</p>
+        <section class="panel" style="margin-top: 18px">
+            <div class="toolbar">
+                <strong>可疑 SQL</strong>
+                <span class="refresh-info">执行前检查 · 不采集绑定参数 · 最近 {{ sqlRisks.length }} 条</span>
+            </div>
+            <div class="table-wrap">
+                <el-table :data="sqlRisks" empty-text="暂无可疑 SQL 记录">
+                    <el-table-column label="时间" width="180">
+                        <template #default="scope">{{ formatTime(scope.row.timestamp) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="group" label="数据源" width="120"></el-table-column>
+                    <el-table-column label="处理" width="110">
+                        <template #default="scope"><el-tag :type="scope.row.blocked ? 'danger' : 'warning'">{{ scope.row.blocked ? '已拦截' : '仅告警' }}</el-tag></template>
+                    </el-table-column>
+                    <el-table-column label="原因" min-width="260">
+                        <template #default="scope">
+                            <strong v-if="scope.row.inspectionFailed">检查未完成（不等于确认攻击）</strong>
+                            <div v-for="(reason, index) in scope.row.reasons" :key="index">{{ reason }}</div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="SQL 模板" min-width="320">
+                        <template #default="scope"><pre class="detail-code">{{ scope.row.sql }}</pre></template>
+                    </el-table-column>
+                </el-table>
+            </div>
+        </section>
+        <p class="footer-note">该页面只读，账号密码仅用于当前监控页面验证。仅告警表示允许继续执行，不代表执行成功。</p>
     </main>
 
     <el-dialog v-model="loginVisible" title="监控验证" width="min(420px, 92vw)"
@@ -244,6 +270,7 @@
         setup() {
             const snapshot = reactive({ thresholdMs: 1000, maxRecords: 1000, retainedRecords: 0, summaries: [], records: [] });
             const filters = reactive({ keyword: '', group: '', operation: '', priority: '' });
+            const sqlRisks = ref([]);
             const loading = ref(false);
             const autoRefresh = ref(true);
             const refreshSeconds = ref(10);
@@ -304,6 +331,9 @@
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const data = await response.json();
                     Object.assign(snapshot, data);
+                    const riskResponse = await fetch('api/sql-risks?limit=200', { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+                    if (!riskResponse.ok) throw new Error(`HTTP ${riskResponse.status}`);
+                    sqlRisks.value = await riskResponse.json();
                     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
                 } catch (error) {
                     ElementPlus.ElMessage.error(`监控数据加载失败：${error.message}`);
@@ -343,6 +373,7 @@
                     loginVisible.value = true;
                     loginForm.password = '';
                     Object.assign(snapshot, { retainedRecords: 0, summaries: [], records: [] });
+                    sqlRisks.value = [];
                 }
             }
 
@@ -390,7 +421,7 @@
             onMounted(() => { load(); schedule(); });
             onBeforeUnmount(() => clearInterval(timer));
 
-            return { snapshot, filters, loading, autoRefresh, refreshSeconds, lastUpdated, detailVisible,
+            return { snapshot, sqlRisks, filters, loading, autoRefresh, refreshSeconds, lastUpdated, detailVisible,
                 loginVisible, loginLoading, loginForm,
                 selected, selectedRecords, groups, operations, priorities, metrics, filteredSummaries,
                 load, formatElapsed, formatTime, formatRate, priorityLabel, priorityTag,

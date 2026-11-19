@@ -11,14 +11,10 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.convert.DurationStyle;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-import java.io.IOException;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,7 +36,11 @@ public final class ApiLimitInterceptor implements HandlerInterceptor {
     }
 
     public ApiLimitInterceptor(SecurityLimitProperties properties, IpBlacklist ipBlacklist) {
-        this.identityResolver = new ClientIdentityResolver(properties);
+        this(properties, ipBlacklist, new HeaderIpResolver());
+    }
+
+    public ApiLimitInterceptor(SecurityLimitProperties properties, IpBlacklist ipBlacklist, IpResolver ipResolver) {
+        this.identityResolver = new ClientIdentityResolver(properties, ipResolver);
         this.ipBlacklist = Objects.requireNonNull(ipBlacklist, "ipBlacklist must not be null");
         this.counters = Caffeine.newBuilder()
                 .maximumSize(properties.getMaximumSize())
@@ -68,12 +68,10 @@ public final class ApiLimitInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(
-            HttpServletRequest request, HttpServletResponse response, Object handler) throws IOException {
+            HttpServletRequest request, HttpServletResponse response, Object handler) {
         if (!(handler instanceof HandlerMethod handlerMethod)) return true;
-        if (ipBlacklist.isBlocked(identityResolver.resolveIp(request))) {
-            writeError(response, HttpStatus.FORBIDDEN, "当前 IP 已被禁止访问");
-            return false;
-        }
+        String ip = identityResolver.resolveIp(request);
+        if (ipBlacklist.isBlocked(ip)) throw new IpBlockedException(ip);
         if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
 
         HandlerKey handlerKey = new HandlerKey(handlerMethod.getBeanType(), handlerMethod.getMethod());
@@ -119,17 +117,6 @@ public final class ApiLimitInterceptor implements HandlerInterceptor {
         } catch (ArithmeticException error) {
             throw new IllegalStateException("@ApiLimit interval is too large: " + handler.description(), error);
         }
-    }
-
-    private static void writeError(
-            HttpServletResponse response, HttpStatus status, String message) throws IOException {
-        response.setStatus(status.value());
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.getWriter().write("{\"data\":null,\"code\":" + status.value()
-                + ",\"crypt\":false,\"ok\":false,\"msg\":\"" + message
-                + "\",\"timestamp\":"
-                + System.currentTimeMillis() + "}");
     }
 
     private record HandlerKey(Class<?> beanType, Method method) {

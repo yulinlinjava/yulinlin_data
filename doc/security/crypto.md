@@ -89,12 +89,7 @@ yulinlin:
       enabled: true
       # 本机最多保留多少个“接口 + IP/设备 ID”计数器
       maximum-size: 50000
-      ip-header: X-Real-IP
       device-id-header: Device-Id
-      # 只有 TCP 连接来源属于这里时，框架才信任 ip-header
-      trusted-proxies:
-        - 127.0.0.1
-        - "::1"
 ```
 
 环境变量示例：

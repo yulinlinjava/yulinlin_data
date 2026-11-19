@@ -15,13 +15,13 @@ public class SecurityLimitProperties {
     /** Maximum number of active endpoint and client counters retained locally. */
     private long maximumSize = 50_000;
 
-    /** Client IP header accepted only when the direct peer is trusted. */
+    /** Header used by an explicitly registered TrustedProxyIpResolver; ignored by the default HeaderIpResolver. */
     private String ipHeader = "X-Real-IP";
 
     /** Client-generated device identifier header. */
     private String deviceIdHeader = "Device-Id";
 
-    /** Exact IP addresses or CIDR blocks allowed to supply ip-header. */
+    /** TrustedProxyIpResolver only: exact IP addresses or CIDR blocks allowed to supply ip-header. */
     private List<String> trustedProxies = new ArrayList<>(List.of("127.0.0.1", "::1"));
 
     public boolean isEnabled() {

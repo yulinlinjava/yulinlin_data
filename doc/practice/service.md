@@ -68,7 +68,7 @@ Service 接口默认方法不会注册 Spring Bean，也不会自动开启事务
 
 `save()` 不是数据库原生 UPSERT：它会先查后写，有额外往返，且并发时仍要依赖唯一索引处理竞态。业务明确知道是新增还是更新时，直接调用 `insert*` 或 `update*` 性能更好，语义也更清楚。
 
-`page(PagePo)`会解析业务子类上的 `@JoinWhere`字段，再应用 `PagePo`自带的动态条件、分页和排序；完整页面写法见[公共业务模型](models.md#页面查询对象pagepo--joinwhere)。不要把前端传入的排序字段名无限制透传；Controller/Service 应使用允许列表转换为可排序的实体属性。
+`page(PagePo)`先通过 `ReflectionUtil.hasField` 校验 `and/or` 与 `orderList` 的 name，必须与实体 Java 实例字段名精确一致（包含继承字段）；非法字段在任何 SQL 执行前抛出 `IllegalArgumentException`。通过后解析业务子类上的 `@JoinWhere` 字段，再应用动态条件、分页和排序，值仍走参数绑定。完整页面写法见[公共业务模型](models.md#页面查询对象pagepo--joinwhere)。属性存在校验不等于字段权限，Controller/Service 仍可根据业务进一步限制可筛选、可排序的属性。
 
 ### `ITreeService` 用法
 

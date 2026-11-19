@@ -32,6 +32,13 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
 
     private java.util.List<SessionExecutionListener> executionListeners = java.util.List.of();
 
+    private java.util.List<JdbcSqlGuard> sqlGuards = java.util.List.of();
+
+    @Autowired
+    void setSqlGuards(ObjectProvider<JdbcSqlGuard> guards) {
+        this.sqlGuards = guards.orderedStream().filter(guard -> guard.supports(jdbcUrlPrefix)).toList();
+    }
+
     @Autowired
     void setExecutionListeners(ObjectProvider<SessionExecutionListener> listeners) {
         this.executionListeners = listeners.orderedStream().toList();
@@ -116,6 +123,7 @@ public class JdbcSessionFactory implements SessionFactory<DataSource> {
         sqlSession.setCoderManager(coderManager);
         sqlSession.setGroup(group);
         sqlSession.setExecutionListeners(executionListeners);
+        sqlSession.setSqlGuards(sqlGuards);
         if (parseManager != null) sqlSession.setParseManager(parseManager);
 
         sqlSession.setProxyService(entityProxyService);

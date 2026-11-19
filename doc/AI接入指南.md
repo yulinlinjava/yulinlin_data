@@ -5073,12 +5073,7 @@ yulinlin:
       enabled: true
       # 本机最多保留多少个“接口 + IP/设备 ID”计数器
       maximum-size: 50000
-      ip-header: X-Real-IP
       device-id-header: Device-Id
-      # 只有 TCP 连接来源属于这里时，框架才信任 ip-header
-      trusted-proxies:
-        - 127.0.0.1
-        - "::1"
 ```
 
 环境变量示例：
@@ -5579,6 +5574,7 @@ String decrypted = cryptoCodec.decrypt(context, encrypted);
 
 - [接口限流](#ai-security-rate-limit-接口限流)
 - [IP 黑名单](#ai-security-rate-limit-ip-黑名单)
+- [自定义 IP 获取](#ai-security-rate-limit-自定义-ip-获取)
 - [Nginx 真实 IP](#ai-security-rate-limit-nginx-真实-ip)
 
 <a id="ai-security-rate-limit-接口限流"></a>
@@ -5611,7 +5607,7 @@ public class VideoController {
 
 只写 `@ApiLimit(count = 20)` 等价于 `count=20, interval="1m", by=LimitBy.IP`：同一 IP 对同一接口在本机一个 60 秒固定窗口内最多放行 20 次，第 21 次拒绝。窗口从该客户端的首次请求开始计时，满 interval 后下一次请求开启新窗口。
 
-interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求直接放行。
+interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@ApiLimit` 的接口不参与限流；`OPTIONS` 请求跳过限流计数，但仍先检查 IP 黑名单。
 
 超限时拦截器抛出 `com.yulinlin.security.limit.ApiLimitException`，不写响应体、不提交响应，Controller 不会执行。异常继承 ResponseStatusException，默认 HTTP 429，携带 Retry-After 响应头。业务方可通过 @ExceptionHandler 自己决定提示文案、返回结构和状态码。异常提供 getCount()、getInterval()、getBy() 和 getRetryAfterSeconds()；重试时间为距离本窗口结束的秒数，向上取整且至少为 1。
 
@@ -5633,6 +5629,7 @@ interval 支持 `500ms`、`10s`、`1m`、`1h` 等带单位的时长。没有 `@A
 ```java
 import com.yulinlin.security.annotation.ApiCrypto;
 import com.yulinlin.security.limit.ApiLimitException;
+import com.yulinlin.security.limit.IpBlockedException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.ResponseEntity;
@@ -5653,6 +5650,14 @@ public class BusinessExceptionHandler {
                         "message", "操作太频繁，请稍后再试",
                         "retryAfterSeconds", error.getRetryAfterSeconds()));
     }
+
+    @ApiCrypto(false)
+    @ExceptionHandler(IpBlockedException.class)
+    public ResponseEntity<Map<String, Object>> blocked(IpBlockedException error) {
+        // error.getIp() 可用于业务审计，不必返回给客户端。
+        return ResponseEntity.status(403)
+                .body(Map.of("code", "IP_BLOCKED", "message", "访问受限，请联系客服"));
+    }
 }
 ```
 
@@ -5663,7 +5668,7 @@ public class BusinessExceptionHandler {
 <a id="ai-security-rate-limit-ip-黑名单"></a>
 #### IP 黑名单
 
-IP 黑名单由业务实现 `IpBlacklist` 接口，自行选择数据存储。接口只接收已经完成可信代理检查并规范化的真实客户端 IP：
+IP 黑名单由业务实现 `IpBlacklist` 接口，自行选择数据存储。接口接收 `IpResolver` 解析的客户端地址，是否验证可信代理由选用的解析器决定：
 
 ```java
 import com.yulinlin.security.limit.IpBlacklist;
@@ -5706,9 +5711,55 @@ public class IpBlacklistService {
 }
 ```
 
-没有业务 Bean 时，框架注册默认空实现并放行所有 IP。命中黑名单时不进入 Controller，直接返回 HTTP `403` 和未加密的统一 JSON，`msg` 为 `当前 IP 已被禁止访问`。黑名单检查对所有 Controller 生效，不要求存在 `@ApiLimit`。
+没有业务 Bean 时，框架注册默认空实现并放行所有 IP。命中黑名单时拦截器抛出 `com.yulinlin.security.limit.IpBlockedException`，不写响应体、不设置状态码、不提交响应，也不进入 Controller 或消耗限流额度。异常继承 `ResponseStatusException`，默认 HTTP `403`，通过 `getIp()` 提供本次被拒绝的地址。黑名单检查对所有 Controller 生效，不要求存在 `@ApiLimit`，并且先于 `OPTIONS` 放行判断。
 
-`isBlocked` 会在每次业务请求进入 Controller 前执行，应使用快速查询，避免同步慢 SQL。可使用业务缓存，或将数据库黑名单定时加载到本地。拉黑、解除、过期时间、CIDR 规则和管理接口都属于业务实现；框架只负责可靠传入真实 IP。实现抛出的异常不会被静默当作放行，避免安全检查在故障时无声失效。
+业务方使用上面的 `@ExceptionHandler(IpBlockedException.class)` 自定义状态码、返回结构及提示文案；是否明文响应也由业务处理器及加密配置决定。未自定义时由已有的 starter 异常处理器或 Spring MVC 默认异常处理机制处理 `403`，拦截器不再强制返回固定 JSON。原来依赖固定错误结构的业务应补充异常处理器。
+
+`isBlocked` 会在每次业务请求进入 Controller 前执行，应使用快速查询，避免同步慢 SQL。可使用业务缓存，或将数据库黑名单定时加载到本地。拉黑、解除、过期时间、CIDR 规则和管理接口都属于业务实现；框架传入 `IpResolver` 解析的地址。实现抛出的异常不会被静默当作放行，避免安全检查在故障时无声失效。
+
+<a id="ai-security-rate-limit-自定义-ip-获取"></a>
+#### 自定义 IP 获取
+
+`com.yulinlin.security.limit.IpResolver` 是可替换的函数接口，方法为 `String resolve(HttpServletRequest request)`。安全模块默认注册 `HeaderIpResolver`；业务方声明同类型 Bean 后默认实现自动退让。`@ApiLimit` 和 `IpBlacklist` 共用该接口，同一请求内复用解析结果；设备标识缺失或无效时也使用此结果。
+
+默认按以下顺序读取，跳过空白及不区分大小写的 `unknown`，结果去掉首尾空白：
+
+1. `X-Forwarded-For` 的第一项；第一项无效则继续下一个请求头，不搜索后续项。
+2. `Proxy-Client-IP`、`WL-Proxy-Client-IP`。
+3. `HTTP_X_FORWARDED_FOR`、`HTTP_X_FORWARDED`、`HTTP_X_CLUSTER_CLIENT_IP`、`HTTP_CLIENT_IP`。
+4. `HTTP_FORWARDED_FOR`、`HTTP_FORWARDED`、`HTTP_VIA`、`REMOTE_ADDR`。
+5. `request.getRemoteAddr()`。
+
+该顺序与 `RequestUtil.getIp()` 的旧逻辑一致，不额外读取 `X-Real-IP`；除第一项外不拆分列表，也不验证字符串是否为 IP。默认实现不判断可信代理，网关必须清理或覆盖客户端提供的这些头，并限制后端直连访问。`HTTP_VIA` 等头不保证是 IP，业务方可通过自定义实现收紧规则。无请求时默认实现返回 `null`；限流中自定义实现返回空值会回退连接地址，抛出的异常直接向上传递。
+
+例如直接按连接地址限流：
+
+```java
+import com.yulinlin.security.limit.IpResolver;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration(proxyBeanMethods = false)
+public class ClientIpConfiguration {
+    @Bean
+    public IpResolver ipResolver() {
+        return request -> request == null ? null : request.getRemoteAddr();
+    }
+}
+```
+
+业务代码也可注入该 Bean 调用 `resolve(request)`。实现需要线程安全，避免每次调用执行慢 SQL。关闭 `limit.enabled` 只关闭限流及黑名单接入，仍可注入 IP 解析器。`starter` 中静态的 `RequestUtil.getIp()` 不会自动调用此 Bean；需要自定义策略的代码应注入 `IpResolver`。
+
+需要保留此前的可信代理策略时，可将上例 Bean 方法改为：
+
+```java
+@Bean
+public IpResolver ipResolver(com.yulinlin.security.SecurityLimitProperties properties) {
+    return new com.yulinlin.security.limit.TrustedProxyIpResolver(properties);
+}
+```
+
+只有显式使用 `TrustedProxyIpResolver` 时，`limit.ip-header` 和 `limit.trusted-proxies` 才生效；默认 `HeaderIpResolver` 不读取这两项。这是默认行为的变更，已有部署如需保持原策略应注册上述 Bean。
 
 <a id="ai-security-rate-limit-nginx-真实-ip"></a>
 #### Nginx 真实 IP
@@ -5726,14 +5777,14 @@ location /api/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
 
-框架先检查 Java 服务看到的 TCP 来源地址。只有来源匹配 `trusted-proxies` 时才读取 `X-Real-IP`；否则忽略所有转发 IP，使用连接来源地址。缺失、非法或包含多个值的 `X-Real-IP` 也会回退连接地址，避免客户端伪造。`trusted-proxies` 支持单个 IPv4、IPv6 和 CIDR，例如容器网络可以明确增加 `172.16.0.0/12`，不要无条件信任所有地址。Java 服务端口也应只允许可信 Nginx 访问。
+默认实现读取 `X-Forwarded-For` 第一项，因此这里使用 `$remote_addr` 覆盖该头，不使用追加客户端原始头的 `$proxy_add_x_forwarded_for`。Java 服务端口应只允许可信 Nginx 访问。
 
-如果 Nginx 前面还有 CDN 或负载均衡，必须先正确配置 Nginx `real_ip` 模块，使 `$remote_addr` 恢复为真实客户端 IP，再转发给 Java。框架不会取 `X-Forwarded-For` 的第一个值。
+如果 Nginx 前面还有 CDN 或负载均衡，必须先正确配置 Nginx `real_ip` 模块的可信来源，使 `$remote_addr` 恢复为真实客户端 IP，再转发给 Java。选择 `TrustedProxyIpResolver` 时，只有连接来源匹配 `trusted-proxies` 才读取配置的单值头（默认 `X-Real-IP`）；缺失、非法或包含多个值时回退连接地址。可信来源支持单个 IPv4、IPv6 和 CIDR。
 
 `LimitBy.DEVICE` 读取 `Device-Id`，接受最长 128 个字符的字母、数字、点、下划线、冒号和短横线。设备 ID 由客户端提供，能够被修改或轮换，因此视频列表、详情和防采集接口应优先按 IP；设备维度适合点赞、收藏等正常设备行为的额度隔离，不能替代登录鉴权。
 
@@ -5743,9 +5794,9 @@ location /api/ {
 | --- | --- | --- |
 | `enabled` | `true` | 是否处理 `@ApiLimit` |
 | `maximum-size` | `50000` | 本机同时保留的计数器上限，不是单接口请求次数 |
-| `ip-header` | `X-Real-IP` | 仅从可信代理连接读取的客户端 IP 请求头 |
+| `ip-header` | `X-Real-IP` | 仅显式使用 `TrustedProxyIpResolver` 时生效 |
 | `device-id-header` | `Device-Id` | `LimitBy.DEVICE` 使用的请求头 |
-| `trusted-proxies` | `127.0.0.1`、`::1` | 可以提供真实 IP 请求头的代理地址或 CIDR |
+| `trusted-proxies` | `127.0.0.1`、`::1` | 仅 `TrustedProxyIpResolver` 使用的代理地址或 CIDR |
 
 ---
 
@@ -6010,7 +6061,7 @@ var customReplay = new RiskReplay(riskProperties,
 
 Date / DateTime 用 getTime()；LocalDateTime 或无时区字符串按来源时区转换为 epoch 毫秒。不要依赖运行机器默认时区。可直接运行 [AdminRiskReplayTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskReplayTest.java)，包含极速、普通、六小时、间歇访问、自定义组件及真实 JSON 导入，格式见 [admin 测试说明](../admin/src/test/README.md#行为风控历史回放)。
 
-直接连接历史库验证时，填写 admin 的本地配置 `src/test/resources/application-risk-local.yml`，运行 [AdminRiskDatabaseReplayTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskDatabaseReplayTest.java)。[公开模板](../admin/src/test/resources/application-risk-local.example.yml)包含 MySQL／PG／H2 连接、字段映射和规则阈值；实际本地文件忽略 Git。默认读取配置时区下今天零点至运行时间的全部用户，也可指定用户及历史时间范围。ORM 在同一只读快照中分页读取全部记录，逐用户独立回放，输出 Markdown／JSON 用户报告及首次命中依据，不建表、不写库。完整步骤及内存边界见[本地数据源回放](../admin/src/test/README.md#从本地配置的数据源读取历史)。
+直接连接历史库验证时，创建并填写 `admin/src/test/resources/application-risk-local.yml`，运行 [AdminRiskDatabaseReplayTest](../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskDatabaseReplayTest.java)。[本地数据源回放说明](../admin/src/test/README.md#从本地配置的数据源读取历史)提供可复制的 YAML 示例，包含 MySQL／PG／H2 连接、字段映射、规则阈值及完整操作步骤；实际本地文件忽略 Git。默认读取配置时区下今天零点至运行时间的全部用户，也可指定用户及历史时间范围。ORM 在同一只读快照中分页读取全部记录，逐用户独立回放，输出 Markdown／JSON 用户报告及首次命中依据，不建表、不写库。大量数据的内存边界也见上述说明。
 
 <a id="ai-security-risk-返回给管理页面的分析报告"></a>
 ### 返回给管理页面的分析报告
@@ -8709,20 +8760,10 @@ public R<Page<PayChannelEntity>> page(@RequestBody PayChannelPo po) {
 }
 ```
 
-`ISuperService.page(po)`的核心过程是先把查询对象交给 Wrapper，再应用分页和排序（接口实现还会合并 `PagePo.and/or`中的运行时条件）：
+`ISuperService.page(po)`先使用 `ReflectionUtil.hasField(实体类, name)` 校验 `PagePo.and/or` 和 `orderList` 中的字段名，全部通过后再创建 Wrapper、解析查询对象、合并条件并应用分页和排序。业务使用服务入口即可：
 
 ```java
-Page<PayChannelEntity> result = ModelSelectWrapper
-        .newInstance(PayChannelEntity.class, po)
-        .page(po.getPageNumber(), po.getPageSize())
-        .orderBy(order -> {
-            if (po.getOrderList() != null) {
-                for (OrderItem item : po.getOrderList()) {
-                    order.orderBy(item.getName(), item.isAsc());
-                }
-            }
-        })
-        .selectPage();
+Page<PayChannelEntity> result = payChannelService.page(po);
 ```
 
 查询对象解析遵循以下规则：
@@ -8731,10 +8772,12 @@ Page<PayChannelEntity> result = ModelSelectWrapper
 - `@JoinWhere.name`省略时使用查询对象的 Java 属性名；查询属性与实体属性不同时显式填写实体属性名。
 - `between`传入按“起始、结束”排列的两个值，`in`传集合；字段类型继续使用框架现有 SQL 编解码规则。
 - `PagePo.and(...)`和 `or(...)`用于运行时才知道字段或操作符的补充条件，不是普通页面查询的必写步骤。
-- `orderList.name`应使用实体 Java 属性名。直接接收前端排序时，业务层应限制允许排序的属性，避免任意字段参与查询。
+- `and/or` 的 Field.name 和 `orderList.name` 必须精确匹配实体类的实例字段，包含父类字段，排除静态字段；只声明 getter 而没有字段也不接受。不转换大小写、不去除首尾空格，不接受 SQL 表达式、表名前缀、模板、引号或与属性名不同的数据库列名。例如属性 `crtTime` 映射列 `crt_time`，客户端应传 `crtTime`。
+- 非法字段、null 条目或缺失的条件运算符会在构造查询前抛出 `IllegalArgumentException`，不执行分页 count 或列表查询，由业务异常处理器返回提示。空列表和 null 列表仍表示不追加该类条件。
+- 这个校验只判断属性存在，不代表当前用户可以筛选密码、密钥等内部字段，也不检查该属性是否对应真实数据库列。接口需要字段权限时，业务进一步限制允许筛选、排序的属性。
 - 复杂嵌套 AND/OR、子查询或数据库专用表达式继续使用 Wrapper，不要把所有 SQL 逻辑塞进 PO。
 
-不通过 `ISuperService`时，也可以直接把同一个查询对象传给指定数据源：
+不通过 `ISuperService`时，也可以直接把同一个查询对象传给指定数据源；手动从前端参数拼装动态条件或排序的代码，应先调用 `ReflectionUtil.hasField(实体类, name)` 校验并拒绝不合法名称，底层 Wrapper 的字符串入口仍可表达服务端可信的 SQL：
 
 ```java
 Page<PayChannelEntity> result = ModelSelectWrapper
@@ -8954,7 +8997,7 @@ Service 接口默认方法不会注册 Spring Bean，也不会自动开启事务
 
 `save()` 不是数据库原生 UPSERT：它会先查后写，有额外往返，且并发时仍要依赖唯一索引处理竞态。业务明确知道是新增还是更新时，直接调用 `insert*` 或 `update*` 性能更好，语义也更清楚。
 
-`page(PagePo)`会解析业务子类上的 `@JoinWhere`字段，再应用 `PagePo`自带的动态条件、分页和排序；完整页面写法见[公共业务模型](#ai-practice-models-页面查询对象pagepo--joinwhere)。不要把前端传入的排序字段名无限制透传；Controller/Service 应使用允许列表转换为可排序的实体属性。
+`page(PagePo)`先通过 `ReflectionUtil.hasField` 校验 `and/or` 与 `orderList` 的 name，必须与实体 Java 实例字段名精确一致（包含继承字段）；非法字段在任何 SQL 执行前抛出 `IllegalArgumentException`。通过后解析业务子类上的 `@JoinWhere` 字段，再应用动态条件、分页和排序，值仍走参数绑定。完整页面写法见[公共业务模型](#ai-practice-models-页面查询对象pagepo--joinwhere)。属性存在校验不等于字段权限，Controller/Service 仍可根据业务进一步限制可筛选、可排序的属性。
 
 <a id="ai-practice-service-itreeservice-用法"></a>
 #### `ITreeService` 用法
@@ -9316,17 +9359,13 @@ yulinlin:
     # 不提供 CryptoCodec，也不配置 crypto.devices，框架不接管接口加解密。
     limit:
       enabled: true
-      ip-header: X-Real-IP
-      trusted-proxies:
-        - 127.0.0.1
-        - "::1"
 ```
 
 RBAC 不使用 `@Profile` 条件，登录接口、Service、Repository 和公共鉴权 AOP 随 admin 正常启动。案例默认的 Schema 扫描只包含 RBAC 实体，不会改动旧 `SysUserEntity` 的表；环境配置如果扩大扫描范围，以实际配置为准。案例使用全局默认 group；如果业务同时使用多个 group，应按[多数据源](#ai-datasources-routing)和 [Schema](#ai-datasources-schema) 专题添加明确的 `@JoinSession` 路由和对应扫描。
 
 Admin 默认不提供 CryptoCodec，也不配置设备密钥，框架不接管报文加解密；案例 Controller 的 `@ApiCrypto(false)` 此时不会触发正文处理，可以直接发送普通 JSON。要接入框架加密，按[接口加密](#ai-security-crypto)配置设备密钥（含 `unknown`）和 CBC IV，或提供[自定义 CryptoCodec](#ai-security-crypto-codec)，保持 `crypto.advice-enabled=true`（默认）并启用 `crypto.enabled`，再移除对应 Controller 的 `@ApiCrypto(false)`（或改为 true），即可跟随全局严格加密。无注解接口也参与；保留 false 的接口兼容请求并返回明文。全局 `enabled=false` 仍兼容解密，不是完全关闭；`advice-enabled=false` 才会停用两个 MVC Advice，同时保留 Codec 供手动调用。文件、监控等接口配置排除路径；报文加密不替代 HTTPS。
 
-登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。Nginx 的 `X-Real-IP` 只对 `trusted-proxies` 中的直接代理可信；代理不在本机时修改为实际代理地址。
+登录接口每 IP 每分钟最多 10 次，使用现有 `@ApiLimit`。默认通过 `IpResolver` 读取 `X-Forwarded-For` 第一项，Nginx 应覆盖该头且限制后端直连；业务方可以替换解析 Bean，也可以显式选择原来的可信代理策略，见[自定义 IP 获取](#ai-security-rate-limit-自定义-ip-获取)。
 
 <a id="ai-practice-rbac-两表模型与状态枚举"></a>
 #### 两表模型与状态枚举

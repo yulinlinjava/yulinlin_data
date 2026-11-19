@@ -7,6 +7,8 @@ import com.yulinlin.security.crypto.CryptoConfiguredCondition;
 import com.yulinlin.security.limit.ApiLimitInterceptor;
 import com.yulinlin.security.limit.ApiLimitWebMvcConfigurer;
 import com.yulinlin.security.limit.IpBlacklist;
+import com.yulinlin.security.limit.IpResolver;
+import com.yulinlin.security.limit.HeaderIpResolver;
 import com.yulinlin.security.web.CryptoRequestBodyAdvice;
 import com.yulinlin.security.web.CryptoResponseBodyAdvice;
 import com.yulinlin.security.web.CryptoPathExclusions;
@@ -30,6 +32,12 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdvice;
 @ConditionalOnClass(RequestBodyAdvice.class)
 @EnableConfigurationProperties({SecurityCryptoProperties.class, SecurityLimitProperties.class})
 public class SecurityAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean(IpResolver.class)
+    public IpResolver ipResolver() {
+        return new HeaderIpResolver();
+    }
 
     @Bean
     @ConditionalOnMissingBean(CryptoCodec.class)
@@ -93,8 +101,8 @@ public class SecurityAutoConfiguration {
     @ConditionalOnProperty(prefix = "yulinlin.security.limit", name = "enabled",
             havingValue = "true", matchIfMissing = true)
     public ApiLimitInterceptor apiLimitInterceptor(
-            SecurityLimitProperties properties, IpBlacklist ipBlacklist) {
-        return new ApiLimitInterceptor(properties, ipBlacklist);
+            SecurityLimitProperties properties, IpBlacklist ipBlacklist, IpResolver ipResolver) {
+        return new ApiLimitInterceptor(properties, ipBlacklist, ipResolver);
     }
 
     @Bean

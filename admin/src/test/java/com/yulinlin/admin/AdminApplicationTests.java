@@ -13,6 +13,7 @@ import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.session.EntitySession;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
+import com.yulinlin.data.lang.json.JsonUtil;
 import com.yulinlin.data.lang.util.Money;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
@@ -43,12 +44,11 @@ public class AdminApplicationTests {
     public void go() throws Exception{
 
 
+
         long count = ModelSelectWrapper.newInstance(UserInfoEntity.class)
-                .selectEach((e) -> {
 
-                });
+                .count();
 
-        List<UserInfoEntity> userInfoEntities = ModelSelectWrapper.newInstance(UserInfoEntity.class).selectList();
 
 
         int a = 0;

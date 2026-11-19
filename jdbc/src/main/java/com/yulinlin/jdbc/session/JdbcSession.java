@@ -27,6 +27,27 @@ import java.util.function.Consumer;
 @Slf4j
 public class JdbcSession extends AbstractJdbcSession implements TransactionSession  {
 
+    private volatile List<JdbcSqlGuard> sqlGuards = List.of();
+
+    public void setSqlGuards(List<? extends JdbcSqlGuard> guards) {
+        sqlGuards = guards == null ? List.of() : List.copyOf(guards);
+    }
+
+    @Override
+    protected void beforeExecution(List<ParseResult> requests) {
+        if (sqlGuards.isEmpty()) return;
+        // Check every distinct template before a batch can open connections or submit workers.
+        Set<String> templates = new LinkedHashSet<>();
+        for (ParseResult request : requests) {
+            if (request.getRequest() instanceof SqlNode node) templates.add(node.getSql());
+        }
+        for (String sql : templates) checkSql(sql);
+    }
+
+    private void checkSql(String sql) {
+        for (JdbcSqlGuard guard : sqlGuards) guard.check(this, sql);
+    }
+
     @Override
     protected void printExecution(SessionExecution execution) {
         JdbcExecutionLog.print(execution);
@@ -118,7 +139,8 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         }
     }
 
-    /** Keeps schema logging and execution in the owning Session. */
+    /** Framework schema maintenance only: retain DDL logging, but bypass business SQL guards.
+     * Business DDL submitted through ExecuteRequest still goes through beforeExecution. */
     protected int executeSchemaSql(Statement statement, String sql) throws SQLException {
         log.info("[{}][表结构]\n{}", group(), sql);
         try {

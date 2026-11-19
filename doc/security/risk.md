@@ -245,7 +245,7 @@ var customReplay = new RiskReplay(riskProperties,
 
 Date / DateTime 用 getTime()；LocalDateTime 或无时区字符串按来源时区转换为 epoch 毫秒。不要依赖运行机器默认时区。可直接运行 [AdminRiskReplayTest](../../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskReplayTest.java)，包含极速、普通、六小时、间歇访问、自定义组件及真实 JSON 导入，格式见 [admin 测试说明](../../admin/src/test/README.md#行为风控历史回放)。
 
-直接连接历史库验证时，填写 admin 的本地配置 `src/test/resources/application-risk-local.yml`，运行 [AdminRiskDatabaseReplayTest](../../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskDatabaseReplayTest.java)。[公开模板](../../admin/src/test/resources/application-risk-local.example.yml)包含 MySQL／PG／H2 连接、字段映射和规则阈值；实际本地文件忽略 Git。默认读取配置时区下今天零点至运行时间的全部用户，也可指定用户及历史时间范围。ORM 在同一只读快照中分页读取全部记录，逐用户独立回放，输出 Markdown／JSON 用户报告及首次命中依据，不建表、不写库。完整步骤及内存边界见[本地数据源回放](../../admin/src/test/README.md#从本地配置的数据源读取历史)。
+直接连接历史库验证时，创建并填写 `admin/src/test/resources/application-risk-local.yml`，运行 [AdminRiskDatabaseReplayTest](../../admin/src/test/java/com/yulinlin/admin/risk/AdminRiskDatabaseReplayTest.java)。[本地数据源回放说明](../../admin/src/test/README.md#从本地配置的数据源读取历史)提供可复制的 YAML 示例，包含 MySQL／PG／H2 连接、字段映射、规则阈值及完整操作步骤；实际本地文件忽略 Git。默认读取配置时区下今天零点至运行时间的全部用户，也可指定用户及历史时间范围。ORM 在同一只读快照中分页读取全部记录，逐用户独立回放，输出 Markdown／JSON 用户报告及首次命中依据，不建表、不写库。大量数据的内存边界也见上述说明。
 
 ## 返回给管理页面的分析报告
 

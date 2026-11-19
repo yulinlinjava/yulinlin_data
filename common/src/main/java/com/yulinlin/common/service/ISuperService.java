@@ -100,7 +100,17 @@ public interface ISuperService<E extends AbstractModel<E>> {
 
     default Page<E> page(PagePo po) {
         Objects.requireNonNull(po, "po");
-        return ModelSelectWrapper.newInstance(getEntityClass(), po)
+        Class<E> entityClass = getEntityClass();
+        validateConditions(entityClass, po.getAnd(), "and");
+        validateConditions(entityClass, po.getOr(), "or");
+        if (po.getOrderList() != null) {
+            for (int i = 0; i < po.getOrderList().size(); i++) {
+                OrderItem item = po.getOrderList().get(i);
+                if (item == null) throw new IllegalArgumentException("orderList[" + i + "] 不能为空");
+                validateFieldName(entityClass, item.getName(), "orderList[" + i + "].name");
+            }
+        }
+        return ModelSelectWrapper.newInstance(entityClass, po)
                 .and(wrapper -> {
                     if (po.getAnd() != null) {
                         for (PagePo.Field field : po.getAnd()) {
@@ -124,6 +134,24 @@ public interface ISuperService<E extends AbstractModel<E>> {
                     }
                 })
                 .selectPage();
+    }
+
+    private static void validateConditions(Class<?> entityClass, List<PagePo.Field> fields, String source) {
+        if (fields == null) return;
+        for (int i = 0; i < fields.size(); i++) {
+            PagePo.Field field = fields.get(i);
+            String location = source + "[" + i + "]";
+            if (field == null) throw new IllegalArgumentException(location + " 不能为空");
+            validateFieldName(entityClass, field.getName(), location + ".name");
+            if (field.getCondition() == null)
+                throw new IllegalArgumentException(location + ".condition 不能为空");
+        }
+    }
+
+    /** 客户端只能选择实体属性；反射工具内部缓存元数据，包含继承字段并排除静态字段。 */
+    private static void validateFieldName(Class<?> entityClass, String name, String location) {
+        if (!ReflectionUtil.hasField(entityClass, name))
+            throw new IllegalArgumentException(location + " 必须是实体 " + entityClass.getSimpleName() + " 的属性名");
     }
 
     @SuppressWarnings("unchecked")

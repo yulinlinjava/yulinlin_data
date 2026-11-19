@@ -7,6 +7,6 @@ package com.yulinlin.security.limit;
 @FunctionalInterface
 public interface IpBlacklist {
 
-    /** Returns whether the normalized real client IP must be rejected. */
+    /** Returns whether the client address supplied by IpResolver must be rejected. */
     boolean isBlocked(String ip);
 }

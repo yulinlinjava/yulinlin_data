@@ -23,6 +23,7 @@
 - **批量与同步**：[增量同步](#ai-write-sync-incremental) · [人工全量同步与续传](#ai-write-sync-full) · [批量与多连接写入](#ai-write-sync-batch) · [EntityCounter 聚合插入与更新](#ai-write-sync-counter) · [延迟写队列](#ai-write-sync-queue)
 - **缓存**：[缓存选择与公共配置](#ai-cache-config) · [Caffeine 内存缓存](#ai-cache-caffeine) · [Ehcache 持久化缓存](#ai-cache-ehcache) · [Redis 与可选本地缓存](#ai-cache-redis) · [缓存序列化](#ai-cache-serialization) · [ORM 查询缓存](#ai-cache-query) · [CacheClient 业务缓存](#ai-cache-client) · [缓存 Key、失效与一致性](#ai-cache-invalidation)
 - **接口安全**：[安全模块选型](#ai-security-modules) · [原生配置与统一策略](#ai-security-native-config) · [接口加密与前端对接](#ai-security-crypto) · [自定义接口加解密](#ai-security-crypto-codec) · [限流与 IP 黑名单](#ai-security-rate-limit) · [行为风控与异步存储](#ai-security-risk) · [用户模型与安全管理器](#ai-security-user) · [无状态 JWT 登录](#ai-security-jwt) · [自定义 Token 生成与解析](#ai-security-token-codec) · [自定义安全实现与拦截器](#ai-security-extension) · [有状态 Sa-Token 登录](#ai-security-sa-token) · [Spring Security 接入](#ai-security-spring) · [登录上下文生命周期](#ai-security-context) · [登录、角色与权限注解](#ai-security-authorization)
+- **MCP 接入**：[MCP 权限与工具扩展](#ai-mcp-integration) · [MCP 配置与后台任务](#ai-mcp-configuration) · [现有网盘 MCP 迁移](#ai-mcp-netdisk)
 - **常用工具**：[lang 定位与类型目录](#ai-tools-catalog) · [HTTP 请求、上传与下载](#ai-tools-http) · [HTTP 执行器规范与替换](#ai-tools-http-executor) · [反射复制与深克隆](#ai-tools-reflection) · [JSON 转换](#ai-tools-json) · [日期、数字与字符串工具](#ai-tools-value) · [轻量缓存与资源池](#ai-tools-local-cache) · [线程、调度与事件](#ai-tools-concurrency) · [Lambda、泛型与包扫描](#ai-tools-types) · [序列化、元组与扩展 SPI](#ai-tools-serialization)
 - **项目实践**：[项目开发规范](#ai-practice-conventions) · [公共实体与页面参数](#ai-practice-models) · [通用 Service 与树服务](#ai-practice-service) · [完整 CRUD 分层案例](#ai-practice-crud-example) · [Admin RBAC 与 JWT 登录案例](#ai-practice-rbac)
 
@@ -56,6 +57,7 @@
 | JSON 接口请求/响应加密、限流、权限协议 | security；Web 能力需要 Spring MVC，独立于 ORM 数据库模块 |
 | 用户登录与请求身份恢复 | security-jwt（无状态）或 security-sa-token（有状态）二选一，自动依赖 security；业务提供 UserStore，见[安全选型与扩展](#ai-security-modules-jwt-与-sa-token-如何选择) |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
+| 外部 AI 调用业务工具、可选服务器命令 | mcp；复用 security 和 starter，默认关闭，见 [MCP 接入](#ai-mcp-integration) |
 | 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
 | 可选查询缓存 | cache-caffeine、cache-ehcache、cache-redis 可共存；单实现自动选择，多个实现用 yulinlin.cache.default 指定 ORM 默认缓存，客户端可指定名称 |
@@ -1647,6 +1649,8 @@ int affected = ModelUpdateWrapper.newInstance("mysql", patch)
 ### 本页导航
 
 - [查询条件与结果组织](#ai-orm-query-查询条件与结果组织)
+- [条件接口与回调类型](#ai-orm-query-条件接口与回调类型)
+- [底层 Wrapper 与工厂](#ai-orm-query-底层-wrapper-与工厂)
 - [大结果集逐条消费](#ai-orm-query-大结果集逐条消费)
 - [计数与分页总数](#ai-orm-query-计数与分页总数)
 - [查看执行计划](#ai-orm-query-查看执行计划)
@@ -1683,6 +1687,89 @@ var users = query.selectList();
 | explain() / explainCount() | H2、MySQL、PG 的普通 EXPLAIN：分别查看当前查询和派生 count 的原生计划，详见[查看执行计划](#ai-orm-query-查看执行计划) |
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
+
+<a id="ai-orm-query-条件接口与回调类型"></a>
+### 条件接口与回调类型
+
+条件接口现在只保留实体类型：`IConditionWrapper<E>`。比较条件、布尔组合及 `meta(...)` 都返回条件接口，可以继续链式调用；无需再传自身类型 `R`。内置实现为 `ConditionManager<E>`，扩展基类为 `AbstractConditionWrapper<E>`。
+
+```java
+import com.yulinlin.data.core.wrapper.IConditionWrapper;
+import com.yulinlin.data.core.wrapper.impl.ConditionManager;
+import java.util.function.Consumer;
+
+IConditionWrapper<DemoUser> active = new ConditionManager<DemoUser>()
+        .eq(DemoUser::getStatus, 1);
+Consumer<IConditionWrapper<DemoUser>> names = c -> c.or(or -> or
+        .eq(DemoUser::getUsername, "alice")
+        .eq(DemoUser::getUsername, "bob"));
+
+var users = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+        .and(active)
+        .where(names)
+        .orderByAsc("username")
+        .selectList();
+```
+
+Model 层也只保留实体泛型 `E`：`ModelConditionWrapper<E>`、各 `BaseModel...Wrapper<E>` 和各 `Model...Wrapper<E>` 都不再暴露条件实现类型 `W` 或自身类型 `R`。通过普通方法覆写返回具体 Wrapper，查询条件后仍可调用 `selectList()`／`selectPage()`／`exist()`，更新和删除条件后仍可调用 `execute()`；条件构建和执行逻辑仍复用基类。
+
+```java
+ModelSelectWrapper<DemoUser> query = ModelSelectWrapper.newInstance(DemoUser.class)
+        .eq(DemoUser::getStatus, 1)
+        .orderBy(order -> order.orderByAsc("username"))
+        .page(1, 15);
+boolean exists = query.exist();
+```
+
+`where`、`and`、`or`、`not` 和分组 `having` 的 Model 回调统一接收 `IConditionWrapper<E>`；底层 Wrapper 的 `where`／`having` 也支持复用这个接口类型的消费者。Model 查询的排序回调接收 `BaseModelSelectWrapper<E>`；`apply` 回调接收 `ISelectWrapper<E>` 或 `IGroupWrapper<E>`，查询 `fieldMeta` 接收 `IAsFieldListWrapper<E>`，不要求调用方指定具体实现类型。
+
+布尔条件语义保持原样：条件接口的无参 `and()`／`or()`／`not()` 返回新建子组；消费者重载返回父条件，便于继续追加同级条件。`and(已有条件)` 合并已有条件树，可以接收 `IConditionWrapper<?>`；Lambda 属性方法仍按实体 `E` 检查类型。`struct()` 和 `meta(...)` 的作用不变。
+
+这是源码 API 调整，显式声明 `IConditionWrapper<E, R>` 的代码需改为 `IConditionWrapper<E>`，`AbstractConditionWrapper<E, R>` 改为 `AbstractConditionWrapper<E>`；回调中的具体实现类型改为条件接口。不要将 `new ConditionManager<E>().eq(...)` 的结果赋给 `ConditionManager<E>`，应使用 `IConditionWrapper<E>` 接收。自定义实现和依赖框架的模块需要重新编译，不提供旧泛型形式的兼容入口。
+
+Model 调用方的迁移：`ModelSelectWrapper<E, W>`（以及 Group／Update／Delete）改为 `ModelSelectWrapper<E>`；`BaseModel...Wrapper<E, W, R>` 改为 `BaseModel...Wrapper<E>`，插入基类的 `<E, R>` 同样改为 `<E>`。显式工厂调用 `ModelSelectWrapper.<E, W>newInstance(...)` 改为 `ModelSelectWrapper.<E>newInstance(...)`，通常直接省略显式类型参数即可。自定义子类若新增专有链式方法，可自行覆写所需方法并返回子类类型。
+
+<a id="ai-orm-query-底层-wrapper-与工厂"></a>
+### 底层 Wrapper 与工厂
+
+底层查询、分组、插入、更新、删除接口统一为 `ISelectWrapper<E>`、`IGroupWrapper<E>`、`IInsertWrapper<E>`、`IUpdateWrapper<E>`、`IDeleteWrapper<E>`。字段、更新字段、投影、指标和聚合组件同样只保留实体类型 `E`，不再让调用方传入 `R / W / C / U / M / A` 等实现类型。对应抽象实现和内置具体实现也只保留 `E`。
+
+```java
+import com.yulinlin.data.core.session.SessionUtil;
+import com.yulinlin.data.core.wrapper.ISelectWrapper;
+import com.yulinlin.data.core.wrapper.IUpdateWrapper;
+
+var factory = SessionUtil.route().getWrapperFactory();
+ISelectWrapper<DemoUser> select = factory.<DemoUser>createSelectWrapper()
+        .table("ai_demo_user")
+        .fields(fields -> fields.field("id").field(DemoUser::getUsername, "username"))
+        .where(where -> where.eq(DemoUser::getStatus, 1))
+        .orderByAsc("id")
+        .page(1, 15);
+
+IUpdateWrapper<DemoUser> update = factory.<DemoUser>createUpdateWrapper()
+        .table("ai_demo_user")
+        .fields(fields -> fields.field(DemoUser::getUsername, "alice")
+                .inc("status", 1))
+        .where(where -> where.eq("id", "1"));
+```
+
+这些操作只构建请求，执行仍使用 `QueryRequest`／`ExecuteRequest`／`RouteSession`；业务 CRUD 优先使用 Model Wrapper。无参工厂不能从模型推断 `E`，连续调用 Lambda 属性方法时请像上例显式写 `<DemoUser>`。
+
+| 回调或子组件 | 类型与链式行为 |
+| --- | --- |
+| `where`、`having`、`left`／`right`／`inner` 的条件 | `IConditionWrapper<E>`；无参访问和关联入口返回条件，消费者重载返回所属查询 |
+| 查询 `join` / 分组 `join` | `Consumer<ISelectWrapper<E>>` / `Consumer<IGroupWrapper<E>>`；执行后返回所属查询 |
+| 查询 `fields`、Model `fieldMeta` | `IAsFieldListWrapper<E>`，支持字段、别名、高亮和元数据 |
+| 插入 `fields` | `IInsertFieldsWrapper<E>`，支持 `.meta(...).field(...)` |
+| 更新 `fields` | `IUpdateFieldsWrapper<E>`，支持 `.field(...).inc(...).dec(...)`，不会退回普通字段接口 |
+| 分组 `metrics()`、`aggregations()` | `IMetricsWrapper<E>`、`IAggregationsWrapper<E>`，返回对应子组件，继续链式配置 |
+
+共用能力接口保留简单返回类型参数，例如 `ITableWrapper<R>`、`IPageWrapper<R>`、`ISortWrapper<E, R>`、`IWhereWrapper<E, R>`、`IHavingWrapper<E, R>`、`IJoinWrapper<E, R>` 和 `IMetaNode<R>`。这里的 `R` 只表示所属 Wrapper 的返回类型，不再要求递归泛型约束。内置具体类用协变返回保留 `SelectWrapper<E>` 等具体类型；元数据、字段构建和请求复制仍复用原逻辑，此次不改变复制的深浅或支持范围。
+
+迁移时将旧的 `ISelectWrapper<E, R, W, C>` 等操作接口改为仅 `<E>`，字段和指标接口的 `<E, R>` 同样改为 `<E>`。工厂显式类型参数只传实体；回调中的具体实现声明改为上表的接口类型。公共接口不再承诺返回某个指定的条件／字段实现，但仍支持注册自定义 Wrapper 工厂、继承抽象实现及覆写组件创建方法。依赖实现专有方法的代码需通过业务自定义入口调用；自定义子类需要自己的链式返回类型时覆写相应方法。升级后需重新编译调用方和自定义实现。
+
+传入已有条件的查询重载 `select.where(condition)` 会把条件加入查询，保留原条件树；已修复旧实现把传入条件加入自身、形成循环引用的问题。分组、更新、删除的既有条件组合／替换语义保持原样。
 
 <a id="ai-orm-query-大结果集逐条消费"></a>
 ### 大结果集逐条消费
@@ -2556,7 +2643,7 @@ public com.yulinlin.data.core.filter.IQueryFilter userTableFilter() {
             if (node instanceof com.yulinlin.data.core.wrapper.ICountWrapper count) {
                 node = count.getWrapper();
             }
-            if (node instanceof com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper<?, ?, ?, ?> select) {
+            if (node instanceof com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper<?> select) {
                 select.table("demo_user_202610");
             }
             return request;
@@ -7103,6 +7190,8 @@ Spring Session 原生注册表不支持 getAllPrincipals，因此默认分布式
 
 业务只读取当前用户、Token 和认证来源；请求结束由框架清理上下文。
 
+MCP 等已完成独立认证的服务端入口可通过 `SecurityContext.callAs(LoginSession, Callable)` 在同步回调内建立可信身份作用域；退出或抛异常后恢复此前上下文，不创建会话、不继承到子线程。它只供可信服务端适配使用，不能直接接受客户端提交的用户对象。作用域内只影响框架公开的 SecurityContext/SecurityUtil，不替换 Spring Security 原生 Authentication；原生方法安全仍按自身规则检查。参见 [MCP 接入](#ai-mcp-integration)。
+
 <a id="ai-security-context-本页导航"></a>
 ### 本页导航
 
@@ -7334,6 +7423,381 @@ public class UserApi {
 ---
 
 下一步：返回[接口安全主题目录](security/README.md)按需选择相关专题。
+
+---
+
+<a id="ai-mcp-integration"></a>
+<!-- source: doc/mcp/integration.md -->
+<a id="ai-mcp-integration-mcp-快速接入与扩展"></a>
+## MCP 快速接入与扩展
+
+[文档首页](README.md) / [MCP](mcp/README.md)
+
+<a id="ai-mcp-integration-依赖和启动"></a>
+### 依赖和启动
+
+沿用 JDK 25、Spring Boot 3.5.16 和框架 3.0，不为 MCP 升级整个应用。依赖来自同一份源码构建或团队制品仓库。
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>mcp</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+模块依赖公共 `security`、`starter`，不选择 JWT、Sa-Token 等具体认证实现。应用继续选择自己的安全模块并提供 `UserStore`。默认持久化需要一个已经接入的 ORM 数据源；也可以实现 `McpStore`。缺少权限策略、用户加载或存储，启用时启动失败。
+
+```yaml
+yulinlin:
+  mcp:
+    enabled: true
+    application-id: my-service
+    group: h2  # 已配置的数据源名称；单数据源可省略
+```
+
+`enabled` 只控制模块装配。新数据库中的运行开关默认关闭，需要网页登录的管理员通过管理接口启用。详见[配置与管理](#ai-mcp-configuration)。
+
+若使用 Spring Security 原生过滤器链，需要在现有链中允许 `/mcp` 到达 MVC，并只对这个 Bearer 入口忽略浏览器 CSRF 校验；认证由 MCP 入口完成。`@ApiPublic` 不会自动改写原生过滤器规则。例如在已有配置中加入 `requestMatchers("/mcp").permitAll()` 和 `csrf.ignoringRequestMatchers("/mcp")`。不要对 `/api/mcp/**` 放开网页登录或 CSRF 防护。项目自定义的认证 Filter 也不能提前吞掉 MCP 的 Bearer 头。
+
+<a id="ai-mcp-integration-一个权限接口三个明确的判断"></a>
+### 一个权限接口，三个明确的判断
+
+```java
+import com.yulinlin.mcp.auth.McpAccessPolicy;
+import com.yulinlin.security.auth.IUserDetails;
+import org.springframework.context.annotation.Bean;
+
+@Bean
+McpAccessPolicy mcpAccessPolicy() {
+    return new McpAccessPolicy() {
+        @Override public boolean canUse(IUserDetails user) {
+            return user.hasPermission("mcp:use");
+        }
+        @Override public boolean canManage(IUserDetails user) {
+            return user.hasPermission("mcp:manage");
+        }
+        @Override public boolean canInvoke(IUserDetails user, String toolName) {
+            return user.hasPermission("mcp:tool:" + toolName);
+        }
+    };
+}
+```
+
+权限名称完全由业务约定，框架没有默认放行或超级管理员特判：
+
+| 判断 | 生效位置 |
+| --- | --- |
+| `canUse` | 创建自己的凭证、每次外部请求校验、工具调用 |
+| `canManage` | 网页管理接口、跨凭证任务查看权限 |
+| `canInvoke` | 工具列表过滤和实际执行前再次校验；管理页取消任务还需要 `task_cancel` 权限 |
+
+管理权限不会自动赋予工具权限。仅有管理权限的用户可暂停 MCP、撤销凭证、查看管理记录，但不能给自己创建可用凭证或执行命令。新凭证绑定当前管理用户；首版不支持管理员替其他账号创建凭证。
+
+`canInvoke` 只决定是否能调用工具。订单归属、租户、目录范围等数据权限仍由业务服务判断。工具回调在当前已认证用户的 `SecurityContext` 中运行，可继续调用已有 Spring Service 代理；同步调用结束或抛异常后恢复原身份，不创建网页登录会话，也不向其他线程继承身份。
+
+<a id="ai-mcp-integration-显式注册业务工具"></a>
+### 显式注册业务工具
+
+```java
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yulinlin.mcp.tool.McpToolDefinition;
+import com.yulinlin.mcp.tool.McpToolProvider;
+import java.util.List;
+import org.springframework.context.annotation.Bean;
+
+// OrderService 是业务应用已有的服务，查询时检查当前用户的数据权限。
+@Bean
+McpToolProvider orderTools(ObjectMapper json, OrderService orders) throws Exception {
+    var schema = json.readTree("""
+        {
+          "type": "object",
+          "properties": {
+            "id": {"type": "string", "minLength": 1, "maxLength": 64}
+          },
+          "required": ["id"],
+          "additionalProperties": false
+        }
+        """);
+    return () -> List.of(new McpToolDefinition(
+        "order_query", "按订单编号查询当前用户可以访问的订单", schema, true,
+        (context, args) -> orders.findVisible(context.user().getUserId(), args.get("id").asText())
+    ));
+}
+```
+
+`McpCallContext` 包含 `applicationId`、`credentialId`、当前用户、服务端 `requestId` 和 `contextPath`，不传凭证明文。这里的追踪 `requestId` 与 `command_execute` 参数里的幂等编号不同。
+
+工具名重复启动报错。参数通过 JSON Schema Draft 2020-12 校验，支持嵌套、数组、`$defs`/本地 `$ref`、组合条件等；不自动加载远程 Schema。未知字段是否拒绝由 Schema 的 `additionalProperties` 决定，内置工具均为 `false`。`readOnly` 是工具描述，不会代替服务端授权。
+
+可用完整构造器传入 `outputSchema`。为兼容已有客户端，返回值包装为 `structuredContent.data`，因此输出 Schema 应描述完整的 `{ "data": ... }` 对象。输出校验发生在业务执行之后，失败不能表示业务已回滚，客户端不可自动重试写操作。
+
+<a id="ai-mcp-integration-身份与长期凭证"></a>
+### 身份与长期凭证
+
+默认 `McpIdentityProvider` 调用 `UserStore.load(accountId)`。账号禁用、删除时，用户加载实现应返回 `null`；每次请求都会重新加载用户并执行权限策略。业务已有用户缓存时，缓存更新/失效仍由业务保证。
+
+如果登录 ID 会随密码变化，需要提供稳定账号到当前身份的映射：
+
+```java
+@Bean
+McpIdentityProvider mcpIdentityProvider(AccountService accounts) {
+    return new McpIdentityProvider() {
+        @Override public String accountId(IUserDetails user) {
+            return accounts.stableAccountId(user.getUserId());
+        }
+        @Override public IUserDetails load(String accountId) {
+            return accounts.loadEnabledUser(accountId); // 禁用或不存在返回 null
+        }
+    };
+}
+```
+
+凭证随机生成，明文只在创建响应返回一次，数据库保存 SHA-256 摘要。`expiresAt` 省略、为 `null` 或 `0` 时永久有效；正数是到期毫秒时间戳，到期拒绝新请求。重启、网页退出及网页会话到期不会改变凭证自身的到期时间，也不会自动续期；撤销、暂停 MCP 或账号失去权限在后续请求生效。凭证不用于网页登录和 `/api/mcp` 管理认证。暂停或到期不会终止已经启动的后台进程，需要明确取消任务。详见[有效期规则和创建示例](#ai-mcp-configuration-凭证有效期)。
+
+<a id="ai-mcp-integration-存储审计和执行器扩展"></a>
+### 存储、审计和执行器扩展
+
+| Bean | 业务可替换的行为 |
+| --- | --- |
+| `McpStore` | 凭证、运行开关、任务、审计的持久化 |
+| `McpIdentityProvider` | 稳定账号 ID 和当前用户加载 |
+| `McpAccessPolicy` | 使用、管理和工具调用权限；必须提供 |
+| `McpToolProvider` | 注册任意业务工具；可有多个 Bean |
+| `McpAuditTargetProvider` | 从参数中提取允许展示的目标 ID；默认空对象 |
+| `McpTaskOutputResolver` | 本实例任务输出文件路径，包括兼容旧路径 |
+| `CommandExecutor` | 本机命令启动策略；返回受任务服务跟踪的 `Process` |
+| `McpManagementGuard` | 网页管理写请求的来源及请求头校验 |
+
+`McpStore.create` 必须原子地创建唯一 key，重复必须报错，不能用 `save` 覆盖模拟；任务先成功持久化，再派发进程。跨实例共享凭证时，`get` 必须能看到已提交的撤销，不能读到未失效的本地缓存或延迟副本。默认 ORM 存储关闭查询缓存、从主节点读取，并通过数据库唯一索引保证原子创建。
+
+审计默认不复制命令、密码、Token、文件内容或工具输出。可以只提取非敏感目标字段：
+
+```java
+@Bean
+McpAuditTargetProvider auditTargets() {
+    return (tool, args) -> tool.equals("order_query")
+        ? java.util.Map.of("orderId", args.path("id").asText()) : java.util.Map.of();
+}
+```
+
+每条审计目标最多 16 项，字段名最多 128 字符，值最多 512 字符。审计开始记录失败时不执行工具；操作完成后审计更新失败会返回提示，避免客户端误以为没有执行。
+
+---
+
+<a id="ai-mcp-configuration"></a>
+<!-- source: doc/mcp/configuration.md -->
+<a id="ai-mcp-configuration-mcp-配置管理和任务"></a>
+## MCP 配置、管理和任务
+
+[文档首页](README.md) / [MCP](mcp/README.md)
+
+<a id="ai-mcp-configuration-完整配置"></a>
+### 完整配置
+
+```yaml
+yulinlin:
+  mcp:
+    enabled: false                 # 默认不注册接口、清理任务、命令执行器
+    application-id: my-service     # 开启时必填；稳定的应用标识
+    instance-id: local             # 同时运行的副本必须不同；同一副本重启保持稳定
+    group: h2                      # ORM 数据源名称；单数据源可省略
+    path: /mcp
+    management-path: /api/mcp
+    allow-insecure: true           # 允许 HTTP；false 时远程请求必须 HTTPS
+    allowed-origins: []            # 默认仅接受同源 Origin；非浏览器可不带 Origin
+    max-request-bytes: 4194304      # 默认 4 MiB，可配置范围 1 B～64 MiB
+    data-directory: ./mcp-data
+    retention-days: 30
+    command:
+      enabled: false
+      shell: /bin/bash
+      max-concurrent: 4            # 每个实例的并发命令数量
+      max-command-bytes: 65536
+      default-timeout-seconds: 3600 # 0 不限时，最大 604800 秒
+      max-output-bytes: 8388608    # 每个任务最多保存 8 MiB 输出
+    process:
+      enabled: false
+    monitor:
+      enabled: false
+```
+
+`application-id`、`instance-id` 只允许 1～64 位字母、数字、下划线、短横线。路径可配置但不能相同；与现有 Controller 重复映射时 Spring MVC 启动报错。反向代理 HTTPS 由应用配置可信代理并恢复正确的 Servlet scheme/host；模块不自行信任客户端的转发头。
+
+默认表为 `yulinlin_mcp_record`，启动调用 ORM `initializeSchema`，不需要手工添加模块实体扫描路径；仍服从数据源的 schema 创建/校验策略。多数据源必须设置 `group`。自定义 `McpStore` 后默认 ORM 存储退出，`group` 由自定义实现自行处理。
+
+数据 key、kind 按 `application-id` 隔离。不要随意更换应用标识，否则会读到另一份空配置；同一应用的各实例共享凭证、运行开关和任务元数据，输出文件及进程控制归所属实例。该设计不是分布式任务调度器。
+
+<a id="ai-mcp-configuration-网页管理接口"></a>
+### 网页管理接口
+
+管理接口通过现有安全模块的网页登录身份和 `canManage` 校验，返回框架 `R` 包装。以下为默认路径：
+
+| 方法 | 路径 | 请求或用途 |
+| --- | --- | --- |
+| GET | `/api/mcp` | enabled、available、凭证摘要列表 |
+| PUT | `/api/mcp` | `{"enabled":true}`，启用或暂停 |
+| POST | `/api/mcp/credentials` | `{"name":"local-ai","expiresAt":null}`，给当前用户创建凭证，可指定到期时间 |
+| DELETE | `/api/mcp/credentials/{id}` | 撤销凭证 |
+| GET | `/api/mcp/tasks?page=1` | 全部凭证的任务分页，每页 30 条 |
+| GET | `/api/mcp/tasks/{id}` | 任务详情 |
+| GET | `/api/mcp/tasks/{id}/output?offset=0` | 按字节偏移读取输出，最多 64 KiB |
+| POST | `/api/mcp/tasks/{id}/cancel` | 还需 `canInvoke(user,"task_cancel")` |
+| DELETE | `/api/mcp/tasks/{id}` | 删除已结束任务和本地输出 |
+| GET | `/api/mcp/audit?page=1` | 调用记录，每页 50 条 |
+
+管理写请求必须带 `X-MCP-Action: mcp-management`，并通过 Origin 和 HTTP/HTTPS 校验。固定请求头不是登录凭证。所有管理响应禁用缓存。命令功能关闭时任务接口返回 404。
+
+创建凭证返回的 `data.token` 只显示一次，列表中不返回 token 或 digest。新安装可以先启用运行开关、创建凭证，再把 token 填到外部客户端的 `Authorization` 中。
+
+<a id="ai-mcp-configuration-凭证有效期"></a>
+#### 凭证有效期
+
+`expiresAt` 使用 Unix 毫秒时间戳，不是有效秒数，也不按最后活跃时间续期：
+
+- 省略、`null` 或 `0`：永久有效；保存和响应统一为 `0`。
+- 正数：绝对到期时间，当前时间达到该值（`now >= expiresAt`）即失效。
+- 创建时传负数、已到期或恰好等于当前时间的时间戳：返回 HTTP 400，不保存凭证。
+
+永久凭证：
+
+```json
+{"name":"local-ai","expiresAt":0}
+```
+
+有期限凭证（示例为 2030-01-01 00:00:00 UTC；实际使用时填写未来的到期时间）：
+
+```json
+{"name":"temporary-ai","expiresAt":1893456000000}
+```
+
+创建响应的 `data.credential.expiresAt` 和管理列表的 `credentials[].expiresAt` 返回实际到期时间，过期后 `active=false`。到期会保留凭证记录，不需要定时清理才能失效；后续外部请求返回 HTTP 401，后台命令在启动进程前再次检查。已经启动的进程不会因凭证到期被强行终止，管理员仍可通过网页登录管理和取消任务。永久凭证也可以手动撤销。
+
+Java 调用为 `credentials.create(user, name, expiresAt)`，原 `create(user, name)` 仍创建永久凭证。数据库中旧记录缺少 `expiresAt` 或为 `null`/`0` 时仍为永久；所有正数，包括历史记录，都会执行到期校验。历史迁移注意事项见[网盘迁移约定](#ai-mcp-netdisk-复用原表和旧凭证)。
+
+<a id="ai-mcp-configuration-外部客户端接入"></a>
+### 外部客户端接入
+
+支持无需会话 ID 的 JSON Streamable HTTP：`POST /mcp`，JSON-RPC 2.0，支持 `initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call`。支持协议版本 `2025-03-26`、`2025-06-18`、`2025-11-25`，初始化返回协商版本。
+
+请求头：
+
+```http
+Authorization: Bearer <创建后获得的凭证>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2025-06-18
+```
+
+初始化例子：
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example-client","version":"1.0"}}}
+```
+
+调用例子：
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"order_query","arguments":{"id":"order-123"}}}
+```
+
+成功响应含 `result.structuredContent.data`，`result.content` 同时提供 JSON 文本。协议错误返回 JSON-RPC error，业务执行失败返回 `isError:true`；认证拒绝使用 HTTP 401/403。初始化通知返回 202。
+
+首版不提供 OAuth、GET SSE、旧 HTTP+SSE、交互式输入、MCP 协议级 tasks 扩展；后台任务通过普通工具公开。客户端必须支持自定义 Bearer 请求头。不要将仅支持 OAuth 自动发现的客户端视为已经兼容。
+
+传输入口使用现有 `@ApiLimit(count=180, interval="1m", by=IP)`，实际 IP 识别及限流行为沿用安全模块。业务的全局异常处理应保持正确 HTTP 状态；反向代理可再设置请求大小及速率限制。
+
+<a id="ai-mcp-configuration-可选系统工具"></a>
+### 可选系统工具
+
+| 开关 | 工具 |
+| --- | --- |
+| `monitor.enabled` | `server_info` |
+| `command.enabled` | `command_execute`、`task_list`、`task_get`、`task_output`、`task_cancel` |
+| `process.enabled` | `process_list`、`process_stop` |
+
+默认命令执行器仅支持 Linux，普通业务工具可在 Windows 使用；命令通过配置的 shell `-c` 执行，工作目录必须是已有绝对路径，stdin 关闭，不提供 PTY。执行权限等于应用进程权限，不是文件沙箱，也不限制为业务网盘目录。
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"command_execute","arguments":{"command":"date; uptime","cwd":"/tmp","timeoutSeconds":30,"requestId":"inspect-001"}}}
+```
+
+立即从 `result.structuredContent.data.id` 获取任务 ID，随后用 `task_get` / `task_output` 查询。HTTP 断开不会取消任务。`requestId` 在当前应用和凭证内唯一；同编号、同规范化命令/目录/超时复用已存在任务，不同参数返回冲突。唯一记录先落库，再启动进程，跨实例并发提交也不能重复派发。删除或过期清理任务记录后该编号不再具备去重能力。
+
+状态为 `queued`、`running`、`cancelling`、`succeeded`、`failed`、`cancelled`、`timed_out`、`unknown`。重启只将本实例旧的活跃任务标为 `unknown`，不重跑、不使用旧 PID 杀进程，也不保证 OS 子进程在容器重启后仍存活。输出默认放在 `data-directory/application-id/instance-id/output`。
+
+超过输出上限仍继续读取并丢弃多余字节，避免管道塞满。输出文件写失败也继续排空并设置 `truncated`。`offset` / `nextOffset` 是字节偏移；跨页 UTF-8 字符可能拆开，要无损合并请拼接解码后的 `base64` 字节再解码文本。
+
+非管理用户只能通过工具查看本凭证的任务；管理用户查看他人任务仍需对应工具调用权限。列表先按全局任务页读取再按凭证过滤，页面可能不足 30 条或为空。外部读取输出、取消、删除必须访问任务所属实例；模块不会把另一实例的 PID 当作本机进程操作。
+
+`process_stop` 必须传进程列表返回的 `stopIdentity` 作为 `identity`，以及 `confirm:true`；以精确启动时刻防止 PID 重用，保护 PID 1、当前进程及祖先进程。取消任务会尝试终止可见子进程，脱离进程树的服务需单独管理。
+
+`server_info` 提供当前 JVM 所处服务器/容器的 OS、Java、CPU、内存、根文件系统容量和网卡地址；不提供远程宿主机数据或网卡实时带宽。进程列表部分 Linux `/proc`/`ps` 指标在其他系统可能为空。
+
+<a id="ai-mcp-configuration-保留和容量"></a>
+### 保留和容量
+
+每小时清理过期审计、已结束本实例任务及其输出；首次清理约在启动一分钟后。审计保留 `retention-days` 天，并收敛到最近 10,000 条；不是每次调用的硬上限。任务和凭证各最多接纳约 2,000 条，跨实例边界并发可能短暂超限。凭证不会因为审计保留期而自动删除或失效；撤销记录仍保留。`started` 审计意味着结果未确认，不能据此自动重试写操作。
+
+任务命令和输出属于敏感运维数据，管理读取受 `canManage` 保护；审计默认不保存原始参数。模块的本地并发限制、输出文件和保留策略不等于分布式资源配额。
+
+---
+
+<a id="ai-mcp-netdisk"></a>
+<!-- source: doc/mcp/netdisk.md -->
+<a id="ai-mcp-netdisk-现有网盘的-mcp-迁移约定"></a>
+## 现有网盘的 MCP 迁移约定
+
+[文档首页](README.md) / [MCP](mcp/README.md)
+
+通用模块已经提供扩展入口，但引入依赖不会自动改写另一个仓库的代码、数据库或输出目录。现有 `D:/java/ftp` 网盘不能同时保留旧 `/mcp` Controller 又启用新 Controller。以下是迁移时需要完成的适配，不表示网盘实例已经切换或完成运行验证。
+
+<a id="ai-mcp-netdisk-保留现有权限与业务服务"></a>
+### 保留现有权限与业务服务
+
+网盘提供 `McpAccessPolicy`：三个判断均要求现有超级管理员角色。不要直接使用“已登录”作为 MCP 权限。`McpIdentityProvider` 将旧凭证中的登录 ID 转换成稳定账号 key，再从当前账号记录恢复用户；必须检查账号启用状态和超级管理员角色。密码变化不应丢失长期凭证关联。
+
+文件、上传、分享工具通过 `McpToolProvider` 注册，回调调用原服务，保留授权目录、内部目录保护、版本校验、2 MiB 分片和原指纹算法。模块不复制这套文件实现。
+
+需要保留的业务工具名为：`file_entries`、`file_list`、`file_read_text`、`file_write_text`、`file_create_text`、`file_tail`、`file_download`、`folder_create`、`folder_ensure`、`file_rename`、`file_move`、`file_delete`、`archive_extract`、`upload_status`、`upload_chunk`、`upload_merge`、`upload_cancel`、`share_create`、`share_list`、`share_revoke`。
+
+通用命令、任务、进程工具沿用原名称与 `structuredContent.data`。若旧 `server_info` 依赖网盘实时网络采样的完整结果，关闭通用 `monitor.enabled`，由网盘 Provider 注册同名工具复用原返回结构；通用版本只提供基础系统信息。重名工具会启动报错。
+
+<a id="ai-mcp-netdisk-复用原表和旧凭证"></a>
+### 复用原表和旧凭证
+
+提供 `McpStore`，继续访问原 `netdisk_mcp_record` 表及原 key/kind，不增加新应用前缀。这个适配只供该网盘应用使用，不能拿同一命名空间给多个应用共享。默认 `OrmMcpStore` 自动退出，避免创建一套空的凭证库。
+
+保留 `credential-<SHA-256>` key 和原凭证字段。模块接受原 token 的摘要，不要求 token 前缀为 `ylmcp_`；已有 `ndmcp_` token 无需重新签发，但必须通过当前有效期和账号校验。`sessionId` 仍作为历史元数据，`expiresAt` 则统一按新规则处理：缺失、`null`、`0` 为永久，正数为实际到期时间。撤销状态原样保留，不得重置。新 `create` 方法必须通过表的唯一索引原子插入，不能转调旧的覆盖保存方法。
+
+旧网盘曾忽略正数 `expiresAt`；升级前需要核对这类数据。只有明确确认原本为永久授权的旧记录，才由业务迁移将该字段设为 `0`，保留其摘要和撤销状态；模块不会自动清除正数到期时间，避免把真正已过期的凭证重新激活。
+
+任务 JSON 新增可空的 `instanceId`、`runId`；旧记录缺省 `instanceId` 只归默认 `local` 实例。迁移时保持 `instance-id: local`，不要将旧任务任意归属到多台机器。账号映射和原表适配必须先验证，再开放外部请求。
+
+<a id="ai-mcp-netdisk-复用输出请求头和过滤器"></a>
+### 复用输出、请求头和过滤器
+
+提供 `McpTaskOutputResolver` 指向旧内部目录，回调只接收校验过的 32 位十六进制任务 ID：
+
+```java
+@Bean
+McpTaskOutputResolver mcpOutputs(StoragePathResolver paths) {
+    return id -> paths.internal().resolve("mcp-output").resolve(id + ".log");
+}
+```
+
+管理页面保持 `/api/mcp` 和框架 `R` 包装。为了保留旧前端的 `X-Netdisk-Action: mcp-management`，覆盖 `McpManagementGuard`，先调用 `McpHttpGuard.check(request)`，再验证旧请求头。不能只校验固定请求头而忽略 Origin。
+
+迁移 `CookieRequestFilter` 时，让 `/mcp` 保留原始 Bearer 请求头，由通用传输入口认证；不要再创建旧内部登录桥接，也不要把该头用于 `/api/**` 网页入口。清理旧 `McpLoginAuthenticator` 前同时处理 `AuthService` 中的旧认证类型判断，确保历史桥接 token 不能访问网页。
+
+只启用一套 Controller、清理器和任务执行器。旧页面可继续使用，但必须验证创建、暂停、撤销、任务输出、取消、审计等交互。网盘原有 Shell/TOTP 启用门槛若仍需保留，应在业务权限/管理适配中明确实现，通用模块不写死这一门槛。
+
+<a id="ai-mcp-netdisk-切换和回退"></a>
+### 切换和回退
+
+先备份原数据库和内部输出目录，停止接收新命令，等待可等待的任务完成；保留运行开关和凭证摘要，部署适配后核对已撤销凭证拒绝、未撤销凭证有效、旧输出可读及文件权限边界。任务状态 `unknown` 不表示进程已停止。
+
+复用原表时无需搬迁凭证数据，但通用任务 JSON 多出字段；回退旧程序前，应确认旧 ObjectMapper 忽略未知字段，或在停服状态下只移除新增任务元数据字段。不要恢复旧数据库快照覆盖新撤销记录，否则会重新激活已撤销凭证。旧 token 校验、表适配、网页过滤器和文件工具集成需在网盘仓库单独验证。
 
 ---
 

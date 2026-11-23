@@ -25,52 +25,52 @@ public  class WrapperFactoryImpl implements IWrapperFactory {
     }
 
     @Override
-    public IDeleteWrapper createDeleteWrapper(Object model) {
+    public <E> IDeleteWrapper<E> createDeleteWrapper(Object model) {
         return delete.create(model);
     }
 
     @Override
-    public IInsertWrapper createInsertWrapper(Object model) {
+    public <E> IInsertWrapper<E> createInsertWrapper(Object model) {
         return insert.create(model);
     }
 
     @Override
-    public IUpdateWrapper createUpdateWrapper(Object model) {
+    public <E> IUpdateWrapper<E> createUpdateWrapper(Object model) {
         return update.create(model);
     }
 
     @Override
-    public ISelectWrapper createSelectWrapper(Object model) {
+    public <E> ISelectWrapper<E> createSelectWrapper(Object model) {
         return select.create(model);
     }
 
     @Override
-    public IGroupWrapper createGroupWrapper(Object model) {
+    public <E> IGroupWrapper<E> createGroupWrapper(Object model) {
         return group.create(model);
     }
 
     @Override
-    public <E, R extends IDeleteWrapper<E, R, W>, W extends IConditionWrapper<E, W>> IDeleteWrapper<E, R, W> createDeleteWrapper() {
+    public <E> IDeleteWrapper<E> createDeleteWrapper() {
         return delete.create();
     }
 
     @Override
-    public <E, R extends IInsertWrapper<E, R, U>, U extends IInsertFieldsWrapper<E, U>> IInsertWrapper<E, R, U> createInsertWrapper() {
+    public <E> IInsertWrapper<E> createInsertWrapper() {
         return insert.create();
     }
 
     @Override
-    public <E, R extends IUpdateWrapper<E, R, W, U>, W extends IConditionWrapper<E, W>, U extends IUpdateFieldsWrapper<E, U>> IUpdateWrapper<E, R, W, U> createUpdateWrapper() {
+    public <E> IUpdateWrapper<E> createUpdateWrapper() {
         return update.create();
     }
 
     @Override
-    public <E, R extends ISelectWrapper<E, R, W, C>, W extends IConditionWrapper<E, W>, C extends IAsFieldListWrapper<E, C>> ISelectWrapper<E, R, W, C> createSelectWrapper() {
+    public <E> ISelectWrapper<E> createSelectWrapper() {
         return select.create();
     }
 
     @Override
-    public <E, R extends IGroupWrapper<E, R, W, M, A>, W extends IConditionWrapper<E, W>, M extends IMetricsWrapper<E, M>, A extends IAggregationsWrapper<E, A>> IGroupWrapper<E, R, W, M, A> createGroupWrapper() {
+    public <E> IGroupWrapper<E> createGroupWrapper() {
         return group.create();
     }
 

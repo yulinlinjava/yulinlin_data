@@ -3,59 +3,48 @@ package com.yulinlin.data.core.wrapper.impl;
 import com.yulinlin.data.core.node.from.Store;
 import com.yulinlin.data.core.wrapper.IInsertFieldsWrapper;
 import com.yulinlin.data.core.wrapper.IInsertWrapper;
-
+import java.util.Map;
 import java.util.function.Consumer;
 
-public abstract class AbstractInsertWrapper<
-        E,R extends AbstractInsertWrapper<E,R,U>,
-        U extends IInsertFieldsWrapper<E,U>
-
-        > extends AbstractWrapper<R> implements IInsertWrapper<E,R,U> {
+public abstract class AbstractInsertWrapper<E> extends AbstractWrapper<IInsertWrapper<E>> implements IInsertWrapper<E> {
 
     private Store table;
 
-    private U columns;
-
+    private IInsertFieldsWrapper<E> columns;
 
     public AbstractInsertWrapper() {
         this.columns = buildColumns();
     }
 
-    protected abstract U buildColumns();
+    protected abstract IInsertFieldsWrapper<E> buildColumns();
 
-
-
-    public R table(String name){
+    public AbstractInsertWrapper<E> table(String name){
         this.table = new Store(name);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public U fields() {
+    public IInsertFieldsWrapper<E> fields() {
         return columns;
     }
 
     @Override
-    public R fields(Consumer<U> func) {
+    public AbstractInsertWrapper<E> fields(Consumer<IInsertFieldsWrapper<E>> func) {
         func.accept(columns);
-        return (R)this;
+        return this;
     }
-
-
 
     @Override
-    public R table(String name, String alias) {
+    public AbstractInsertWrapper<E> table(String name, String alias) {
         return table(name);
     }
-
 
     public Store getFrom() {
         return table;
     }
 
-
     @Override
-    public AbstractInsertWrapper clone()  {
+    public AbstractInsertWrapper<E> clone()  {
         try {
             return (AbstractInsertWrapper)super.clone();
         }catch (Exception e){
@@ -63,5 +52,7 @@ public abstract class AbstractInsertWrapper<
         }
     }
 
+    // Preserve the owning type in fluent calls without recursive public generics.
+    @Override public AbstractInsertWrapper<E> meta(String name, Object value) { super.meta(name, value); return this; }
+    @Override public AbstractInsertWrapper<E> meta(Map<String, Object> values) { super.meta(values); return this; }
 }
-

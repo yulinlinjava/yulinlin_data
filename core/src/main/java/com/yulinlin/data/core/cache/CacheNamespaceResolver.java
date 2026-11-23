@@ -54,11 +54,11 @@ public final class CacheNamespaceResolver {
 
     private static void collectNode(INode node, Set<String> resources) {
         if (node instanceof ICountWrapper wrapper) collectNode(wrapper.getWrapper(), resources);
-        else if (node instanceof AbstractSelectWrapper<?, ?, ?, ?> wrapper) collectFrom(wrapper.getFrom(), resources);
-        else if (node instanceof AbstractGroupWrapper<?, ?, ?, ?, ?> wrapper) collectFrom(wrapper.getFrom(), resources);
-        else if (node instanceof AbstractInsertWrapper<?, ?, ?> wrapper) collectFrom(wrapper.getFrom(), resources);
-        else if (node instanceof AbstractUpdateWrapper<?, ?, ?, ?> wrapper) collectFrom(wrapper.getFrom(), resources);
-        else if (node instanceof AbstractDeleteWrapper<?, ?, ?> wrapper) collectFrom(wrapper.getFrom(), resources);
+        else if (node instanceof AbstractSelectWrapper<?> wrapper) collectFrom(wrapper.getFrom(), resources);
+        else if (node instanceof AbstractGroupWrapper<?> wrapper) collectFrom(wrapper.getFrom(), resources);
+        else if (node instanceof AbstractInsertWrapper<?> wrapper) collectFrom(wrapper.getFrom(), resources);
+        else if (node instanceof AbstractUpdateWrapper<?> wrapper) collectFrom(wrapper.getFrom(), resources);
+        else if (node instanceof AbstractDeleteWrapper<?> wrapper) collectFrom(wrapper.getFrom(), resources);
         else if (node instanceof From from) collectFrom(from, resources);
     }
 

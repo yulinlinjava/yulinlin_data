@@ -49,9 +49,9 @@ public class UserService implements ISuperService<UserEntity> {
                 .selectList().stream().map(UserResponse::from).toList();
     }
 
-    private ModelSelectWrapper<UserEntity, ?> select(RbacRequests.UserPage query) {
+    private ModelSelectWrapper<UserEntity> select(RbacRequests.UserPage query) {
         RbacValidation.validate(query, Set.of("username", "nickname", "status", "crtTime", "uptTime"));
-        ModelSelectWrapper<UserEntity, ?> wrapper = ModelSelectWrapper.newInstance(UserEntity.class, query);
+        ModelSelectWrapper<UserEntity> wrapper = ModelSelectWrapper.newInstance(UserEntity.class, query);
         if (query.getOrderList() == null || query.getOrderList().isEmpty()) {
             wrapper.orderBy("crtTime", false);
         } else {

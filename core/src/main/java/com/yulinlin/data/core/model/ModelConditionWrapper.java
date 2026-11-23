@@ -9,234 +9,229 @@ import com.yulinlin.data.core.wrapper.factory.WrapperFactoryImpl;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import org.springframework.core.annotation.AnnotationUtils;
-
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.function.Consumer;
 
-public abstract class ModelConditionWrapper<
-        E,
-        W extends IConditionWrapper<E,W>,
-        R extends ModelConditionWrapper<E,W,R>
-        >
+public abstract class ModelConditionWrapper<E>
 {
 
 
-    public R parseWhereCondition(Object query) {
+    public ModelConditionWrapper<E> parseWhereCondition(Object query) {
         if(query != null){
             AbstractSelectWrapperFactory.initSelectWhere(    where(),query);
 
         }
 
 
-        return (R)this;
+        return this;
     }
 
-    public R not(Consumer<IConditionWrapper<E,W>> func){
+    public ModelConditionWrapper<E> not(Consumer<IConditionWrapper<E>> func){
         where().not((f) -> {
             func.accept(f);
         });
-        return (R)this;
+        return this;
     }
-    public R struct(){
+    public ModelConditionWrapper<E> struct(){
         where().struct();
-        return (R)this;
+        return this;
     }
 
 
-    public  R and(IConditionWrapper func){
-        IConditionWrapper<E, W> where = where();
-        where.and((W)func);
-        return (R)this;
+    public  ModelConditionWrapper<E> and(IConditionWrapper<?> func){
+        IConditionWrapper<E> where = where();
+        where.and(func);
+        return this;
     }
 
 
 
-    public  R and(Consumer<IConditionWrapper<E,W>> func){
-        IConditionWrapper<E, W> where = where();
+    public  ModelConditionWrapper<E> and(Consumer<IConditionWrapper<E>> func){
+        IConditionWrapper<E> where = where();
         func.accept(where);
-        return (R)this;
+        return this;
     }
 
     //自定义条件
-    public R condition(String name, ConditionEnum condition, Object value){
+    public ModelConditionWrapper<E> condition(String name, ConditionEnum condition, Object value){
         where().condition(name,condition,value);
-        return (R)this;
+        return this;
     }
-    public R expression(String name,Map<String,Object> data){
+    public ModelConditionWrapper<E> expression(String name,Map<String,Object> data){
         where().expression(name,data);
-        return (R)this;
+        return this;
     }
-    public R expression(String name){
+    public ModelConditionWrapper<E> expression(String name){
         where().expression(name);
-        return (R)this;
+        return this;
     }
     //=
-    public R eq(String name, Object value){
+    public ModelConditionWrapper<E> eq(String name, Object value){
         where().eq(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R eq(LambdaPropertyFunction<E> name, Object value){
+    public ModelConditionWrapper<E> eq(LambdaPropertyFunction<E> name, Object value){
         where().eq(name,value);
-        return (R)this;
+        return this;
     }
 
 
     //!=
     //!=
-    public R ne(String name, Object value){
+    public ModelConditionWrapper<E> ne(String name, Object value){
         where().ne(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R ne(LambdaPropertyFunction<E> name, Object value){
+    public ModelConditionWrapper<E> ne(LambdaPropertyFunction<E> name, Object value){
         where().ne(name,value);
-        return (R)this;
+        return this;
     }
 
 
     //<
-    public R gt(String name, Object value){
+    public ModelConditionWrapper<E> gt(String name, Object value){
 
 
         where().gt(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R gt(LambdaPropertyFunction<E> name, Object value){
+    public ModelConditionWrapper<E> gt(LambdaPropertyFunction<E> name, Object value){
         where().gt(name,value);
-        return (R)this;
+        return this;
     }
 
 
     //<=
-    public R gte(String name, Object value){
+    public ModelConditionWrapper<E> gte(String name, Object value){
         where().gte(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R gte(LambdaPropertyFunction<E> name, Object value){
+    public ModelConditionWrapper<E> gte(LambdaPropertyFunction<E> name, Object value){
         where().gte(name,value);
-        return (R)this;
+        return this;
     }
 
 
     //>
-    public R lt(String name, Object value){
+    public ModelConditionWrapper<E> lt(String name, Object value){
         where().lt(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R lt(LambdaPropertyFunction<E> name, Object value){
+    public ModelConditionWrapper<E> lt(LambdaPropertyFunction<E> name, Object value){
         where().lt(name,value);
-        return (R)this;
+        return this;
     }
 
 
     //>=
-    public R lte(String name, Object value){
+    public ModelConditionWrapper<E> lte(String name, Object value){
         where().lte(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R lte(LambdaPropertyFunction<E> name, Object value){
+    public ModelConditionWrapper<E> lte(LambdaPropertyFunction<E> name, Object value){
         where().lte(name,value);
-        return (R)this;
+        return this;
     }
 
 
     //范围
-    public R between(String name, Object x, Object y){
+    public ModelConditionWrapper<E> between(String name, Object x, Object y){
         where().between(name, Arrays.asList( x,y));
-        return (R)this;
+        return this;
     }
 
-    public R between(LambdaPropertyFunction<E> name, List<?> list){
+    public ModelConditionWrapper<E> between(LambdaPropertyFunction<E> name, List<?> list){
         where().between(name,list);
-        return (R)this;
+        return this;
     }
 
     //范围
-    public R between(String name, List<?> list){
+    public ModelConditionWrapper<E> between(String name, List<?> list){
         where().between(name,list);
-        return (R)this;
+        return this;
     }
 
 
     //模糊
-    public R like(String name, String value){
+    public ModelConditionWrapper<E> like(String name, String value){
 
         where().like(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R like(LambdaPropertyFunction<E> name, String list){
+    public ModelConditionWrapper<E> like(LambdaPropertyFunction<E> name, String list){
         where().like(name,list);
-        return (R)this;
+        return this;
     }
 
     /** Full-text match where supported; otherwise uses the data source's fallback semantics. */
-    public R match(String name, String value){
+    public ModelConditionWrapper<E> match(String name, String value){
         where().match(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R match(LambdaPropertyFunction<E> name, String value){
+    public ModelConditionWrapper<E> match(LambdaPropertyFunction<E> name, String value){
         where().match(name,value);
-        return (R)this;
+        return this;
     }
 
 
 
     //右模糊
-    public R likeRight(String name, String value){
+    public ModelConditionWrapper<E> likeRight(String name, String value){
         where().likeRight(name,value);
-        return (R)this;
+        return this;
     }
 
-    public R likeRight(LambdaPropertyFunction<E> name, String list){
+    public ModelConditionWrapper<E> likeRight(LambdaPropertyFunction<E> name, String list){
         where().likeRight(name,list);
-        return (R)this;
+        return this;
     }
 
     //是null
-    public R isNull(String name){
+    public ModelConditionWrapper<E> isNull(String name){
         where().isNull(name);
-        return (R)this;
+        return this;
     }
-    public R isNull(LambdaPropertyFunction<E> name){
+    public ModelConditionWrapper<E> isNull(LambdaPropertyFunction<E> name){
         where().isNull(name);
-        return (R)this;
+        return this;
     }
 
     //属于集合
-    public R in(String name, Collection<?> coll){
+    public ModelConditionWrapper<E> in(String name, Collection<?> coll){
         where().in(name,coll);
-        return (R)this;
+        return this;
     }
 
-    public R in(LambdaPropertyFunction<E> name, Collection<?> coll){
+    public ModelConditionWrapper<E> in(LambdaPropertyFunction<E> name, Collection<?> coll){
         where().in(name,coll);
-        return (R)this;
+        return this;
     }
-    public R nin(String name, Collection<?> coll){
+    public ModelConditionWrapper<E> nin(String name, Collection<?> coll){
         where().not().in(name,coll);
-        return (R)this;
+        return this;
     }
 
     //下一个使用not
-    public  R eq(Object value){
+    public  ModelConditionWrapper<E> eq(Object value){
         where().eq(primaryKeyName(),value);
-        return (R)this;
+        return this;
     }
 
     //下一个使用not
-    public  R nin(Collection<?> coll){
+    public  ModelConditionWrapper<E> nin(Collection<?> coll){
         return nin(primaryKeyName(),coll);
     }
 
-    public  R in(Collection<?> coll){
+    public  ModelConditionWrapper<E> in(Collection<?> coll){
         return in(primaryKeyName(),coll);
     }
     protected abstract Class getModelClass();
@@ -245,20 +240,20 @@ public abstract class ModelConditionWrapper<
         return PrimaryUtil.getPrimaryKeyName(getModelClass());
     }
     
-    public abstract  IConditionWrapper<E,W> where();
+    public abstract  IConditionWrapper<E> where();
 
-    public  R or(Consumer<IConditionWrapper<E,W>> func) {
+    public  ModelConditionWrapper<E> or(Consumer<IConditionWrapper<E>> func) {
         where().or(f -> {
             func.accept(f);
         });
-        return (R)this;
+        return this;
     }
 
 
 
-    public  R where(Consumer<IConditionWrapper<E,W>> func) {
+    public  ModelConditionWrapper<E> where(Consumer<IConditionWrapper<E>> func) {
         func.accept(      where());
-        return (R)this;
+        return this;
     }
 
 

@@ -35,6 +35,7 @@
 | [批量与同步](doc/write-sync/README.md) | [批量](doc/write-sync/batch.md)、[延迟队列](doc/write-sync/queue.md)、[EntityCounter](doc/write-sync/counter.md)、增量/全量同步 |
 | [缓存](doc/cache/README.md) | [ORM 缓存](doc/cache/query.md)、[失效规则](doc/cache/invalidation.md)、Caffeine/Ehcache/Redis、[CacheClient](doc/cache/client.md) |
 | [接口安全](doc/security/README.md) | [JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[Spring Security](doc/security/spring.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md) |
+| [MCP 接入](doc/mcp/README.md) | [工具与权限](doc/mcp/integration.md)、[配置与后台任务](doc/mcp/configuration.md)、[网盘迁移约定](doc/mcp/netdisk.md) |
 | [常用工具](doc/tools/README.md) | [HTTP](doc/tools/http.md)、[反射与克隆](doc/tools/reflection.md)、JSON、日期、线程与调度 |
 | [项目实践](doc/practice/README.md) | [公共模型](doc/practice/models.md)、[通用 Service](doc/practice/service.md)、[完整 CRUD](doc/practice/crud-example.md)、[RBAC 登录](doc/practice/rbac.md) |
 | [监控与排障](doc/operations/README.md) | [监控页面](doc/operations/monitor.md)、[SQL/事务日志](doc/operations/sql-log.md)、[SQLite/H2 性能报告](doc/operations/local-benchmark.md) |

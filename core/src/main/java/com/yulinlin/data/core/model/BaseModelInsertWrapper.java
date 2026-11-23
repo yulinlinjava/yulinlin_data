@@ -7,12 +7,11 @@ import com.yulinlin.data.core.wrapper.IDeleteWrapper;
 import com.yulinlin.data.core.wrapper.IInsertWrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
-
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
-public class BaseModelInsertWrapper<E,R extends BaseModelInsertWrapper<E,R>> {
+public class BaseModelInsertWrapper<E> {
 
     private IInsertWrapper wrapper;
 
@@ -37,19 +36,19 @@ public class BaseModelInsertWrapper<E,R extends BaseModelInsertWrapper<E,R>> {
 
     }
 
-    public R batch(boolean batch){
+    public BaseModelInsertWrapper<E> batch(boolean batch){
         request.setBatch(batch);
-        return (R)this;
+        return this;
     }
 
-    public R batch(){
+    public BaseModelInsertWrapper<E> batch(){
         return batch(true);
     }
 
     /** Enqueues this write and returns {@code 0} immediately after successful submission. */
-    public R queue(){
+    public BaseModelInsertWrapper<E> queue(){
         if (request != null) request.queue();
-        return (R)this;
+        return this;
     }
 
     private void addRequest( Object list){
@@ -84,23 +83,23 @@ public class BaseModelInsertWrapper<E,R extends BaseModelInsertWrapper<E,R>> {
 
     }
 
-    public R clearCache(boolean clearCache){
+    public BaseModelInsertWrapper<E> clearCache(boolean clearCache){
         request.clearCache(clearCache);
-        return (R)this;
+        return this;
     }
 
 
-    public R root(Object root){
+    public BaseModelInsertWrapper<E> root(Object root){
         request.setRoot(root);
-        return (R)this;
+        return this;
     }
 
 
-    public  BaseModelInsertWrapper<E,R> field(String name, Object value) {
+    public  BaseModelInsertWrapper<E> field(String name, Object value) {
         wrapper.fields().field(name,value);
         return this;
     }
-    public  BaseModelInsertWrapper<E,R> field(LambdaPropertyFunction<E> name, Object value) {
+    public  BaseModelInsertWrapper<E> field(LambdaPropertyFunction<E> name, Object value) {
         wrapper.fields().field(name,value);
         return this;
     }

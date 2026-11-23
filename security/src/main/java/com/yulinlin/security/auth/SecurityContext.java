@@ -6,6 +6,7 @@ import java.util.Objects;
 public final class SecurityContext {
     private static final ThreadLocal<LoginSession> CURRENT = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> RESOLVING = new ThreadLocal<>();
+    private static final ThreadLocal<LoginSession> TRUSTED_SCOPE = new ThreadLocal<>();
 
     private SecurityContext() { }
 
@@ -18,6 +19,8 @@ public final class SecurityContext {
     }
 
     public static LoginSession getSession() {
+        LoginSession trusted = TRUSTED_SCOPE.get();
+        if (trusted != null) return trusted.expired() ? null : trusted;
         LoginSession session = CURRENT.get();
         SecurityContextResolver resolver = SecurityUtil.contextResolver();
         if (resolver != null) {
@@ -79,4 +82,22 @@ public final class SecurityContext {
     public static boolean isLogin() { return getUser() != null; }
     /** 只清理本线程快照，不注销外部会话；再次读取可由外部可信身份重新恢复。 */
     public static void clear() { CURRENT.remove(); }
+
+    /**
+     * Trusted server-side delegation only: the caller must authenticate and authorize the user first.
+     * Does not create a login/device session or inherit identity across threads. Nested scopes restore
+     * the previous identity even when business code throws; external context resolvers are bypassed
+     * only for the duration of this call.
+     */
+    public static <T> T callAs(LoginSession session, java.util.concurrent.Callable<T> action) throws Exception {
+        Objects.requireNonNull(session, "session");
+        if (session.expired()) throw new LoginException("登录已失效");
+        LoginSession previous = TRUSTED_SCOPE.get(), snapshot = CURRENT.get();
+        TRUSTED_SCOPE.set(session);
+        try { return action.call(); }
+        finally {
+            if (previous == null) TRUSTED_SCOPE.remove(); else TRUSTED_SCOPE.set(previous);
+            if (snapshot == null) CURRENT.remove(); else CURRENT.set(snapshot);
+        }
+    }
 }

@@ -206,10 +206,10 @@
         "file": "security/crypto.md",
         "title": "接口加密与前端对接"
       },
-        {
-          "file": "security/crypto-codec.md",
-          "title": "自定义接口加解密"
-        },
+      {
+        "file": "security/crypto-codec.md",
+        "title": "自定义接口加解密"
+      },
       {
         "file": "security/rate-limit.md",
         "title": "限流与 IP 黑名单"
@@ -238,10 +238,10 @@
         "file": "security/sa-token.md",
         "title": "有状态 Sa-Token 登录"
       },
-        {
-          "file": "security/spring.md",
-          "title": "Spring Security 接入"
-        },
+      {
+        "file": "security/spring.md",
+        "title": "Spring Security 接入"
+      },
       {
         "file": "security/context.md",
         "title": "登录上下文生命周期"
@@ -249,6 +249,25 @@
       {
         "file": "security/authorization.md",
         "title": "登录、角色与权限注解"
+      }
+    ]
+  },
+  {
+    "id": "mcp",
+    "title": "MCP 接入",
+    "ai": true,
+    "pages": [
+      {
+        "file": "mcp/integration.md",
+        "title": "MCP 权限与工具扩展"
+      },
+      {
+        "file": "mcp/configuration.md",
+        "title": "MCP 配置与后台任务"
+      },
+      {
+        "file": "mcp/netdisk.md",
+        "title": "现有网盘 MCP 迁移"
       }
     ]
   },

@@ -4,6 +4,8 @@
 
 业务只读取当前用户、Token 和认证来源；请求结束由框架清理上下文。
 
+MCP 等已完成独立认证的服务端入口可通过 `SecurityContext.callAs(LoginSession, Callable)` 在同步回调内建立可信身份作用域；退出或抛异常后恢复此前上下文，不创建会话、不继承到子线程。它只供可信服务端适配使用，不能直接接受客户端提交的用户对象。作用域内只影响框架公开的 SecurityContext/SecurityUtil，不替换 Spring Security 原生 Authentication；原生方法安全仍按自身规则检查。参见 [MCP 接入](../mcp/integration.md)。
+
 ## 本页导航
 
 - [登录上下文与请求生命周期](#登录上下文与请求生命周期)

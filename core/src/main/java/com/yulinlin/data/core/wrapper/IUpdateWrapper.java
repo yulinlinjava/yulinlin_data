@@ -3,20 +3,16 @@ package com.yulinlin.data.core.wrapper;
 import java.util.function.Consumer;
 
 //更新规范
-public interface IUpdateWrapper<E,
-        R extends IUpdateWrapper<E,R,W,U>,
-        W extends IConditionWrapper<E,W>,
-        U  extends IUpdateFieldsWrapper<E,U>
-        >
+public interface IUpdateWrapper<E>
 
-        extends   IExecuteWrapper<R> ,ITableWrapper<R>,
-        IWhereWrapper<R,W>
+        extends   IExecuteWrapper<IUpdateWrapper<E>> ,ITableWrapper<IUpdateWrapper<E>>,
+        IWhereWrapper<E,IUpdateWrapper<E>>
 {
 
 
-     U fields();
+     IUpdateFieldsWrapper<E> fields();
 
-     R fields(Consumer<U> func);
+     IUpdateWrapper<E> fields(Consumer<IUpdateFieldsWrapper<E>> func);
 
 
 

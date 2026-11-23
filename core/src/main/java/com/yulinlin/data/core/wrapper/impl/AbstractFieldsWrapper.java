@@ -1,20 +1,18 @@
 package com.yulinlin.data.core.wrapper.impl;
 
 import com.yulinlin.data.core.node.atomic.AtomicValue;
-import com.yulinlin.data.core.wrapper.IWrapper;
 import com.yulinlin.data.core.wrapper.IFieldsWrapper;
+import com.yulinlin.data.core.wrapper.IWrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
-
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-public abstract class AbstractFieldsWrapper<E,R extends AbstractFieldsWrapper<E,R>>
+public abstract class AbstractFieldsWrapper<E>
 
-        extends AbstractWrapper<R>
-        implements IFieldsWrapper<E,R>, IWrapper {
-
+        extends AbstractWrapper<IFieldsWrapper<E>>
+        implements IFieldsWrapper<E>, IWrapper {
 
     private Map<String,AtomicValue> fields = new LinkedHashMap<>();
 
@@ -23,34 +21,32 @@ public abstract class AbstractFieldsWrapper<E,R extends AbstractFieldsWrapper<E,
     public AbstractFieldsWrapper() {
     }
 
-
     @Override
-    public R field(String name, Object value) {
+    public AbstractFieldsWrapper<E> field(String name, Object value) {
 
         return put(value, AtomicValue.instance(name,value));
     }
 
-
-
-    public R put( Object value,AtomicValue atomicValue) {
+    public AbstractFieldsWrapper<E> put( Object value,AtomicValue atomicValue) {
         if(value == null){
-            return (R)this;
+            return this;
         }
         atomicValue.put(getMetaAndReset());
         fields.put(atomicValue.getKey(),atomicValue);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R field(LambdaPropertyFunction<E> name, Object value) {
+    public AbstractFieldsWrapper<E> field(LambdaPropertyFunction<E> name, Object value) {
          put(value, AtomicValue.instance(name,value));
-        return (R)this;
+        return this;
     }
-
-
 
     public Collection<AtomicValue> getList(){
         return fields.values();
     }
 
+    // Preserve the owning type in fluent calls without recursive public generics.
+    @Override public AbstractFieldsWrapper<E> meta(String name, Object value) { super.meta(name, value); return this; }
+    @Override public AbstractFieldsWrapper<E> meta(Map<String, Object> values) { super.meta(values); return this; }
 }

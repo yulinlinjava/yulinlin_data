@@ -9,25 +9,16 @@ import com.yulinlin.data.core.wrapper.IConditionWrapper;
 import com.yulinlin.data.core.wrapper.IGroupWrapper;
 import com.yulinlin.data.core.wrapper.IMetricsWrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
-
+import java.util.Map;
 import java.util.function.Consumer;
 
-public abstract class AbstractGroupWrapper
-        <
-                E,
-                R extends IGroupWrapper<E,R,W,M,A>,
-                W extends IConditionWrapper<E,W>,
-                M extends IMetricsWrapper<E,M>,
-                A extends IAggregationsWrapper<E,A>
-                >
+public abstract class AbstractGroupWrapper<E>
 
-        extends AbstractWrapper<R> implements IGroupWrapper<E,R,W,M,A>{
+        extends AbstractWrapper<IGroupWrapper<E>> implements IGroupWrapper<E>{
 
     protected From from;
 
-
-    private   W where;
-
+    private   IConditionWrapper<E> where;
 
     private Order order;
 
@@ -35,16 +26,11 @@ public abstract class AbstractGroupWrapper
 
     private int pageSize = 30;
 
+    private IMetricsWrapper<E> metrics;
 
+    private IAggregationsWrapper<E> aggregations;
 
-    private M metrics;
-
-    private A aggregations;
-
-
-
-    private  W having;
-
+    private  IConditionWrapper<E> having;
 
     public AbstractGroupWrapper() {
         this.where = buildWhere();
@@ -55,93 +41,82 @@ public abstract class AbstractGroupWrapper
         this.order =new Order();
     }
 
+    protected abstract IConditionWrapper<E> buildWhere();
 
-    protected abstract W buildWhere();
+    protected abstract IAggregationsWrapper<E> buildAggregations();
 
-    protected abstract A buildAggregations();
-
-    protected abstract M buildMetrics();
+    protected abstract IMetricsWrapper<E> buildMetrics();
 
     @Override
-    public R having(W wrapper) {
+    public AbstractGroupWrapper<E> having(IConditionWrapper<E> wrapper) {
         having.and(wrapper);
-        return (R)this;
+        return this;
     }
-
 
     @Override
-    public R where(Consumer<W> func) {
+    public AbstractGroupWrapper<E> where(Consumer<IConditionWrapper<E>> func) {
         func.accept(where);
-        return (R)this;
+        return this;
     }
 
-    public   W having(){
+    public   IConditionWrapper<E> having(){
         return having;
     }
 
     @Override
-    public R having(Consumer<W> func) {
+    public AbstractGroupWrapper<E> having(Consumer<IConditionWrapper<E>> func) {
         func.accept(having);
-        return (R)this;
+        return this;
     }
 
-
-    public  R table(String name){
+    public  AbstractGroupWrapper<E> table(String name){
         this.from = new Store(name);
-        return (R)this;
+        return this;
     }
-    public  R table(String name, String alias){
+    public  AbstractGroupWrapper<E> table(String name, String alias){
         this.from = new Store(name,alias);
-        return (R)this;
+        return this;
     }
-
-
-
 
     public From getFrom() {
         return from;
     }
 
-
     @Override
-    public M metrics() {
+    public IMetricsWrapper<E> metrics() {
         return metrics;
     }
 
     @Override
-    public A aggregations() {
+    public IAggregationsWrapper<E> aggregations() {
         return aggregations;
     }
 
-
     @Override
-    public W where() {
+    public IConditionWrapper<E> where() {
         return where;
     }
 
-
     @Override
-    public R where(W wrapper) {
+    public AbstractGroupWrapper<E> where(IConditionWrapper<E> wrapper) {
         this.where = wrapper;
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R orderBy(String name, boolean asc) {
+    public AbstractGroupWrapper<E> orderBy(String name, boolean asc) {
         order.pushOrder(name,asc);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R page(int pageNumber, int pageSize) {
+    public AbstractGroupWrapper<E> page(int pageNumber, int pageSize) {
         this.pageNumber = pageNumber;
         this.pageSize = pageSize;
-        return (R)this;
+        return this;
     }
 
-
-
-    public W getWhere() {
+    public IConditionWrapper<E> getWhere() {
         return where;
     }
 
@@ -157,37 +132,41 @@ public abstract class AbstractGroupWrapper
         return pageSize;
     }
 
-
     private String getName(LambdaPropertyFunction name){
         String  fieldName =  LambdaPropertyUtil.getColumnName(name);
         return fieldName;
     }
 
     @Override
-    public  R orderBy(LambdaPropertyFunction<E> name, boolean asc) {
+    public  AbstractGroupWrapper<E> orderBy(LambdaPropertyFunction<E> name, boolean asc) {
         return orderBy(getName(name),asc);
     }
 
     @Override
-    public  R orderByDesc(LambdaPropertyFunction<E> name) {
+    public  AbstractGroupWrapper<E> orderByDesc(LambdaPropertyFunction<E> name) {
         return orderBy(name,false);
     }
 
     @Override
-    public  R orderByAsc(LambdaPropertyFunction<E> name) {
+    public  AbstractGroupWrapper<E> orderByAsc(LambdaPropertyFunction<E> name) {
         return orderBy(name,true);
     }
 
     //支持克隆
     @Override
-    public R clone()  {
+    public AbstractGroupWrapper<E> clone()  {
         try {
-            return (R)super.clone();
+            return (AbstractGroupWrapper<E>)super.clone();
         }catch (Exception e){
             throw new RuntimeException(e);
 
         }
 
-
     }
+
+    // Preserve the owning type in fluent calls without recursive public generics.
+    @Override public AbstractGroupWrapper<E> meta(String name, Object value) { super.meta(name, value); return this; }
+    @Override public AbstractGroupWrapper<E> meta(Map<String, Object> values) { super.meta(values); return this; }
+    @Override public AbstractGroupWrapper<E> orderByAsc(String name) { orderBy(name, true); return this; }
+    @Override public AbstractGroupWrapper<E> orderByDesc(String name) { orderBy(name, false); return this; }
 }

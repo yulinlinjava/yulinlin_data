@@ -48,7 +48,7 @@ public com.yulinlin.data.core.filter.IQueryFilter userTableFilter() {
             if (node instanceof com.yulinlin.data.core.wrapper.ICountWrapper count) {
                 node = count.getWrapper();
             }
-            if (node instanceof com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper<?, ?, ?, ?> select) {
+            if (node instanceof com.yulinlin.data.core.wrapper.impl.AbstractSelectWrapper<?> select) {
                 select.table("demo_user_202610");
             }
             return request;

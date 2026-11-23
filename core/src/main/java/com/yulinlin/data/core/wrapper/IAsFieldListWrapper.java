@@ -8,22 +8,21 @@ import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 /**
  * 修改值用的
  * @param <E>
- * @param <R>
  */
-public interface IAsFieldListWrapper<E,R extends IAsFieldListWrapper<E,R>> extends IMetaNode<R> {
+public interface IAsFieldListWrapper<E> extends IMetaNode<IAsFieldListWrapper<E>> {
 
 
 
 
-    R field(String name);
+    IAsFieldListWrapper<E> field(String name);
 
-    R field(String name, String alias);
+    IAsFieldListWrapper<E> field(String name, String alias);
 
-    R field(LambdaPropertyFunction<E> name, String value);
+    IAsFieldListWrapper<E> field(LambdaPropertyFunction<E> name, String value);
 
-    R highlight(String name);
+    IAsFieldListWrapper<E> highlight(String name);
 
-    R highlight(LambdaPropertyFunction<E> name);
+    IAsFieldListWrapper<E> highlight(LambdaPropertyFunction<E> name);
 
 
 

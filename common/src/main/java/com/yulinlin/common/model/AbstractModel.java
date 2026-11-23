@@ -5,10 +5,8 @@ import com.yulinlin.data.core.model.BaseModel;
 import com.yulinlin.data.core.model.PrimaryUtil;
 import com.yulinlin.data.core.session.SessionUtil;
 import com.yulinlin.data.core.transaction.TransactionUtil;
-import com.yulinlin.data.core.wrapper.IConditionWrapper;
 import com.yulinlin.data.lang.reflection.AnnotationUtil;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
-
 import java.lang.reflect.Field;
 
 /**
@@ -27,13 +25,13 @@ public interface  AbstractModel<E extends AbstractModel<E>>  extends AbstractQue
 
 
     //删除构造器
-    default      <W extends IConditionWrapper<E,W>> ModelDeleteWrapper<E,W> createDeleteWrapper(){
+    default      ModelDeleteWrapper<E> createDeleteWrapper(){
 
         return ModelDeleteWrapper.newInstance((E)this);
     }
 
     //更新构造器
-    default   <W extends IConditionWrapper<E,W>> ModelUpdateWrapper<E,W> createUpdateWrapper(){
+    default   ModelUpdateWrapper<E> createUpdateWrapper(){
 
         return ModelUpdateWrapper.newInstance((E)this);
     }

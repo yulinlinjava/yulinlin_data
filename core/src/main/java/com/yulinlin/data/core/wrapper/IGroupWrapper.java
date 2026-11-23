@@ -4,23 +4,17 @@ package com.yulinlin.data.core.wrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 
 //查询规范
-public interface IGroupWrapper<
-        E,
-        R extends IGroupWrapper<E,R,W,M,A>,
-        W extends IConditionWrapper<E,W>,
-        M extends IMetricsWrapper<E,M>,
-        A extends IAggregationsWrapper<E,A>
-        >
+public interface IGroupWrapper<E>
 
-        extends IStoreWrapper<E,R,W> ,
+        extends IStoreWrapper<E,IGroupWrapper<E>> ,
 
-        IWhereWrapper<R,W> ,
-        IHavingWrapper<R,W>,IPageWrapper<R>,ISortWrapper<E,R>{
+        IWhereWrapper<E,IGroupWrapper<E>> ,
+        IHavingWrapper<E,IGroupWrapper<E>>,IPageWrapper<IGroupWrapper<E>>,ISortWrapper<E,IGroupWrapper<E>>{
 
 
-    M metrics();
+    IMetricsWrapper<E> metrics();
 
-    A aggregations() ;
+    IAggregationsWrapper<E> aggregations() ;
 
     
 

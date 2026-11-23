@@ -9,6 +9,8 @@
 ## 本页导航
 
 - [查询条件与结果组织](#查询条件与结果组织)
+- [条件接口与回调类型](#条件接口与回调类型)
+- [底层 Wrapper 与工厂](#底层-wrapper-与工厂)
 - [大结果集逐条消费](#大结果集逐条消费)
 - [计数与分页总数](#计数与分页总数)
 - [查看执行计划](#查看执行计划)
@@ -44,6 +46,87 @@ var users = query.selectList();
 | explain() / explainCount() | H2、MySQL、PG 的普通 EXPLAIN：分别查看当前查询和派生 count 的原生计划，详见[查看执行计划](#查看执行计划) |
 | selectByMap("id") | Java 端索引，重复键由后项覆盖 |
 | selectByGroup("status") | Java 端组织结果，不是 SQL GROUP BY |
+
+## 条件接口与回调类型
+
+条件接口现在只保留实体类型：`IConditionWrapper<E>`。比较条件、布尔组合及 `meta(...)` 都返回条件接口，可以继续链式调用；无需再传自身类型 `R`。内置实现为 `ConditionManager<E>`，扩展基类为 `AbstractConditionWrapper<E>`。
+
+```java
+import com.yulinlin.data.core.wrapper.IConditionWrapper;
+import com.yulinlin.data.core.wrapper.impl.ConditionManager;
+import java.util.function.Consumer;
+
+IConditionWrapper<DemoUser> active = new ConditionManager<DemoUser>()
+        .eq(DemoUser::getStatus, 1);
+Consumer<IConditionWrapper<DemoUser>> names = c -> c.or(or -> or
+        .eq(DemoUser::getUsername, "alice")
+        .eq(DemoUser::getUsername, "bob"));
+
+var users = ModelSelectWrapper.newInstance("mysql", DemoUser.class)
+        .and(active)
+        .where(names)
+        .orderByAsc("username")
+        .selectList();
+```
+
+Model 层也只保留实体泛型 `E`：`ModelConditionWrapper<E>`、各 `BaseModel...Wrapper<E>` 和各 `Model...Wrapper<E>` 都不再暴露条件实现类型 `W` 或自身类型 `R`。通过普通方法覆写返回具体 Wrapper，查询条件后仍可调用 `selectList()`／`selectPage()`／`exist()`，更新和删除条件后仍可调用 `execute()`；条件构建和执行逻辑仍复用基类。
+
+```java
+ModelSelectWrapper<DemoUser> query = ModelSelectWrapper.newInstance(DemoUser.class)
+        .eq(DemoUser::getStatus, 1)
+        .orderBy(order -> order.orderByAsc("username"))
+        .page(1, 15);
+boolean exists = query.exist();
+```
+
+`where`、`and`、`or`、`not` 和分组 `having` 的 Model 回调统一接收 `IConditionWrapper<E>`；底层 Wrapper 的 `where`／`having` 也支持复用这个接口类型的消费者。Model 查询的排序回调接收 `BaseModelSelectWrapper<E>`；`apply` 回调接收 `ISelectWrapper<E>` 或 `IGroupWrapper<E>`，查询 `fieldMeta` 接收 `IAsFieldListWrapper<E>`，不要求调用方指定具体实现类型。
+
+布尔条件语义保持原样：条件接口的无参 `and()`／`or()`／`not()` 返回新建子组；消费者重载返回父条件，便于继续追加同级条件。`and(已有条件)` 合并已有条件树，可以接收 `IConditionWrapper<?>`；Lambda 属性方法仍按实体 `E` 检查类型。`struct()` 和 `meta(...)` 的作用不变。
+
+这是源码 API 调整，显式声明 `IConditionWrapper<E, R>` 的代码需改为 `IConditionWrapper<E>`，`AbstractConditionWrapper<E, R>` 改为 `AbstractConditionWrapper<E>`；回调中的具体实现类型改为条件接口。不要将 `new ConditionManager<E>().eq(...)` 的结果赋给 `ConditionManager<E>`，应使用 `IConditionWrapper<E>` 接收。自定义实现和依赖框架的模块需要重新编译，不提供旧泛型形式的兼容入口。
+
+Model 调用方的迁移：`ModelSelectWrapper<E, W>`（以及 Group／Update／Delete）改为 `ModelSelectWrapper<E>`；`BaseModel...Wrapper<E, W, R>` 改为 `BaseModel...Wrapper<E>`，插入基类的 `<E, R>` 同样改为 `<E>`。显式工厂调用 `ModelSelectWrapper.<E, W>newInstance(...)` 改为 `ModelSelectWrapper.<E>newInstance(...)`，通常直接省略显式类型参数即可。自定义子类若新增专有链式方法，可自行覆写所需方法并返回子类类型。
+
+## 底层 Wrapper 与工厂
+
+底层查询、分组、插入、更新、删除接口统一为 `ISelectWrapper<E>`、`IGroupWrapper<E>`、`IInsertWrapper<E>`、`IUpdateWrapper<E>`、`IDeleteWrapper<E>`。字段、更新字段、投影、指标和聚合组件同样只保留实体类型 `E`，不再让调用方传入 `R / W / C / U / M / A` 等实现类型。对应抽象实现和内置具体实现也只保留 `E`。
+
+```java
+import com.yulinlin.data.core.session.SessionUtil;
+import com.yulinlin.data.core.wrapper.ISelectWrapper;
+import com.yulinlin.data.core.wrapper.IUpdateWrapper;
+
+var factory = SessionUtil.route().getWrapperFactory();
+ISelectWrapper<DemoUser> select = factory.<DemoUser>createSelectWrapper()
+        .table("ai_demo_user")
+        .fields(fields -> fields.field("id").field(DemoUser::getUsername, "username"))
+        .where(where -> where.eq(DemoUser::getStatus, 1))
+        .orderByAsc("id")
+        .page(1, 15);
+
+IUpdateWrapper<DemoUser> update = factory.<DemoUser>createUpdateWrapper()
+        .table("ai_demo_user")
+        .fields(fields -> fields.field(DemoUser::getUsername, "alice")
+                .inc("status", 1))
+        .where(where -> where.eq("id", "1"));
+```
+
+这些操作只构建请求，执行仍使用 `QueryRequest`／`ExecuteRequest`／`RouteSession`；业务 CRUD 优先使用 Model Wrapper。无参工厂不能从模型推断 `E`，连续调用 Lambda 属性方法时请像上例显式写 `<DemoUser>`。
+
+| 回调或子组件 | 类型与链式行为 |
+| --- | --- |
+| `where`、`having`、`left`／`right`／`inner` 的条件 | `IConditionWrapper<E>`；无参访问和关联入口返回条件，消费者重载返回所属查询 |
+| 查询 `join` / 分组 `join` | `Consumer<ISelectWrapper<E>>` / `Consumer<IGroupWrapper<E>>`；执行后返回所属查询 |
+| 查询 `fields`、Model `fieldMeta` | `IAsFieldListWrapper<E>`，支持字段、别名、高亮和元数据 |
+| 插入 `fields` | `IInsertFieldsWrapper<E>`，支持 `.meta(...).field(...)` |
+| 更新 `fields` | `IUpdateFieldsWrapper<E>`，支持 `.field(...).inc(...).dec(...)`，不会退回普通字段接口 |
+| 分组 `metrics()`、`aggregations()` | `IMetricsWrapper<E>`、`IAggregationsWrapper<E>`，返回对应子组件，继续链式配置 |
+
+共用能力接口保留简单返回类型参数，例如 `ITableWrapper<R>`、`IPageWrapper<R>`、`ISortWrapper<E, R>`、`IWhereWrapper<E, R>`、`IHavingWrapper<E, R>`、`IJoinWrapper<E, R>` 和 `IMetaNode<R>`。这里的 `R` 只表示所属 Wrapper 的返回类型，不再要求递归泛型约束。内置具体类用协变返回保留 `SelectWrapper<E>` 等具体类型；元数据、字段构建和请求复制仍复用原逻辑，此次不改变复制的深浅或支持范围。
+
+迁移时将旧的 `ISelectWrapper<E, R, W, C>` 等操作接口改为仅 `<E>`，字段和指标接口的 `<E, R>` 同样改为 `<E>`。工厂显式类型参数只传实体；回调中的具体实现声明改为上表的接口类型。公共接口不再承诺返回某个指定的条件／字段实现，但仍支持注册自定义 Wrapper 工厂、继承抽象实现及覆写组件创建方法。依赖实现专有方法的代码需通过业务自定义入口调用；自定义子类需要自己的链式返回类型时覆写相应方法。升级后需重新编译调用方和自定义实现。
+
+传入已有条件的查询重载 `select.where(condition)` 会把条件加入查询，保留原条件树；已修复旧实现把传入条件加入自身、形成循环引用的问题。分组、更新、删除的既有条件组合／替换语义保持原样。
 
 ## 大结果集逐条消费
 

@@ -4,9 +4,9 @@ package com.yulinlin.data.core.wrapper;
 import com.yulinlin.data.core.anno.MetricsEnum;
 import com.yulinlin.data.core.node.IMetaNode;
 
-public interface IMetricsWrapper<E,R extends IMetricsWrapper<E,R>> extends IMetaNode<R> {
+public interface IMetricsWrapper<E> extends IMetaNode<IMetricsWrapper<E>> {
 
-    default R field(MetricsEnum metricsEnum,String name,String alias){
+    default IMetricsWrapper<E> field(MetricsEnum metricsEnum,String name,String alias){
         switch (metricsEnum){
             case avg:{
                 avg(name,alias);
@@ -28,22 +28,22 @@ public interface IMetricsWrapper<E,R extends IMetricsWrapper<E,R>> extends IMeta
                 break;
             }
         }
-        return (R)this;
+        return this;
     }
 
     //去重复求总数
-     R distinctCount(String  name, String alias);
+     IMetricsWrapper<E> distinctCount(String  name, String alias);
 
-     R count(String  name, String alias);
+     IMetricsWrapper<E> count(String  name, String alias);
     
-     R sum(String  name, String alias);
+     IMetricsWrapper<E> sum(String  name, String alias);
     
     
-     R avg(String  name, String alias);
+     IMetricsWrapper<E> avg(String  name, String alias);
     
-     R min(String  name, String alias);
+     IMetricsWrapper<E> min(String  name, String alias);
 
-     R max(String  name, String alias);
+     IMetricsWrapper<E> max(String  name, String alias);
 
 
     

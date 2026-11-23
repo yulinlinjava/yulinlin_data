@@ -3,7 +3,7 @@ package com.yulinlin.data.core.wrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 
 //存储接口
-public interface ISortWrapper<E,R extends ISortWrapper<E,R>> {
+public interface ISortWrapper<E,R> {
 
 
     default R orderByAsc(String name){

@@ -1,5 +1,7 @@
 package com.yulinlin.data.core.model;
 
+import java.util.Collection;
+import com.yulinlin.data.core.anno.ConditionEnum;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.session.EntitySession;
@@ -13,22 +15,18 @@ import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.Page;
 import lombok.SneakyThrows;
-
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-public class BaseModelSelectWrapper<E,
-
-        W extends IConditionWrapper<E,W>,
-        R extends BaseModelSelectWrapper<E,W,R>>
+public class BaseModelSelectWrapper<E>
         
-        extends ModelConditionWrapper<E,W,R> {
+        extends ModelConditionWrapper<E> {
 
 
 
-    private ISelectWrapper<E,?,W,?> wrapper;
+    private ISelectWrapper<E> wrapper;
 
     private QueryRequest<E> request;
 
@@ -40,14 +38,14 @@ public class BaseModelSelectWrapper<E,
 
 
     /** Per-query index candidates: applied by H2; MySQL, PostgreSQL and other built-in backends ignore valid hints. */
-    public R useIndex(String... indexNames) {
+    public BaseModelSelectWrapper<E> useIndex(String... indexNames) {
         request.useIndex(indexNames);
-        return (R) this;
+        return this;
     }
 
-    public R apply(Consumer<ISelectWrapper<E,?,W,?>>  func){
+    public BaseModelSelectWrapper<E> apply(Consumer<ISelectWrapper<E>>  func){
         func.accept(wrapper);
-        return (R)this;
+        return this;
     }
 
     /** Returns native execution-plan rows without fetching entities or using the query cache. */
@@ -68,9 +66,9 @@ public class BaseModelSelectWrapper<E,
         request.setRoot(model);
     }
 
-    public R root(Object root){
+    public BaseModelSelectWrapper<E> root(Object root){
         request.setRoot(root);
-        return (R)this;
+        return this;
     }
 
     public ISelectWrapper getWrapper() {
@@ -127,7 +125,7 @@ public class BaseModelSelectWrapper<E,
     }
 
     @Override
-    public IConditionWrapper<E, W> where() {
+    public IConditionWrapper<E> where() {
         return wrapper.where();
     }
 
@@ -137,102 +135,102 @@ public class BaseModelSelectWrapper<E,
      * @param pageSize
      * @return
      */
-    public R page(int pageNumber, int pageSize){
+    public BaseModelSelectWrapper<E> page(int pageNumber, int pageSize){
         wrapper.page(pageNumber,pageSize);
-        return (R)this;
+        return this;
     }
 
-    public <A extends IAsFieldListWrapper<E,A>>  R fieldMeta(Consumer<A> consumer){
-        A fields =(A) wrapper.fields();
+    public BaseModelSelectWrapper<E> fieldMeta(Consumer<IAsFieldListWrapper<E>> consumer){
+        IAsFieldListWrapper<E> fields = wrapper.fields();
         consumer.accept(fields);
-        return (R)this;
+        return this;
     }
 
-    public R highlight(String name) {
+    public BaseModelSelectWrapper<E> highlight(String name) {
         wrapper.highlight(name);
-        return (R)this;
+        return this;
     }
 
-    public R highlight(LambdaPropertyFunction<E> name) {
+    public BaseModelSelectWrapper<E> highlight(LambdaPropertyFunction<E> name) {
         wrapper.highlight(name);
-        return (R)this;
+        return this;
     }
 
-    public  R orderBy(String name, boolean asc) {
+    public  BaseModelSelectWrapper<E> orderBy(String name, boolean asc) {
         wrapper.orderBy(name,asc);
-        return (R)this;
+        return this;
     }
 
-    public R cache(){
+    public BaseModelSelectWrapper<E> cache(){
         request.cache();
-        return (R)this;
+        return this;
     }
 
-    public R cache(Duration ttl){
+    public BaseModelSelectWrapper<E> cache(Duration ttl){
         request.cache(ttl);
-        return (R)this;
+        return this;
     }
 
-    public R cache(CacheMode mode){
+    public BaseModelSelectWrapper<E> cache(CacheMode mode){
         request.cache(mode);
-        return (R)this;
+        return this;
     }
 
-    public R cache(CacheMode mode, Duration ttl){
+    public BaseModelSelectWrapper<E> cache(CacheMode mode, Duration ttl){
         request.cache(mode, ttl);
-        return (R)this;
+        return this;
     }
 
-    public R cache(boolean cache){
+    public BaseModelSelectWrapper<E> cache(boolean cache){
         request.cache(cache);
-        return (R)this;
+        return this;
     }
 
-    public R cacheNamespaces(String... resources) {
+    public BaseModelSelectWrapper<E> cacheNamespaces(String... resources) {
         request.cacheNamespaces(resources);
-        return (R)this;
+        return this;
     }
 
     /** Makes this query return transaction-managed entities. */
-    public R autoUpdate() {
+    public BaseModelSelectWrapper<E> autoUpdate() {
         request.autoUpdate();
-        return (R)this;
+        return this;
     }
 
     /** Overrides the global/@JoinSync automatic-update policy for this query. */
-    public R autoUpdate(boolean enabled) {
+    public BaseModelSelectWrapper<E> autoUpdate(boolean enabled) {
         request.autoUpdate(enabled);
-        return (R)this;
+        return this;
     }
 
-    public  R orderBy(LambdaPropertyFunction<E> name, boolean asc) {
+    public  BaseModelSelectWrapper<E> orderBy(LambdaPropertyFunction<E> name, boolean asc) {
         wrapper.orderBy(name,asc);
-        return (R)this;
+        return this;
     }
 
-    public R orderByAsc(String name){
+    public BaseModelSelectWrapper<E> orderByAsc(String name){
         wrapper.orderByAsc(name);
-        return (R)this;
+        return this;
     }
 
 
-    public  R orderBy(Consumer<R> func) {
-        func.accept((R)this);
-        return (R)this;
+    public  BaseModelSelectWrapper<E> orderBy(Consumer<BaseModelSelectWrapper<E>> func) {
+        func.accept(this);
+        return this;
     }
 
-    public  R orderByAsc(LambdaPropertyFunction<E> name) {
+    public  BaseModelSelectWrapper<E> orderByAsc(LambdaPropertyFunction<E> name) {
         wrapper.orderByAsc(name);
-        return (R)this;
+        return this;
     }
-    public R orderByDesc(LambdaPropertyFunction<E> name) {
+    public BaseModelSelectWrapper<E> orderByDesc(LambdaPropertyFunction<E> name) {
         wrapper.orderByDesc(name);
-        return (R)this;
+        return this;
     }
 
-    public R orderByDesc(String name){
+    public BaseModelSelectWrapper<E> orderByDesc(String name){
         wrapper.orderByDesc(name);
-        return (R)this;
+        return this;
     }
 
 
@@ -242,12 +240,12 @@ public class BaseModelSelectWrapper<E,
      * @param pageSize
      * @return
      */
-    public R pageByPrimaryKey(Object idValue, int pageSize){
+    public BaseModelSelectWrapper<E> pageByPrimaryKey(Object idValue, int pageSize){
          String name =    primaryKeyName();
         IConditionWrapper where =(IConditionWrapper) wrapper.where();
         where.gt(name,idValue);
         wrapper.page(1,pageSize);
-        return (R)this;
+        return this;
     }
 
 
@@ -256,8 +254,49 @@ public class BaseModelSelectWrapper<E,
     }
 
     @Override
-    public R parseWhereCondition(Object query) {
-        return super.parseWhereCondition(query);
+    public BaseModelSelectWrapper<E> parseWhereCondition(Object query) {
+        super.parseWhereCondition(query);
+        return this;
     }
 
+
+    // Covariant returns keep fluent calls typed without a self-type generic.
+    @Override public BaseModelSelectWrapper<E> not(Consumer<IConditionWrapper<E>> func) { super.not(func); return this; }
+    @Override public BaseModelSelectWrapper<E> struct() { super.struct(); return this; }
+    @Override public BaseModelSelectWrapper<E> and(IConditionWrapper<?> func) { super.and(func); return this; }
+    @Override public BaseModelSelectWrapper<E> and(Consumer<IConditionWrapper<E>> func) { super.and(func); return this; }
+    @Override public BaseModelSelectWrapper<E> condition(String name, ConditionEnum condition, Object value) { super.condition(name, condition, value); return this; }
+    @Override public BaseModelSelectWrapper<E> expression(String name,Map<String,Object> data) { super.expression(name, data); return this; }
+    @Override public BaseModelSelectWrapper<E> expression(String name) { super.expression(name); return this; }
+    @Override public BaseModelSelectWrapper<E> eq(String name, Object value) { super.eq(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> eq(LambdaPropertyFunction<E> name, Object value) { super.eq(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> ne(String name, Object value) { super.ne(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> ne(LambdaPropertyFunction<E> name, Object value) { super.ne(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> gt(String name, Object value) { super.gt(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> gt(LambdaPropertyFunction<E> name, Object value) { super.gt(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> gte(String name, Object value) { super.gte(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> gte(LambdaPropertyFunction<E> name, Object value) { super.gte(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> lt(String name, Object value) { super.lt(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> lt(LambdaPropertyFunction<E> name, Object value) { super.lt(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> lte(String name, Object value) { super.lte(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> lte(LambdaPropertyFunction<E> name, Object value) { super.lte(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> between(String name, Object x, Object y) { super.between(name, x, y); return this; }
+    @Override public BaseModelSelectWrapper<E> between(LambdaPropertyFunction<E> name, List<?> list) { super.between(name, list); return this; }
+    @Override public BaseModelSelectWrapper<E> between(String name, List<?> list) { super.between(name, list); return this; }
+    @Override public BaseModelSelectWrapper<E> like(String name, String value) { super.like(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> like(LambdaPropertyFunction<E> name, String list) { super.like(name, list); return this; }
+    @Override public BaseModelSelectWrapper<E> match(String name, String value) { super.match(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> match(LambdaPropertyFunction<E> name, String value) { super.match(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> likeRight(String name, String value) { super.likeRight(name, value); return this; }
+    @Override public BaseModelSelectWrapper<E> likeRight(LambdaPropertyFunction<E> name, String list) { super.likeRight(name, list); return this; }
+    @Override public BaseModelSelectWrapper<E> isNull(String name) { super.isNull(name); return this; }
+    @Override public BaseModelSelectWrapper<E> isNull(LambdaPropertyFunction<E> name) { super.isNull(name); return this; }
+    @Override public BaseModelSelectWrapper<E> in(String name, Collection<?> coll) { super.in(name, coll); return this; }
+    @Override public BaseModelSelectWrapper<E> in(LambdaPropertyFunction<E> name, Collection<?> coll) { super.in(name, coll); return this; }
+    @Override public BaseModelSelectWrapper<E> nin(String name, Collection<?> coll) { super.nin(name, coll); return this; }
+    @Override public BaseModelSelectWrapper<E> eq(Object value) { super.eq(value); return this; }
+    @Override public BaseModelSelectWrapper<E> nin(Collection<?> coll) { super.nin(coll); return this; }
+    @Override public BaseModelSelectWrapper<E> in(Collection<?> coll) { super.in(coll); return this; }
+    @Override public BaseModelSelectWrapper<E> or(Consumer<IConditionWrapper<E>> func) { super.or(func); return this; }
+    @Override public BaseModelSelectWrapper<E> where(Consumer<IConditionWrapper<E>> func) { super.where(func); return this; }
 }

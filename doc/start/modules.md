@@ -21,6 +21,7 @@
 | JSON 接口请求/响应加密、限流、权限协议 | security；Web 能力需要 Spring MVC，独立于 ORM 数据库模块 |
 | 用户登录与请求身份恢复 | security-jwt（无状态）或 security-sa-token（有状态）二选一，自动依赖 security；业务提供 UserStore，见[安全选型与扩展](../security/modules.md#jwt-与-sa-token-如何选择) |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
+| 外部 AI 调用业务工具、可选服务器命令 | mcp；复用 security 和 starter，默认关闭，见 [MCP 接入](../mcp/integration.md) |
 | 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
 | 可选查询缓存 | cache-caffeine、cache-ehcache、cache-redis 可共存；单实现自动选择，多个实现用 yulinlin.cache.default 指定 ORM 默认缓存，客户端可指定名称 |

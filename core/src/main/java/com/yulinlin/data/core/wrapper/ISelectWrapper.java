@@ -5,30 +5,24 @@ import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 import java.util.function.Consumer;
 
 //查询规范
-public interface ISelectWrapper<
-        E,
-        R extends ISelectWrapper<E,R,W,C>,
-        W extends IConditionWrapper<E,W>,
-        C extends IAsFieldListWrapper<E,C>
-
-        >
-        extends IStoreWrapper<E,R,W>,   IWhereWrapper<R,W>,IPageWrapper<R>,ISortWrapper<E,R> {
+public interface ISelectWrapper<E>
+        extends IStoreWrapper<E,ISelectWrapper<E>>,   IWhereWrapper<E,ISelectWrapper<E>>,IPageWrapper<ISelectWrapper<E>>,ISortWrapper<E,ISelectWrapper<E>> {
 
 
 
 
-    C  fields();
+    IAsFieldListWrapper<E>  fields();
 
 
-       R fields(Consumer<C> consumer);
+       ISelectWrapper<E> fields(Consumer<IAsFieldListWrapper<E>> consumer);
 
-    R highlight(String name);
+    ISelectWrapper<E> highlight(String name);
 
-    R highlight(LambdaPropertyFunction<E> name);
+    ISelectWrapper<E> highlight(LambdaPropertyFunction<E> name);
 
 
 
-    R lock();
+    ISelectWrapper<E> lock();
 
 
 }

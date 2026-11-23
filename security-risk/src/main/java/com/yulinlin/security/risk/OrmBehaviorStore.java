@@ -8,7 +8,6 @@ import com.yulinlin.common.model.ModelUpdateWrapper;
 import com.yulinlin.data.core.anno.JoinCluster;
 import com.yulinlin.data.core.session.RouteSession;
 import com.yulinlin.data.core.session.SessionUtil;
-import com.yulinlin.data.core.wrapper.impl.ConditionManager;
 import com.yulinlin.security.risk.RiskModels.*;
 import com.yulinlin.security.risk.RiskTables.*;
 
@@ -130,8 +129,8 @@ public final class OrmBehaviorStore implements BehaviorStore {
         }
     }
 
-    private <T> ModelSelectWrapper<T, ConditionManager<T>> select(Class<T> type) {
-        var query = ModelSelectWrapper.<T, ConditionManager<T>>newInstance(group, type).cache(false).autoUpdate(false);
+    private <T> ModelSelectWrapper<T> select(Class<T> type) {
+        var query = ModelSelectWrapper.<T>newInstance(group, type).cache(false).autoUpdate(false);
         query.getRequest().setCluster(JoinCluster.master);
         return query;
     }

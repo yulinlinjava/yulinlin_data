@@ -2,15 +2,8 @@ package com.yulinlin.data.core.wrapper;
 
 import java.util.function.Consumer;
 
-public interface IHavingWrapper<R extends IHavingWrapper<R,W>,W> extends IWrapper {
-
-
-    W having();
-
-    R having(W wrapper);
-
-    R having(Consumer<W> func);
-
-
-
+public interface IHavingWrapper<E, R> extends IWrapper {
+    IConditionWrapper<E> having();
+    R having(IConditionWrapper<E> wrapper);
+    R having(Consumer<IConditionWrapper<E>> consumer);
 }

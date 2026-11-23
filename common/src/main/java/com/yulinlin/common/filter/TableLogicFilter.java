@@ -52,7 +52,7 @@ public class TableLogicFilter implements IQueryFilter, IWriteFilter {
             if(logicNode != null){
                 IDeleteWrapper deleteWrapper = (IDeleteWrapper) request.getWrappers().get(0);
                 IConditionWrapper where = (IConditionWrapper)deleteWrapper.where();
-                IConditionWrapper<?,?> struct = where.struct();
+                IConditionWrapper<?> struct = where.struct();
                 ExecuteRequest req = ModelUpdateWrapper.newInstance(request.getFromClass())
                         .field(logicNode.logicField, logicNode.deleteValue)
                         .and(struct)

@@ -390,7 +390,7 @@ public abstract class AbstractSession extends LoadBalanceSession implements Enti
         if (mode == CacheMode.NONE) return callable.get();
 
         boolean lockQuery = result.getType() == ParseType.select
-                && request.getWrapper() instanceof AbstractSelectWrapper<?, ?, ?, ?> select
+                && request.getWrapper() instanceof AbstractSelectWrapper<?> select
                 && select.isLock();
         boolean transactionActive = isOpenTransaction();
         if (lockQuery || transactionActive) {

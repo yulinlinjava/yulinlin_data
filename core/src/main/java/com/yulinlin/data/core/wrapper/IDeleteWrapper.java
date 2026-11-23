@@ -1,16 +1,11 @@
 package com.yulinlin.data.core.wrapper;
 
 //删除规范
-public interface IDeleteWrapper<
-        E,
-        R extends IDeleteWrapper<E,R,W> ,
-        W extends IConditionWrapper<E,W>
+public interface IDeleteWrapper<E>
 
-        >
+        extends IExecuteWrapper<IDeleteWrapper<E>>,ITableWrapper<IDeleteWrapper<E>> ,
 
-        extends IExecuteWrapper<R>,ITableWrapper<R> ,
-
-        IWhereWrapper<R,W>{
+        IWhereWrapper<E,IDeleteWrapper<E>>{
 
 
 

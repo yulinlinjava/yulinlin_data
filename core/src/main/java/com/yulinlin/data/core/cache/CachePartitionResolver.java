@@ -36,7 +36,7 @@ public final class CachePartitionResolver {
     public static Optional<CachePartition> query(CacheNamespace namespace, INode node,
                                                   Function<String, String> columnMapper,
                                                   Function<Object, Object> valueEncoder) {
-        if (!(node instanceof AbstractSelectWrapper<?, ?, ?, ?> wrapper)
+        if (!(node instanceof AbstractSelectWrapper<?> wrapper)
                 || wrapper.isLock()
                 || !sameTable(namespace, wrapper.getFrom())) {
             return Optional.empty();
@@ -58,16 +58,16 @@ public final class CachePartitionResolver {
     public static Optional<CachePartition> write(CacheNamespace namespace, INode node,
                                                   Function<String, String> columnMapper,
                                                   Function<Object, Object> valueEncoder) {
-        if (node instanceof AbstractDeleteWrapper<?, ?, ?> wrapper) {
+        if (node instanceof AbstractDeleteWrapper<?> wrapper) {
             if (!sameTable(namespace, wrapper.getFrom())) return Optional.empty();
             return partition(namespace, (Store) wrapper.getFrom(), singleEq(wrapper.where().getCondition()),
                     columnMapper, valueEncoder);
         }
-        if (node instanceof AbstractUpdateWrapper<?, ?, ?, ?> wrapper) {
+        if (node instanceof AbstractUpdateWrapper<?> wrapper) {
             if (!sameTable(namespace, wrapper.getFrom())) return Optional.empty();
             Store store = (Store) wrapper.getFrom();
             Eq condition = singleEq(wrapper.where().getCondition());
-            if (condition == null || !(wrapper.fields() instanceof AbstractFieldsWrapper<?, ?> fields)) {
+            if (condition == null || !(wrapper.fields() instanceof AbstractFieldsWrapper<?> fields)) {
                 return Optional.empty();
             }
             String conditionField = canonicalField(store, condition.getKey(), columnMapper);

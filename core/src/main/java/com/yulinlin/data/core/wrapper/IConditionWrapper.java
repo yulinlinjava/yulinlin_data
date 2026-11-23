@@ -11,103 +11,103 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
-//条件规范
-public interface IConditionWrapper<E,R extends IConditionWrapper<E,R>>  extends IMetaNode<R> {
+/** Conditions return this interface; only the entity type is carried through the fluent API. */
+public interface IConditionWrapper<E>  extends IMetaNode<IConditionWrapper<E>> {
 
 
 
 
-    R condition(Object name, ConditionEnum condition, Object value);
+    IConditionWrapper<E> condition(Object name, ConditionEnum condition, Object value);
 
     //自定义条件表达式
 
-    R expression(String name, Map<String,Object> data);
+    IConditionWrapper<E> expression(String name, Map<String,Object> data);
 
-    default R expression(String name){
+    default IConditionWrapper<E> expression(String name){
         return expression(name,new HashMap<>());
     }
 
-    R eq(String name, Object value);
+    IConditionWrapper<E> eq(String name, Object value);
 
-    R ne(String name, Object value);
-    R gt(String name, Object value);
+    IConditionWrapper<E> ne(String name, Object value);
+    IConditionWrapper<E> gt(String name, Object value);
 
-    R gte(String name, Object value);
-
-
-
-
-    R lt(String name, Object value);
-
-    R lte(String name, Object value);
-
-    R like(String name, String value);
-
-    R match(String name, String value);
-
-    R between(String name, Collection value);
-
-
-    R likeRight(String name, String value);
-
-    R isNull(String name);
-
-    R in(String name, Collection<?> coll);
-
-    R or(Consumer<R> consumer);
-
-    R or();
-
-    R and();
-
-
-
-    R and(Consumer<R> consumer);
-
-    R and(R conditionWrapper);
-
-    R not();
-
-    R not(Consumer<R> consumer);
-
-    R struct();
+    IConditionWrapper<E> gte(String name, Object value);
 
 
 
 
-    R eq(LambdaPropertyFunction<E> name, Object value);
+    IConditionWrapper<E> lt(String name, Object value);
 
-    R ne(LambdaPropertyFunction<E> name, Object value);
+    IConditionWrapper<E> lte(String name, Object value);
 
+    IConditionWrapper<E> like(String name, String value);
 
-    R gt(LambdaPropertyFunction<E> name, Object value) ;
+    IConditionWrapper<E> match(String name, String value);
 
-    R gte(LambdaPropertyFunction<E> name, Object value);
-
-
-      R lt(LambdaPropertyFunction<E> name, Object value) ;
+    IConditionWrapper<E> between(String name, Collection value);
 
 
-      R lte(LambdaPropertyFunction<E> name, Object value);
+    IConditionWrapper<E> likeRight(String name, String value);
+
+    IConditionWrapper<E> isNull(String name);
+
+    IConditionWrapper<E> in(String name, Collection<?> coll);
+
+    IConditionWrapper<E> or(Consumer<IConditionWrapper<E>> consumer);
+
+    IConditionWrapper<E> or();
+
+    IConditionWrapper<E> and();
+
+
+
+    IConditionWrapper<E> and(Consumer<IConditionWrapper<E>> consumer);
+
+    IConditionWrapper<E> and(IConditionWrapper<?> conditionWrapper);
+
+    IConditionWrapper<E> not();
+
+    IConditionWrapper<E> not(Consumer<IConditionWrapper<E>> consumer);
+
+    IConditionWrapper<E> struct();
 
 
 
 
-      R between(LambdaPropertyFunction<E> name, Collection value);
+    IConditionWrapper<E> eq(LambdaPropertyFunction<E> name, Object value);
+
+    IConditionWrapper<E> ne(LambdaPropertyFunction<E> name, Object value);
 
 
-      R like(LambdaPropertyFunction<E> name, String value);
+    IConditionWrapper<E> gt(LambdaPropertyFunction<E> name, Object value) ;
 
-      R match(LambdaPropertyFunction<E> name, String value);
-
-
-      R likeRight(LambdaPropertyFunction<E> name, String value);
+    IConditionWrapper<E> gte(LambdaPropertyFunction<E> name, Object value);
 
 
-      R isNull(LambdaPropertyFunction<E> name) ;
+      IConditionWrapper<E> lt(LambdaPropertyFunction<E> name, Object value) ;
 
 
-      R in(LambdaPropertyFunction<E> name, Collection<?> coll);
+      IConditionWrapper<E> lte(LambdaPropertyFunction<E> name, Object value);
+
+
+
+
+      IConditionWrapper<E> between(LambdaPropertyFunction<E> name, Collection value);
+
+
+      IConditionWrapper<E> like(LambdaPropertyFunction<E> name, String value);
+
+      IConditionWrapper<E> match(LambdaPropertyFunction<E> name, String value);
+
+
+      IConditionWrapper<E> likeRight(LambdaPropertyFunction<E> name, String value);
+
+
+      IConditionWrapper<E> isNull(LambdaPropertyFunction<E> name) ;
+
+
+      IConditionWrapper<E> in(LambdaPropertyFunction<E> name, Collection<?> coll);
 
     int getSize();
 

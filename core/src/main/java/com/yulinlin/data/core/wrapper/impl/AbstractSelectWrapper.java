@@ -8,27 +8,19 @@ import com.yulinlin.data.core.wrapper.IAsFieldListWrapper;
 import com.yulinlin.data.core.wrapper.IConditionWrapper;
 import com.yulinlin.data.core.wrapper.ISelectWrapper;
 import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
-
+import java.util.Map;
 import java.util.function.Consumer;
 
-public abstract class AbstractSelectWrapper<
-        E,
-        R extends ISelectWrapper<E,R,W,C>,
-        W extends IConditionWrapper<E,W>,
-        C extends IAsFieldListWrapper<E,C>
+public abstract class AbstractSelectWrapper<E>
 
-
-        >
-
-        extends AbstractWrapper<R> implements ISelectWrapper<E,R,W,C> {
+        extends AbstractWrapper<ISelectWrapper<E>> implements ISelectWrapper<E> {
 
     protected From from;
 
     private boolean  isLock = false;
 
     
-    private  W where;
-
+    private  IConditionWrapper<E> where;
 
     private Order order;
 
@@ -37,109 +29,98 @@ public abstract class AbstractSelectWrapper<
     private int pageSize = 30;
 
     
-    private C selects;
-
+    private IAsFieldListWrapper<E> selects;
 
     
 
-    public AbstractSelectWrapper(W where) {
+    public AbstractSelectWrapper(IConditionWrapper<E> where) {
         this.where =where;
         this.selects = buildSelects();
         this.order =new Order();
 
     }
 
-
-
-    protected  abstract C buildSelects();
+    protected  abstract IAsFieldListWrapper<E> buildSelects();
 
     
 
-    public R table(String name){
+    public AbstractSelectWrapper<E> table(String name){
         this.from = new Store(name);
-        return (R)this;
+        return this;
     }
-    public R  table(String name, String alias){
+    public AbstractSelectWrapper<E>  table(String name, String alias){
         this.from = new Store(name,alias);
-        return (R)this;
+        return this;
     }
 
-
-
-    public R lock() {
+    public AbstractSelectWrapper<E> lock() {
         this. isLock = true;
-        return (R)this;
+        return this;
     }
 
     public boolean isLock() {
         return isLock;
     }
 
-
     public From getFrom() {
         return from;
     }
 
-
     @Override
-    public C fields() {
+    public IAsFieldListWrapper<E> fields() {
         return selects;
     }
 
     @Override
-    public R fields(Consumer<C> consumer) {
+    public AbstractSelectWrapper<E> fields(Consumer<IAsFieldListWrapper<E>> consumer) {
         consumer.accept(selects);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R highlight(String name) {
+    public AbstractSelectWrapper<E> highlight(String name) {
         selects.highlight(name);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R highlight(LambdaPropertyFunction<E> name) {
+    public AbstractSelectWrapper<E> highlight(LambdaPropertyFunction<E> name) {
         selects.highlight(name);
-        return (R)this;
+        return this;
     }
 
-
-
     @Override
-    public R orderBy(String name, boolean asc) {
+    public AbstractSelectWrapper<E> orderBy(String name, boolean asc) {
         order.pushOrder(name,asc);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R page(int pageNumber, int pageSize) {
+    public AbstractSelectWrapper<E> page(int pageNumber, int pageSize) {
         if(pageNumber > 0&& pageSize > 0){
             this.pageNumber = pageNumber;
             this.pageSize = pageSize;
         }
 
-        return (R)this;
+        return this;
     }
 
-
     @Override
-    public W  where() {
+    public IConditionWrapper<E>  where() {
         return where;
     }
 
     @Override
-    public R where(W wrapper) {
-        wrapper.and(wrapper);
-        return (R)this;
+    public AbstractSelectWrapper<E> where(IConditionWrapper<E> wrapper) {
+        where.and(wrapper);
+        return this;
     }
 
     @Override
-    public R where(Consumer<W> func) {
+    public AbstractSelectWrapper<E> where(Consumer<IConditionWrapper<E>> func) {
         func.accept(where);
-        return (R)this;
+        return this;
     }
-
 
     public Order getOrder() {
         return order;
@@ -153,33 +134,29 @@ public abstract class AbstractSelectWrapper<
         return pageSize;
     }
 
-
-
     private String getName(LambdaPropertyFunction name){
         String  fieldName =  LambdaPropertyUtil.getColumnName(name);
         return fieldName;
     }
 
     @Override
-    public R orderBy(LambdaPropertyFunction<E> name, boolean asc) {
+    public AbstractSelectWrapper<E> orderBy(LambdaPropertyFunction<E> name, boolean asc) {
         return orderBy(getName(name),asc);
     }
 
-
-
     @Override
-    public R orderByDesc(LambdaPropertyFunction<E> name) {
+    public AbstractSelectWrapper<E> orderByDesc(LambdaPropertyFunction<E> name) {
         return orderBy(name,false);
     }
 
     @Override
-    public R orderByAsc(LambdaPropertyFunction<E> name) {
+    public AbstractSelectWrapper<E> orderByAsc(LambdaPropertyFunction<E> name) {
         return orderBy(name,true);
     }
 
     //支持克隆
     @Override
-    public AbstractSelectWrapper clone()  {
+    public AbstractSelectWrapper<E> clone()  {
         try {
             return (AbstractSelectWrapper)super.clone();
         }catch (Exception e){
@@ -187,8 +164,11 @@ public abstract class AbstractSelectWrapper<
 
         }
 
-
     }
 
-
+    // Preserve the owning type in fluent calls without recursive public generics.
+    @Override public AbstractSelectWrapper<E> meta(String name, Object value) { super.meta(name, value); return this; }
+    @Override public AbstractSelectWrapper<E> meta(Map<String, Object> values) { super.meta(values); return this; }
+    @Override public AbstractSelectWrapper<E> orderByAsc(String name) { orderBy(name, true); return this; }
+    @Override public AbstractSelectWrapper<E> orderByDesc(String name) { orderBy(name, false); return this; }
 }

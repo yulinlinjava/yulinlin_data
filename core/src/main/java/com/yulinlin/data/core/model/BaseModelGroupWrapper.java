@@ -1,5 +1,7 @@
 package com.yulinlin.data.core.model;
 
+import java.util.Collection;
+import com.yulinlin.data.core.anno.ConditionEnum;
 import com.yulinlin.data.core.request.QueryRequest;
 import com.yulinlin.data.core.cache.CacheMode;
 import com.yulinlin.data.core.session.RequestType;
@@ -10,25 +12,19 @@ import com.yulinlin.data.lang.lambda.LambdaPropertyFunction;
 import com.yulinlin.data.lang.reflection.ReflectionUtil;
 import com.yulinlin.data.lang.util.Page;
 import lombok.SneakyThrows;
-
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-public class BaseModelGroupWrapper<
-        E,
-        W extends IConditionWrapper<E,W>,
-        R extends BaseModelGroupWrapper<E,W,R>
+public class BaseModelGroupWrapper<E>
 
-        >
-
-extends ModelConditionWrapper<E,W,R>
+extends ModelConditionWrapper<E>
 
 {
 
 
-    private IGroupWrapper<E,?,W,?,?> wrapper;
+    private IGroupWrapper<E> wrapper;
 
     private QueryRequest<E> request;
 
@@ -40,14 +36,14 @@ extends ModelConditionWrapper<E,W,R>
 
 
     /** Per-query index candidates: applied by H2; MySQL, PostgreSQL and other built-in backends ignore valid hints. */
-    public R useIndex(String... indexNames) {
+    public BaseModelGroupWrapper<E> useIndex(String... indexNames) {
         request.useIndex(indexNames);
-        return (R) this;
+        return this;
     }
 
-    public R apply(Consumer<IGroupWrapper<E,?,W,?,?>>  func){
+    public BaseModelGroupWrapper<E> apply(Consumer<IGroupWrapper<E>>  func){
         func.accept(wrapper);
-        return (R)this;
+        return this;
     }
 
     /** Returns native execution-plan rows without fetching entities or using the query cache. */
@@ -69,9 +65,9 @@ extends ModelConditionWrapper<E,W,R>
     }
 
 
-    public R root(Object root){
+    public BaseModelGroupWrapper<E> root(Object root){
         request.setRoot(root);
-        return (R)this;
+        return this;
     }
 
     public IGroupWrapper getWrapper() {
@@ -115,49 +111,49 @@ extends ModelConditionWrapper<E,W,R>
         return (Map<K,List<E>>)request.selectByGroup(key);
     }
 
-    public <W extends IConditionWrapper<E, W>> R having(Consumer<IConditionWrapper<E,W>> f) {
+    public BaseModelGroupWrapper<E> having(Consumer<IConditionWrapper<E>> f) {
         f.accept(having());
-        return (R)this;
+        return this;
     }
 
-    public <W extends IConditionWrapper<E,W>> IConditionWrapper<E,W>  having() {
-        return (W)wrapper.having();
+    public IConditionWrapper<E> having() {
+        return wrapper.having();
     }
 
     @Override
-    public IConditionWrapper<E, W> where() {
+    public IConditionWrapper<E> where() {
 
         return wrapper.where();
     }
 
-    public R cache(){
+    public BaseModelGroupWrapper<E> cache(){
         request.cache();
-        return (R)this;
+        return this;
     }
 
-    public R cache(Duration ttl){
+    public BaseModelGroupWrapper<E> cache(Duration ttl){
         request.cache(ttl);
-        return (R)this;
+        return this;
     }
 
-    public R cache(CacheMode mode){
+    public BaseModelGroupWrapper<E> cache(CacheMode mode){
         request.cache(mode);
-        return (R)this;
+        return this;
     }
 
-    public R cache(CacheMode mode, Duration ttl){
+    public BaseModelGroupWrapper<E> cache(CacheMode mode, Duration ttl){
         request.cache(mode, ttl);
-        return (R)this;
+        return this;
     }
 
-    public R cache(boolean cache){
+    public BaseModelGroupWrapper<E> cache(boolean cache){
         request.cache(cache);
-        return (R)this;
+        return this;
     }
 
-    public R cacheNamespaces(String... resources) {
+    public BaseModelGroupWrapper<E> cacheNamespaces(String... resources) {
         request.cacheNamespaces(resources);
-        return (R)this;
+        return this;
     }
 
     /**
@@ -166,33 +162,33 @@ extends ModelConditionWrapper<E,W,R>
      * @param pageSize
      * @return
      */
-    public R page(int pageNumber, int pageSize){
+    public BaseModelGroupWrapper<E> page(int pageNumber, int pageSize){
         wrapper.page(pageNumber,pageSize);
-        return (R)this;
+        return this;
     }
 
-    public R orderByAsc(String name){
+    public BaseModelGroupWrapper<E> orderByAsc(String name){
         wrapper.orderByAsc(name);
-        return (R)this;
+        return this;
     }
 
-    public  R orderBy(LambdaPropertyFunction<E> name, boolean asc) {
+    public  BaseModelGroupWrapper<E> orderBy(LambdaPropertyFunction<E> name, boolean asc) {
         wrapper.orderBy(name,asc);
-        return (R)this;
+        return this;
     }
 
-    public  R orderByAsc(LambdaPropertyFunction<E> name) {
+    public  BaseModelGroupWrapper<E> orderByAsc(LambdaPropertyFunction<E> name) {
         wrapper.orderByAsc(name);
-        return (R)this;
+        return this;
     }
-    public R orderByDesc(LambdaPropertyFunction<E> name) {
+    public BaseModelGroupWrapper<E> orderByDesc(LambdaPropertyFunction<E> name) {
         wrapper.orderByDesc(name);
-        return (R)this;
+        return this;
     }
 
-    public R orderByDesc(String name){
+    public BaseModelGroupWrapper<E> orderByDesc(String name){
         wrapper.orderByDesc(name);
-        return (R)this;
+        return this;
     }
 
 
@@ -201,9 +197,50 @@ extends ModelConditionWrapper<E,W,R>
     }
 
     @Override
-    public R parseWhereCondition(Object query) {
-        return super.parseWhereCondition(query);
+    public BaseModelGroupWrapper<E> parseWhereCondition(Object query) {
+        super.parseWhereCondition(query);
+        return this;
     }
 
 
+
+    // Covariant returns keep fluent calls typed without a self-type generic.
+    @Override public BaseModelGroupWrapper<E> not(Consumer<IConditionWrapper<E>> func) { super.not(func); return this; }
+    @Override public BaseModelGroupWrapper<E> struct() { super.struct(); return this; }
+    @Override public BaseModelGroupWrapper<E> and(IConditionWrapper<?> func) { super.and(func); return this; }
+    @Override public BaseModelGroupWrapper<E> and(Consumer<IConditionWrapper<E>> func) { super.and(func); return this; }
+    @Override public BaseModelGroupWrapper<E> condition(String name, ConditionEnum condition, Object value) { super.condition(name, condition, value); return this; }
+    @Override public BaseModelGroupWrapper<E> expression(String name,Map<String,Object> data) { super.expression(name, data); return this; }
+    @Override public BaseModelGroupWrapper<E> expression(String name) { super.expression(name); return this; }
+    @Override public BaseModelGroupWrapper<E> eq(String name, Object value) { super.eq(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> eq(LambdaPropertyFunction<E> name, Object value) { super.eq(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> ne(String name, Object value) { super.ne(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> ne(LambdaPropertyFunction<E> name, Object value) { super.ne(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> gt(String name, Object value) { super.gt(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> gt(LambdaPropertyFunction<E> name, Object value) { super.gt(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> gte(String name, Object value) { super.gte(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> gte(LambdaPropertyFunction<E> name, Object value) { super.gte(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> lt(String name, Object value) { super.lt(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> lt(LambdaPropertyFunction<E> name, Object value) { super.lt(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> lte(String name, Object value) { super.lte(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> lte(LambdaPropertyFunction<E> name, Object value) { super.lte(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> between(String name, Object x, Object y) { super.between(name, x, y); return this; }
+    @Override public BaseModelGroupWrapper<E> between(LambdaPropertyFunction<E> name, List<?> list) { super.between(name, list); return this; }
+    @Override public BaseModelGroupWrapper<E> between(String name, List<?> list) { super.between(name, list); return this; }
+    @Override public BaseModelGroupWrapper<E> like(String name, String value) { super.like(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> like(LambdaPropertyFunction<E> name, String list) { super.like(name, list); return this; }
+    @Override public BaseModelGroupWrapper<E> match(String name, String value) { super.match(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> match(LambdaPropertyFunction<E> name, String value) { super.match(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> likeRight(String name, String value) { super.likeRight(name, value); return this; }
+    @Override public BaseModelGroupWrapper<E> likeRight(LambdaPropertyFunction<E> name, String list) { super.likeRight(name, list); return this; }
+    @Override public BaseModelGroupWrapper<E> isNull(String name) { super.isNull(name); return this; }
+    @Override public BaseModelGroupWrapper<E> isNull(LambdaPropertyFunction<E> name) { super.isNull(name); return this; }
+    @Override public BaseModelGroupWrapper<E> in(String name, Collection<?> coll) { super.in(name, coll); return this; }
+    @Override public BaseModelGroupWrapper<E> in(LambdaPropertyFunction<E> name, Collection<?> coll) { super.in(name, coll); return this; }
+    @Override public BaseModelGroupWrapper<E> nin(String name, Collection<?> coll) { super.nin(name, coll); return this; }
+    @Override public BaseModelGroupWrapper<E> eq(Object value) { super.eq(value); return this; }
+    @Override public BaseModelGroupWrapper<E> nin(Collection<?> coll) { super.nin(coll); return this; }
+    @Override public BaseModelGroupWrapper<E> in(Collection<?> coll) { super.in(coll); return this; }
+    @Override public BaseModelGroupWrapper<E> or(Consumer<IConditionWrapper<E>> func) { super.or(func); return this; }
+    @Override public BaseModelGroupWrapper<E> where(Consumer<IConditionWrapper<E>> func) { super.where(func); return this; }
 }

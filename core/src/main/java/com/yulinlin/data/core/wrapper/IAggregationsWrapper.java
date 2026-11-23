@@ -2,12 +2,12 @@ package com.yulinlin.data.core.wrapper;
 
 import com.yulinlin.data.core.anno.AggregationsEnum;
 
-public interface IAggregationsWrapper<E,R> extends IWrapper {
+public interface IAggregationsWrapper<E> extends IWrapper {
 
-    IAggregationsWrapper<E,R> field(String  name, String alias);
+    IAggregationsWrapper<E> field(String  name, String alias);
 
 
-    default IAggregationsWrapper<E,R> field(AggregationsEnum aggregations,String  name, String alias){
+    default IAggregationsWrapper<E> field(AggregationsEnum aggregations,String  name, String alias){
         switch (aggregations){
             case field:{
                 field(name,alias);
@@ -36,19 +36,19 @@ public interface IAggregationsWrapper<E,R> extends IWrapper {
     }
 
 
-    IAggregationsWrapper<E,R> minute(String  name, String alias);
+    IAggregationsWrapper<E> minute(String  name, String alias);
 
-    IAggregationsWrapper<E,R> hour(String  name, String alias);
+    IAggregationsWrapper<E> hour(String  name, String alias);
 
-    IAggregationsWrapper<E,R> day(String  name, String alias);
+    IAggregationsWrapper<E> day(String  name, String alias);
 
-    IAggregationsWrapper<E,R> month(String  name, String alias);
+    IAggregationsWrapper<E> month(String  name, String alias);
 
-    IAggregationsWrapper<E,R> quarter(String  name, String alias);
+    IAggregationsWrapper<E> quarter(String  name, String alias);
 
-    IAggregationsWrapper<E,R> interval(String  name,  String alias,int interval);
+    IAggregationsWrapper<E> interval(String  name,  String alias,int interval);
 
-    IAggregationsWrapper<E,R> year(String  name, String alias);
+    IAggregationsWrapper<E> year(String  name, String alias);
 
 
     

@@ -9,55 +9,32 @@ public interface IWrapperFactory {
 
     ICountWrapper createCountWrapper(INode node);
 
-     IDeleteWrapper createDeleteWrapper(Object model);
+     <E> IDeleteWrapper<E> createDeleteWrapper(Object model);
 
-    IInsertWrapper createInsertWrapper(Object model);
+    <E> IInsertWrapper<E> createInsertWrapper(Object model);
 
-    IUpdateWrapper createUpdateWrapper(Object model);
+    <E> IUpdateWrapper<E> createUpdateWrapper(Object model);
 
     /** Setter-tracked update; original keys, not current entity defaults, form the WHERE clause. */
-    default IUpdateWrapper createUpdateWrapper(Object model, Map<String, Object> fields,
+    default <E> IUpdateWrapper<E> createUpdateWrapper(Object model, Map<String, Object> fields,
                                                Map<String, Object> primaryKeys, Map<String, Object> versions) {
         return UpdatePatchFactory.create(createUpdateWrapper(), model, fields, primaryKeys, versions);
     }
 
-    ISelectWrapper createSelectWrapper(Object model);
+    <E> ISelectWrapper<E> createSelectWrapper(Object model);
 
-    IGroupWrapper createGroupWrapper(Object model);
+    <E> IGroupWrapper<E> createGroupWrapper(Object model);
 
 
 
-    <
-            E,R extends IDeleteWrapper<E,R,W> ,W extends IConditionWrapper<E,W>
+    <E> IDeleteWrapper<E> createDeleteWrapper();
 
-            > IDeleteWrapper<E,R,W> createDeleteWrapper();
+    <E> IInsertWrapper<E> createInsertWrapper();
 
-    <
-            E,
-            R extends IInsertWrapper<E,R,U>,
-            U extends IInsertFieldsWrapper<E,U>
+    <E> IUpdateWrapper<E> createUpdateWrapper();
 
-            > IInsertWrapper<E,R,U> createInsertWrapper();
+    <E> ISelectWrapper<E> createSelectWrapper();
 
-    <E,
-            R extends IUpdateWrapper<E,R,W,U>,
-            W extends IConditionWrapper<E,W>,
-            U  extends IUpdateFieldsWrapper<E,U>
-            >  IUpdateWrapper<E,R,W,U> createUpdateWrapper();
-
-    <
-            E,
-            R extends ISelectWrapper<E,R,W,C>,
-            W extends IConditionWrapper<E,W>,
-            C extends IAsFieldListWrapper<E,C>
-            > ISelectWrapper<E,R,W,C> createSelectWrapper();
-
-    <
-            E,
-            R extends IGroupWrapper<E,R,W,M,A>,
-            W extends IConditionWrapper<E,W>,
-            M extends IMetricsWrapper<E,M>,
-            A extends IAggregationsWrapper<E,A>
-            >  IGroupWrapper<E,R,W,M,A> createGroupWrapper();
+    <E> IGroupWrapper<E> createGroupWrapper();
 
 }

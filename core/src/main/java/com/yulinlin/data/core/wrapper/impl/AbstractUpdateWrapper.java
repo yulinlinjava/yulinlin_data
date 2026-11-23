@@ -1,74 +1,65 @@
 package com.yulinlin.data.core.wrapper.impl;
 
-
 import com.yulinlin.data.core.node.from.Store;
 import com.yulinlin.data.core.wrapper.IConditionWrapper;
 import com.yulinlin.data.core.wrapper.IUpdateFieldsWrapper;
 import com.yulinlin.data.core.wrapper.IUpdateWrapper;
-
+import java.util.Map;
 import java.util.function.Consumer;
 
-public abstract class AbstractUpdateWrapper<E,
-        R extends AbstractUpdateWrapper<E,R,W,U>,
-        W extends IConditionWrapper<E,W>,
-        U  extends IUpdateFieldsWrapper<E,U>
-        > extends AbstractWrapper<R> implements IUpdateWrapper<E,R,W,U> {
+public abstract class AbstractUpdateWrapper<E> extends AbstractWrapper<IUpdateWrapper<E>> implements IUpdateWrapper<E> {
 
     private Store table;
 
-    private U columns;
+    private IUpdateFieldsWrapper<E> columns;
 
-    private W where;
+    private IConditionWrapper<E> where;
 
     public AbstractUpdateWrapper() {
         this.where = buildWhere();
         this.columns = buildColumns();
     }
 
-    protected abstract W buildWhere();
+    protected abstract IConditionWrapper<E> buildWhere();
 
-    protected abstract U buildColumns();
+    protected abstract IUpdateFieldsWrapper<E> buildColumns();
 
     @Override
-    public R table(String name, String alias) {
+    public AbstractUpdateWrapper<E> table(String name, String alias) {
         return table(name);
     }
 
-    public R table(String name){
+    public AbstractUpdateWrapper<E> table(String name){
         this.table = new Store(name);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public U fields() {
+    public IUpdateFieldsWrapper<E> fields() {
         return columns;
     }
 
     @Override
-    public R fields(Consumer<U> func) {
+    public AbstractUpdateWrapper<E> fields(Consumer<IUpdateFieldsWrapper<E>> func) {
         func.accept(columns);
-        return (R)this;
+        return this;
     }
 
-
-
-
-
     @Override
-    public W where() {
+    public IConditionWrapper<E> where() {
         return where;
     }
 
     @Override
-    public R where(W wrapper) {
+    public AbstractUpdateWrapper<E> where(IConditionWrapper<E> wrapper) {
         wrapper.and(wrapper);
-        return (R)this;
+        return this;
     }
 
     @Override
-    public R where(Consumer<W> func) {
+    public AbstractUpdateWrapper<E> where(Consumer<IConditionWrapper<E>> func) {
         func.accept(where);
-        return (R)this;
+        return this;
     }
 
     public Store getFrom() {
@@ -76,11 +67,15 @@ public abstract class AbstractUpdateWrapper<E,
     }
 
     @Override
-    public R clone()  {
+    public AbstractUpdateWrapper<E> clone()  {
         try {
-            return (R)super.clone();
+            return (AbstractUpdateWrapper<E>)super.clone();
         }catch (Exception e){
             throw new RuntimeException(e);
         }
     }
+
+    // Preserve the owning type in fluent calls without recursive public generics.
+    @Override public AbstractUpdateWrapper<E> meta(String name, Object value) { super.meta(name, value); return this; }
+    @Override public AbstractUpdateWrapper<E> meta(Map<String, Object> values) { super.meta(values); return this; }
 }

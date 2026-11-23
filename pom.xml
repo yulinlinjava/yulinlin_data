@@ -35,7 +35,8 @@
         <module>security-sa-token</module>
         <module>security-spring</module>
         <module>monitor</module>
-    </modules>
+        <module>mcp</module>
+</modules>
 
     <groupId>com.yulinlin</groupId>
     <artifactId>data</artifactId>

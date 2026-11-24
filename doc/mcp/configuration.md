@@ -18,6 +18,7 @@ yulinlin:
     max-request-bytes: 4194304     # 单次请求上限，默认 4 MiB，范围 1 B～64 MiB
     data-directory: ./mcp-data     # 命令输出文件目录
     retention-days: 30             # 审计保留天数
+    instructions:                  # 连接时返回给模型的服务说明；不配时按令牌可用的工具组自动生成，最长 8000 字符
     token:
       max-ttl-days: 0              # 非管理员签发/续期的最长天数，0 不限
       max-per-owner: 50            # 每个账号未撤销令牌的上限，0 不限
@@ -75,6 +76,23 @@ yulinlin:
 - MCP 令牌**不能**用来访问管理接口。
 - 命令功能关闭时，任务接口返回 404。
 - Origin 被拒绝时会记录一条 WARN 日志，包含 `Origin`、`serverName`、`serverPort`、`scheme`，用来排查代理配置。日志不会记录 Authorization。
+
+### 服务说明（instructions）
+
+客户端连接时会先调用 `initialize`，返回里的 `instructions` 会被客户端放进模型上下文，是 AI 最先看到的一段说明，不需要 AI 知道任何额外接口。
+
+- **不配置**：按当前令牌在 `tools/list` 里能看到的工具自动生成，只会提到实际可用的工具组。例如令牌能用 `data.*` 时，会说明先调 `data.sources` 再调 `data.schema`；能用 `data.execute` 时，会说明先预演再执行；能用命令工具时，会说明用 `task_get` 跟进后台任务。
+- **配置了**：原样返回配置的内容，不再自动生成。适合写业务背景，例如：
+
+```yaml
+yulinlin:
+  mcp:
+    instructions: |
+      这是订单系统的 MCP 服务。金额单位为分，时间为北京时间。
+      查数据先调 data.sources 和 data.schema；改数据先 dryRun 预演并让用户确认。
+```
+
+配置后会完全替换自动生成的内容，需要的话把工具使用顺序也写进去。这段文字所有有效令牌都能看到，不要放敏感信息。每个工具的详细用法仍然以 `tools/list` 里的说明为准。
 
 ## 客户端协议
 

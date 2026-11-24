@@ -93,7 +93,8 @@ class McpTransportTest extends McpTestSupport {
     @Test void initializationAndNotificationsFollowStatelessProtocol() throws Exception {
         rpc("""
             {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}
-            """).andExpect(jsonPath("$.result.protocolVersion").value("2025-06-18"));
+            """).andExpect(jsonPath("$.result.protocolVersion").value("2025-06-18"))
+            .andExpect(jsonPath("$.result.instructions").isString());
         rpc("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}")
             .andExpect(status().isAccepted());
         mvc.perform(get("/mcp")).andExpect(status().isMethodNotAllowed());

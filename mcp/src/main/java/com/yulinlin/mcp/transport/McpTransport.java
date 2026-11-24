@@ -60,7 +60,7 @@ public class McpTransport {
                 if(protocol!=null&&!protocol.equals(wanted)) return rpcError(id,-32602,"Protocol version mismatch",400);
                 return result(id,Map.of("protocolVersion",VERSIONS.contains(wanted)?wanted:"2025-11-25",
                         "capabilities",Map.of("tools",Map.of("listChanged",false)),"serverInfo",Map.of("name",properties.getApplicationId(),"version","3.0"),
-                        "instructions","工具和数据范围由业务权限控制；命令 cwd 使用服务器绝对路径。命令返回后台任务，使用 task_get/task_output 跟进。避免重复提交变更操作。"));
+                        "instructions",instructions(context)));
             }
             case "ping": return result(id,Map.of());
             case "tools/list":
@@ -69,6 +69,13 @@ public class McpTransport {
             case "tools/call": return call(id,params,context);
             default: return rpcError(id,-32601,"Method not found",200);
         }
+    }
+    /**
+     * 只讲实际开着的东西：按当前令牌在 tools/list 中能看到的工具生成（配置了 yulinlin.mcp.instructions 时原样返回）。
+     * 命令工具默认 enabled=false，没开时文案里不会提它；开了但令牌 scope 不含命令工具时也不会提。
+     */
+    private String instructions(McpCallContext context) {
+        return McpInstructions.of(properties, tools.list(context).stream().map(t -> String.valueOf(t.get("name"))).toList());
     }
     private ResponseEntity<?> call(JsonNode id,JsonNode params,McpCallContext context) {
         if(!params.path("name").isTextual()) return rpcError(id,-32602,"Tool name required",200);

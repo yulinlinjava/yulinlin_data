@@ -16,6 +16,8 @@ public class McpProperties {
  private Set<String> allowedOrigins=new HashSet<>();
  private int maxRequestBytes=4*1024*1024;
  private int retentionDays=30;
+ /** initialize 返回给模型的服务说明。不配时按实际启用的工具组生成。 */
+ private String instructions;
  private Token token=new Token();
  private DataAccess data=new DataAccess();
  private Command command=new Command();
@@ -58,6 +60,7 @@ public class McpProperties {
   if(applicationId==null||!applicationId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("yulinlin.mcp.application-id must be stable and contain 1-64 letters/digits/_/-");
   if(instanceId==null||!instanceId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("Invalid MCP instance-id");
   if(!path.matches("/[A-Za-z0-9/_-]+")||!managementPath.matches("/[A-Za-z0-9/_-]+")||path.equals(managementPath)) throw new IllegalArgumentException("Invalid or conflicting MCP paths");
+  if(instructions!=null&&instructions.length()>8000)throw new IllegalArgumentException("yulinlin.mcp.instructions 最长 8000 字符");
   if(maxRequestBytes<1||maxRequestBytes>64*1024*1024||retentionDays<1||command.maxConcurrent<1||command.maxCommandBytes<1||command.maxOutputBytes<1||command.defaultTimeoutSeconds<0||command.defaultTimeoutSeconds>604800)throw new IllegalArgumentException("Invalid MCP limits");
   for(var g:data.read)if(g==null||g.isBlank())throw new IllegalArgumentException("yulinlin.mcp.data.read 不能有空的组名");
   for(var g:data.write)if(g==null||g.isBlank()||g.equals("*"))throw new IllegalArgumentException("yulinlin.mcp.data.write 必须写明数据源组名，不支持 *");

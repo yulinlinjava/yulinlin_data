@@ -28,6 +28,7 @@ yulinlin:
       write: []                    # 可写的 JDBC 组，开放 data.execute
       max-rows: 1000               # 单次查询返回给 AI 的最大行数，最大 100000
       timeout-seconds: 30          # 单次调用总时长（JDBC 事务超时 / ES 服务端超时），最大 3600
+      script-row-budget: 200000    # data.analyze 脚本内所有查询合计最多读取的行数，调大前评估内存
     command:
       enabled: false
       shell: /bin/bash

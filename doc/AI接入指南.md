@@ -7999,6 +7999,7 @@ yulinlin:
       write: [biz]         # 可选，可写的组（仅 JDBC），开放 data.execute；写组自动可读
       max-rows: 1000       # 可选，单次查询返回给 AI 的最大行数，默认 1000，最大 100000
       timeout-seconds: 30  # 可选，单次调用总时长，默认 30，最大 3600
+      script-row-budget: 200000  # 可选，data.analyze 脚本内所有查询合计最多读取的行数，默认 20 万
 ```
 
 只开放部分数据源时写组名：`read: [report, search-es]`。
@@ -8243,7 +8244,7 @@ return {checked: rows.length, changed: changes.length};
 | --- | --- |
 | 隔离 | GraalJS `SandboxPolicy.CONSTRAINED`：不能访问 Java 类、文件、网络、线程和本地代码，没有 `require` / `import`。数据以 JSON 进出沙箱，不暴露任何 Java 对象 |
 | 时长 | `timeout-seconds`，到时强制终止沙箱并回滚 |
-| 读取行数 | 所有查询合计 200,000 行，超出报错（不截断，避免基于不完整数据得出错误结论） |
+| 读取行数 | 所有查询合计最多 `script-row-budget` 行（默认 200,000），超出报错（不截断，避免基于不完整数据得出错误结论）。每次 `query` 的结果会整批放进内存（Java 行、JSON、JS 对象各一份），调大前按「行数 × 列数 × 最多 8 个并发调用」评估堆内存 |
 | 结果大小 | `return` 的值序列化后最多 1 MB |
 | 依赖 | `org.graalvm.polyglot:polyglot` + `org.graalvm.polyglot:js` 25.2.4（MIT / UPL 许可）。在普通 OpenJDK 上以解释模式运行，启动时不会输出解释模式警告 |
 
@@ -8298,6 +8299,7 @@ yulinlin:
       write: []                    # 可写的 JDBC 组，开放 data.execute
       max-rows: 1000               # 单次查询返回给 AI 的最大行数，最大 100000
       timeout-seconds: 30          # 单次调用总时长（JDBC 事务超时 / ES 服务端超时），最大 3600
+      script-row-budget: 200000    # data.analyze 脚本内所有查询合计最多读取的行数，调大前评估内存
     command:
       enabled: false
       shell: /bin/bash

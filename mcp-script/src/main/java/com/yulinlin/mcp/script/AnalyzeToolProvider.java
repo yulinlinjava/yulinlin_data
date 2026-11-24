@@ -99,7 +99,7 @@ public class AnalyzeToolProvider implements McpToolProvider {
                 JS 里 Elasticsearch 的 command 直接写对象即可。值的类型：数字是数字，JDBC 日期时间是 'yyyy-MM-dd HH:mm:ss' 字符串，NULL 是 null，超出精度的大整数是字符串。金额精确汇总请在 SQL / 聚合里做。
                 没有 require、import、网络、文件、定时器，也不能访问 Java。
                 限制：总时长 %d 秒；所有查询合计最多读取 %d 行（超出报错，请先过滤或聚合）；return 的结果序列化后最多 1 MB。
-                """.formatted(DataToolProvider.COMMAND_GUIDE, data.timeoutSeconds(), McpDataService.SCRIPT_ROW_BUDGET) + write + """
+                """.formatted(DataToolProvider.COMMAND_GUIDE, data.timeoutSeconds(), data.scriptRowBudget()) + write + """
 
                 返回：{result: 脚本返回值, logs, queries, elapsedMs}，写入时另有 dryRun、committed、totalAffectedRows。""";
     }

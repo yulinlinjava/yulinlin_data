@@ -116,7 +116,7 @@ class EsCommandTest {
         transport.replies.add(SearchResponse.<Map>of(b -> b.took(1).timedOut(false)
                 .shards(s -> s.failed(0).successful(1).total(1))
                 .hits(h -> h.hits(hit -> hit.index("orders").id("o1").score(1.5)
-                        .source(Map.of("status", "paid", "items", List.of(Map.of("sku", "x")))))))));
+                        .source(Map.of("status", "paid", "items", List.of(Map.of("sku", "x"))))))));
         List<Map> rows = session.select(request("{\"search\": \"orders\", \"query\": {\"match_all\": {}}}", Map.of()));
         assertEquals(List.of("/orders/_search"), transport.paths);
         assertEquals(1, rows.size());

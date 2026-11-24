@@ -43,6 +43,8 @@ public class McpProperties {
   private int maxRows=1000;
   /** 单次工具调用（含沙箱脚本）的总时长上限：JDBC 为事务超时，Elasticsearch 写进命令的服务端超时 */
   private int timeoutSeconds=30;
+  /** data.analyze 脚本内所有查询合计最多读取的行数，超出报错（不截断）。行数据会整批放进内存，调大前先评估堆内存 */
+  private int scriptRowBudget=200_000;
  }
  @Data public static class Command {
   private boolean enabled;
@@ -59,7 +61,7 @@ public class McpProperties {
   if(maxRequestBytes<1||maxRequestBytes>64*1024*1024||retentionDays<1||command.maxConcurrent<1||command.maxCommandBytes<1||command.maxOutputBytes<1||command.defaultTimeoutSeconds<0||command.defaultTimeoutSeconds>604800)throw new IllegalArgumentException("Invalid MCP limits");
   for(var g:data.read)if(g==null||g.isBlank())throw new IllegalArgumentException("yulinlin.mcp.data.read 不能有空的组名");
   for(var g:data.write)if(g==null||g.isBlank()||g.equals("*"))throw new IllegalArgumentException("yulinlin.mcp.data.write 必须写明数据源组名，不支持 *");
-  if(data.maxRows<1||data.maxRows>100000||data.timeoutSeconds<1||data.timeoutSeconds>3600)throw new IllegalArgumentException("Invalid MCP data limits: max-rows 1–100000, timeout-seconds 1–3600");
+  if(data.maxRows<1||data.maxRows>100000||data.timeoutSeconds<1||data.timeoutSeconds>3600||data.scriptRowBudget<1)throw new IllegalArgumentException("Invalid MCP data limits: max-rows 1–100000, timeout-seconds 1–3600, script-row-budget >= 1");
   if(token.maxTtlDays<0||token.maxPerOwner<0||token.cacheSeconds<0||token.cacheSeconds>300||token.maxRotateGraceSeconds<0||token.maxRotateGraceSeconds>30*86400)throw new IllegalArgumentException("Invalid MCP token limits");
  }
 }

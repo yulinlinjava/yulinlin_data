@@ -172,8 +172,10 @@ public class ElasticsearchSession extends AbstractSession  {
             }
             case MAPPING: {
                 var response = client.indices().getMapping(g -> g.index(command.indices()));
+
                 var rows = new java.util.ArrayList<IDataBuffer>();
-                new java.util.TreeMap<>(response.result()).forEach((index, record) -> {
+                // 9.x 客户端：GetMappingResponse.mappings() 返回 {索引名: IndexMappingRecord}（8.x 为 result()）
+                new java.util.TreeMap<>(response.mappings()).forEach((index, record) -> {
                     IDataBuffer buffer = createDecoderBuffer();
                     buffer.put("index", index);
                     buffer.put("mappings", toJava(record.mappings()));

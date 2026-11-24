@@ -38,8 +38,7 @@ public class McpDataService implements McpLifecycle {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(McpDataService.class);
     /** 返回给 AI 的单元格最长字符数。 */
     static final int MAX_CELL_CHARS = 2000;
-    /** 沙箱脚本内部：所有查询合计最多读取的行数，以及单元格最长字符数（数据不直接返回给 AI）。 */
-    public static final int SCRIPT_ROW_BUDGET = 200_000;
+    /** 沙箱脚本内部的单元格最长字符数（数据不直接返回给 AI）。行数预算见 {@link #scriptRowBudget()}。 */
     static final int SCRIPT_CELL_CHARS = 65_536;
     private static final int MAX_STATEMENTS = 100;
     private static final String REQUEST_KIND = "data-request";
@@ -70,6 +69,9 @@ public class McpDataService implements McpLifecycle {
     public int maxRows() { return properties.getData().getMaxRows(); }
 
     public int timeoutSeconds() { return properties.getData().getTimeoutSeconds(); }
+
+    /** data.analyze 脚本内所有查询合计最多读取的行数（yulinlin.mcp.data.script-row-budget）。 */
+    public int scriptRowBudget() { return properties.getData().getScriptRowBudget(); }
 
     @Override
     public void initialize() { sources(); }
@@ -281,7 +283,7 @@ public class McpDataService implements McpLifecycle {
             sources();
             return guarded(() -> {
                 long start = System.currentTimeMillis();
-                var call = new Call(null, deadline(), Limits.forScript());
+                var call = new Call(null, deadline(), Limits.forScript(scriptRowBudget()));
                 var out = new LinkedHashMap<String, Object>(body.apply(call.scope()));
                 out.put("queries", call.queries);
                 out.put("elapsedMs", System.currentTimeMillis() - start);
@@ -290,7 +292,7 @@ public class McpDataService implements McpLifecycle {
         }
         source(writeGroup, true);
         String fingerprint = fingerprint("script", writeGroup, scriptText, expect);
-        return transaction(context, writeGroup, dryRun, expect, requestId, fingerprint, Limits.forScript(), call -> body.apply(call.scope()));
+        return transaction(context, writeGroup, dryRun, expect, requestId, fingerprint, Limits.forScript(scriptRowBudget()), call -> body.apply(call.scope()));
     }
 
     /** 预演或强制回滚：携带已经算好的结果穿过框架事务，让框架回滚。 */
@@ -489,7 +491,7 @@ public class McpDataService implements McpLifecycle {
 
     record Limits(int maxRows, boolean truncate, long budget, int maxCellChars) {
         static Limits forTool(int maxRows) { return new Limits(maxRows, true, Long.MAX_VALUE, MAX_CELL_CHARS); }
-        static Limits forScript() { return new Limits(SCRIPT_ROW_BUDGET, false, SCRIPT_ROW_BUDGET, SCRIPT_CELL_CHARS); }
+        static Limits forScript(int budget) { return new Limits(budget, false, budget, SCRIPT_CELL_CHARS); }
     }
 
     /** 一次工具调用的执行状态：写数据源（可选）、截止时间、行数预算、影响行数统计。 */

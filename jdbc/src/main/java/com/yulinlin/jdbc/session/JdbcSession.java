@@ -124,6 +124,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
     /** Preserve JDBC values, nulls, labels and row order without entity mapping or decoding. */
     protected List<Map<String, Object>> executeExplainNode(Connection connection, SqlNode node) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(node.getSql())) {
+            applyTransactionTimeout(statement);
             for (int i = 0; i < node.getList().size(); i++) bindValue(statement, i + 1, node.getList().get(i));
             try (ResultSet rows = statement.executeQuery()) {
                 ResultSetMetaData metadata = rows.getMetaData();
@@ -192,6 +193,7 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         int pending = 0;
         int batchSize = getExecuteBatchSize();
         try (  PreparedStatement preparedStatement =  connection.prepareStatement(sql)){
+            applyTransactionTimeout(preparedStatement);
 
 
             for (SqlNode node : nodeList) {
@@ -230,9 +232,24 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         return total;
     }
 
+    /**
+     * 事务设置了超时（RouteSession.transaction(callable, timeout)）时，按剩余时间设置语句的查询超时；
+     * 时间已经用完则直接抛出 SQLTimeoutException，由事务资源标记为只能回滚。不在事务中或未设置超时时不做任何事。
+     */
+    protected void applyTransactionTimeout(Statement statement) throws SQLException {
+        var context = com.yulinlin.data.core.transaction.TransactionContext.current();
+        if (context == null) return;
+        long remaining = context.remainingMillis();
+        if (remaining == Long.MAX_VALUE) return;
+        if (remaining <= 0) throw new java.sql.SQLTimeoutException("ORM 事务已超过设置的超时时间");
+        statement.setQueryTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1, (remaining + 999) / 1000)));
+    }
+
     /** Database modules may preserve a different physical representation for encoded values. */
     protected void bindValue(PreparedStatement statement, int index, Object value) throws SQLException {
-        statement.setObject(index, value);
+        // 原生 SQL 的 null 参数：用 setNull，避免 PostgreSQL 等驱动无法推断 setObject(null) 的类型
+        if (value == null) statement.setNull(index, java.sql.Types.NULL);
+        else statement.setObject(index, value);
     }
 
     @FunctionalInterface
@@ -298,9 +315,11 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
     @SneakyThrows
     public List<IDataBuffer> executeSelectNode(Connection connection, SqlNode node) {
         try (PreparedStatement statement = connection.prepareStatement(node.getSql())) {
+            applyTransactionTimeout(statement);
+            if (node.getMaxRows() > 0) statement.setMaxRows(node.getMaxRows());
             bindSelectParameters(statement, node);
             try (ResultSet rows = statement.executeQuery()) {
-                return resultSetToBuffer(rows);
+                return resultSetToBuffer(rows, node.isTypedRow());
             }
         }
     }
@@ -311,9 +330,11 @@ public class JdbcSession extends AbstractJdbcSession implements TransactionSessi
         try (PreparedStatement statement = connection.prepareStatement(node.getSql(),
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
             statement.setFetchSize(fetchSize);
+            applyTransactionTimeout(statement);
+            if (node.getMaxRows() > 0) statement.setMaxRows(node.getMaxRows());
             bindSelectParameters(statement, node);
             try (ResultSet rows = statement.executeQuery()) {
-                return consumeResultSet(rows, consumer);
+                return consumeResultSet(rows, consumer, node.isTypedRow());
             }
         }
     }

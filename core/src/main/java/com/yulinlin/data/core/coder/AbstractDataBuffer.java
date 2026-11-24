@@ -41,6 +41,9 @@ public abstract class AbstractDataBuffer implements IDataBuffer {
     @Override
     public Object decode(Class clazz) {
 
+        if (clazz == com.yulinlin.data.core.request.TypedRow.class) {
+            return new com.yulinlin.data.core.request.TypedRow(this.toMap());
+        }
         if (clazz == null || Object.class == clazz || Map.class.isAssignableFrom(clazz)) {
             return this.toMap();
         }
@@ -101,7 +104,7 @@ public abstract class AbstractDataBuffer implements IDataBuffer {
 
     @Override
     public IDataBuffer put(String key, Object val) {
-        if(encoder){
+        if(encoder && val != null){
              val =  encode(val);
         }
         executeEncoderPut(key,val);

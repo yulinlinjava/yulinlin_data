@@ -28,12 +28,11 @@ public class SecurityAuthAutoConfiguration {
     public static BeanFactoryPostProcessor exclusiveSecurityImplementations() {
         return factory -> {
             var providers = java.util.Set.of("com.yulinlin.security.jwt.JwtAutoConfiguration",
-                    "com.yulinlin.security.satoken.SaTokenAutoConfiguration",
-                    "com.yulinlin.security.spring.SpringSecurityAdapterAutoConfiguration");
+                    "com.yulinlin.security.satoken.SaTokenAutoConfiguration");
             long count = java.util.Arrays.stream(factory.getBeanDefinitionNames())
                     .map(name -> factory.getBeanDefinition(name).getBeanClassName())
                     .filter(name -> name != null && providers.contains(name)).count();
-            if (count > 1) throw new IllegalStateException("security-jwt、security-sa-token、security-spring 只能启用一个，不能使用 @Primary 混用");
+            if (count > 1) throw new IllegalStateException("security-jwt、security-sa-token 只能启用一个，不能使用 @Primary 混用");
         };
     }
 

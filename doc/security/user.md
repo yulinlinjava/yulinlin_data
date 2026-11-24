@@ -50,7 +50,7 @@ LoginResult trusted = SecurityUtil.login(new UserIdLogin(verifiedUserId, "web"))
 
 也可注入 `ISecurityManager` 调用 `login(request)`。PasswordLogin、ApiKeyLogin、UserIdLogin 省略/null 设备时默认 `default`，空白或首尾含空白的设备被拒绝。密码/密钥不 trim。业务验证码、外部授权回调验证应在相应业务认证流程完成；设备不是身份凭证，不自动读取加密用 Device-Type 请求头。
 
-`LoginResult(token, expiresAt, user, authType)` 返回安全用户及登录信息。JWT/Sa-Token 返回 Token；Spring 默认 Session 模式 token/expiresAt 为 null。`authType` 取自实际成功认证器的 name，不是客户端参数，也不是 Java 类名或 Bean 名。
+`LoginResult(token, expiresAt, user, authType)` 返回安全用户及登录信息。JWT/Sa-Token 返回 Token；自定义的会话型实现可以返回 null 的 token/expiresAt。`authType` 取自实际成功认证器的 name，不是客户端参数，也不是 Java 类名或 Bean 名。
 
 ```java
 String type = SecurityContext.getAuthType(); // 例如 password、api-key、sms、user-id
@@ -67,7 +67,7 @@ SecurityUtil.logout();
 
 authType 在后续请求中保持为本次登录的认证来源。JWT/Sa-Token 缺少 authType 的凭证会被拒绝，需要重新登录；不推测默认认证方式。已有外部登录没有提供可信来源时返回 null，不代表通过了 password 认证。
 
-静态调用与注入 ISecurityManager 使用同一个安全实现；应用初始化完成后再调用，不在 Bean 构造器中调用。只选择一个登录模块，不叠加 JWT/Sa-Token/Spring。仅引入公共 security 时默认匿名，不提供登录能力。
+静态调用与注入 ISecurityManager 使用同一个安全实现；应用初始化完成后再调用，不在 Bean 构造器中调用。只选择一个登录模块，不叠加 JWT/Sa-Token。仅引入公共 security 时默认匿名，不提供登录能力。
 
 ## 业务账号认证
 
@@ -231,17 +231,17 @@ public UserStore userStore(AccountService accounts) {
 
 UserStore.load 不验证密码、不签发 Token，不递归读取 SecurityContext。不存在/禁用用户返回 null 或抛 LoginException；基础设施错误正常抛出，不能返回默认用户，返回 ID 必须与查询 ID 相同。
 
-JWT/Sa-Token 认证器返回的安全用户直接用于当前登录，下一次请求才按 ID 重新加载；请求内复用快照。业务缓存需要自行处理角色/状态变更，refresh 不会替业务清理缓存。已有 Spring 登录体系采用其用户资料加载规则，不承诺自动重查业务数据库。
+JWT/Sa-Token 认证器返回的安全用户直接用于当前登录，下一次请求才按 ID 重新加载；请求内复用快照。业务缓存需要自行处理角色/状态变更，refresh 不会替业务清理缓存。
 
 ## 会话管理与数量限制
 
-Sa-Token/Spring 默认开启统一会话管理，数量默认不限；JWT 默认不参与，只有显式配置 `enabled: true` 才因不支持而启动报错。仅使用公共 security/匿名实现时默认不参与。Spring 即使省略配置也需要完成[过滤器链接入](spring.md#会话管理接入)。
+Sa-Token 默认开启统一会话管理，数量默认不限；JWT 默认不参与，只有显式配置 `enabled: true` 才因不支持而启动报错。仅使用公共 security/匿名实现时默认不参与。
 
 ```yaml
 yulinlin:
   security:
     session:
-      enabled: true                 # Sa-Token/Spring 可省略；false 显式关闭。JWT 不要设为 true
+      enabled: true                 # Sa-Token 可省略；false 显式关闭。JWT 不要设为 true
       max-sessions: 3                # 默认 -1 不限；只能为 -1 或正整数
       query:
         default-page-size: 20
@@ -296,7 +296,7 @@ sessions.kickoutByDeviceType(userId, "web", "退出网页端");
 
 分布式节点应共享权威会话存储，并使用一致的用户映射、命名空间、序列化及策略。A 登录后 B 可查，B 撤销后 A/C 的后续校验应失败；存储故障不能降级到本机或放行。第一版复用原生并发控制，不承诺跨节点同时登录时绝不瞬间超限，需要严格上限的业务由自定义实现处理原子性。
 
-不新增统一 Redis 配置或存储/锁 SPI。Sa-Token 使用官方存储插件；Spring 使用 Spring Session 或自定义实现，详见各模块接入文档。
+不新增统一 Redis 配置或存储/锁 SPI。Sa-Token 使用官方存储插件；自定义实现自行选择存储，详见各模块接入文档。
 
 ---
 

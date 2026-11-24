@@ -319,7 +319,6 @@ H2 2.3.232 对计算型分组键直接用于 HAVING 的处理存在兼容问题�
 | PostgreSQL | 支持日期维度；`quarter` 返回季度首月，例如 `2026-10` | 上界键，左闭右开；numeric 精确余数计算，解析时校验正步长 |
 | H2 | 支持日期维度；`quarter` 返回 `2026-Q4` | 上界键，左闭右开；保留十进制余数精度，解析时校验正步长 |
 | SQLite | 当前自动日期分组入口抛出不支持异常，需自行编写 `strftime` 等专用 SQL | 当前自动区间分组入口不支持，需自行编写表达式 |
-| MongoDB | `minute` / `hour` / `day` / `year` 的格式与上表相同；`month` / `quarter` 有下述限制 | 当前未注册 `IntervalGroup` 解析器，不能直接使用此入口 |
 | Elasticsearch | 使用 `date_histogram`；分钟、日、月、年格式与上表相同；小时为 `2026-10-23 21:00:00`，季度为季度首月 `2026-10` | 已生成 `histogram` 请求，但当前结果转换器未展开普通 histogram 桶；不能据此承诺 `selectList()` 返回完整区间结果，也不能套用 SQL 的上界键示例 |
 
 MySQL 的自然季度表达式为：
@@ -352,11 +351,9 @@ PostgreSQL 采用同一余数公式，但 `v = CAST(column AS numeric)`、`r = M
 
 H2 的分组键 HAVING 别名兼容问题已修复，使用方式、生成规则与专门的回归测试见上面的 [H2 的 HAVING 别名处理](#h2-的-having-别名处理)。
 
-MongoDB 当前 `month` 的格式字符串为 `%Y-%m)`，结果多一个右括号，例如 `2026-10)`；`quarter` 仅按 `%Y-%m` 格式化，未截断到季度首月，实际上仍按月份分组。不要将其误认为已经实现自然季度。
-
 以上示例假定日期值已经处于期望的统计时区。日期分组 API 没有统一的时区参数，不负责替所有数据库统一时区；带时区类型、数据库会话时区与存储方式需按具体模块验证。TEXT 日期须统一格式与时区，H2 / PostgreSQL 的当前解析器会转为 `TIMESTAMP`；TEXT 数字的比较、排序和聚合不能直接当作原生数值列。自定义函数和表达式始终按目标库语法编写。
 
-实现核对入口：[注解默认值](../../core/src/main/java/com/yulinlin/data/core/anno/JoinAggregations.java)、[链式接口](../../core/src/main/java/com/yulinlin/data/core/wrapper/IAggregationsWrapper.java)、[MySQL 日期](../../mysql/src/main/java/com/yulinlin/jdbc/mysql/parse/group/DateParse.java)、[MySQL 区间](../../mysql/src/main/java/com/yulinlin/jdbc/mysql/parse/group/IntervalParse.java)、[PostgreSQL 日期](../../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/parse/group/DateParse.java)、[PostgreSQL 区间](../../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/parse/group/IntervalParse.java)、[H2 日期](../../h2/src/main/java/com/yulinlin/jdbc/h2/parse/group/DateParse.java)、[H2 区间](../../h2/src/main/java/com/yulinlin/jdbc/h2/parse/group/IntervalParse.java)、[SQLite 支持边界](../../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/SqliteParseManager.java)、[MongoDB 日期](../../mongodb/src/main/java/com/yulinlin/mongodb/parse/group/DateParse.java)、[MongoDB 注册入口](../../mongodb/src/main/java/com/yulinlin/mongodb/parse/MongoParseManager.java)、[Elasticsearch 日期](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/parse/group/DateParse.java)、[Elasticsearch 区间](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/parse/group/IntervalParse.java)、[Elasticsearch 结果转换](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/util/AggregationUtil.java)。
+实现核对入口：[注解默认值](../../core/src/main/java/com/yulinlin/data/core/anno/JoinAggregations.java)、[链式接口](../../core/src/main/java/com/yulinlin/data/core/wrapper/IAggregationsWrapper.java)、[MySQL 日期](../../mysql/src/main/java/com/yulinlin/jdbc/mysql/parse/group/DateParse.java)、[MySQL 区间](../../mysql/src/main/java/com/yulinlin/jdbc/mysql/parse/group/IntervalParse.java)、[PostgreSQL 日期](../../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/parse/group/DateParse.java)、[PostgreSQL 区间](../../postgresql/src/main/java/com/yulinlin/jdbc/postgresql/parse/group/IntervalParse.java)、[H2 日期](../../h2/src/main/java/com/yulinlin/jdbc/h2/parse/group/DateParse.java)、[H2 区间](../../h2/src/main/java/com/yulinlin/jdbc/h2/parse/group/IntervalParse.java)、[SQLite 支持边界](../../sqlite/src/main/java/com/yulinlin/jdbc/sqlite/SqliteParseManager.java)、[Elasticsearch 日期](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/parse/group/DateParse.java)、[Elasticsearch 区间](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/parse/group/IntervalParse.java)、[Elasticsearch 结果转换](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/util/AggregationUtil.java)。
 
 ---
 

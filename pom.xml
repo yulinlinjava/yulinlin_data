@@ -25,7 +25,6 @@
         <module>mysql</module>
         <module>sqlite</module>
         <module>h2</module>
-        <module>mongodb</module>
         <module>oracle</module>
         <module>generate</module>
         <module>postgresql</module>
@@ -33,9 +32,9 @@
         <module>security-risk</module>
         <module>security-jwt</module>
         <module>security-sa-token</module>
-        <module>security-spring</module>
         <module>monitor</module>
         <module>mcp</module>
+        <module>mcp-script</module>
 </modules>
 
     <groupId>com.yulinlin</groupId>

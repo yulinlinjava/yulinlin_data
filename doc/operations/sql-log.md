@@ -71,7 +71,7 @@ logging:
     com.yulinlin.data.core.transaction.TransactionLog: INFO
 ```
 
-日志统一使用中文事件描述。最外层 ORM 事务与所有嵌套保存点共用一个事务 ID；SQL 日志显示 `事务ID`，生命周期日志显示 `txId`。每笔事务只绑定一个数据源、一条连接。事务外查询及独立 batch 显示 none，不把多个独立自动提交伪装成一个事务。
+日志统一使用中文事件描述。最外层 ORM 事务与所有嵌套保存点共用一个事务 ID；SQL 日志显示 `事务ID`，生命周期日志显示 `txId`。每笔事务对每个登记的数据源各用一条连接，日志 `group=` 列出所有已登记的组。事务外查询及独立 batch 显示 none，不把多个独立自动提交伪装成一个事务。
 
 事务日志包含嵌套深度 depth、group 和 rollbackOnly；JDBC 资源日志包含 group、cluster、owner=orm、savepoints 和 rollbackOnly。elapsedMs 从最外层开启起计算，包含业务时间，与 SQL 执行耗时不同。日志不打印连接密码。
 

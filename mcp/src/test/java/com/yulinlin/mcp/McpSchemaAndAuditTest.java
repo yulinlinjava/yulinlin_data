@@ -1,6 +1,5 @@
 package com.yulinlin.mcp;
 
-import com.yulinlin.mcp.auth.McpCredentials;
 import com.yulinlin.mcp.store.McpAudit;
 import com.yulinlin.mcp.tool.*;
 import org.junit.jupiter.api.Test;
@@ -18,7 +17,7 @@ class McpSchemaAndAuditTest extends McpTestSupport {
             """);
         var t=new McpToolDefinition("nested","nested",input,output,true,(c,a)->1);
         var registry=new McpToolRegistry(List.of(()->List.of(t)),new Policy());
-        var context=new McpCallContext("app","c",ADMIN,"request","");
+        var context=ctx("c");
         assertEquals(1,registry.call(context,"nested",JSON.readTree("{\"items\":[{\"id\":\"ab\"}]}")));
         for(String bad:List.of("{\"items\":[]}","{\"items\":[{\"id\":\"1\"}]}","{\"items\":[{\"id\":\"ab\",\"extra\":true}]}"))
             assertThrows(IllegalArgumentException.class,()->registry.call(context,"nested",JSON.readTree(bad)));
@@ -28,12 +27,12 @@ class McpSchemaAndAuditTest extends McpTestSupport {
         assertThrows(IllegalArgumentException.class,()->new McpToolRegistry(List.of(()->List.of(invalid)),new Policy()));
     }
     @Test void auditIsRedactedByDefaultAndOnlyExplicitTargetsAreStored() throws Exception {
-        var store=new MemoryStore();var c=new McpCredentials(store,id->ADMIN,new Policy());
-        var owner=c.byId(c.create(ADMIN,"client").credential().id());
+        var store=new MemoryStore();var owner=principal("client-id");
         var args=JSON.readTree("{\"id\":\"123\",\"command\":\"secret command\",\"token\":\"secret token\"}");
         var ordinary=new McpAudit(store,properties());assertTrue(ordinary.begin(owner,"tool",args).target().isEmpty());
         var custom=new McpAudit(store,properties(),(tool,a)->Map.of("id",a.path("id").asText()));
         var entry=custom.begin(owner,"tool",args);assertEquals(Map.of("id","123"),entry.target());
         custom.finish(entry,true);assertFalse(store.rows.values().toString().contains("secret"));
+        assertEquals("client-id",entry.credentialId());assertEquals("admin",entry.userId());
     }
 }

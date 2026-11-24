@@ -17,7 +17,7 @@ public class McpTasks {
  private final String runId=McpStore.id();
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(McpTasks.class);
     private final McpStore store;
-    private final McpCredentials credentials;
+    private final McpAuthentication authentication;
     private final McpProperties properties;
  private final CommandExecutor executor;
  private final McpAccessPolicy policy;
@@ -27,8 +27,8 @@ public class McpTasks {
     private final Semaphore slots;
     private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
     private volatile boolean ready, stopping;
-    public McpTasks(McpStore store,McpCredentials credentials,McpProperties properties,CommandExecutor executor,McpAccessPolicy policy){this(store,credentials,properties,executor,policy,id->properties.getDataDirectory().toAbsolutePath().normalize().resolve(properties.getApplicationId()).resolve(properties.getInstanceId()).resolve("output").resolve(id+".log"));}
-    public McpTasks(McpStore store,McpCredentials credentials,McpProperties properties,CommandExecutor executor,McpAccessPolicy policy,McpTaskOutputResolver outputs){this.outputs=Objects.requireNonNull(outputs);this.policy=policy;this.store=store;this.credentials=credentials;this.properties=properties;this.executor=executor;this.slots=new Semaphore(properties.getCommand().getMaxConcurrent());this.outputLimit=properties.getCommand().getMaxOutputBytes();}
+    public McpTasks(McpStore store,McpAuthentication authentication,McpProperties properties,CommandExecutor executor,McpAccessPolicy policy){this(store,authentication,properties,executor,policy,id->properties.getDataDirectory().toAbsolutePath().normalize().resolve(properties.getApplicationId()).resolve(properties.getInstanceId()).resolve("output").resolve(id+".log"));}
+    public McpTasks(McpStore store,McpAuthentication authentication,McpProperties properties,CommandExecutor executor,McpAccessPolicy policy,McpTaskOutputResolver outputs){this.outputs=Objects.requireNonNull(outputs);this.policy=policy;this.store=store;this.authentication=authentication;this.properties=properties;this.executor=executor;this.slots=new Semaphore(properties.getCommand().getMaxConcurrent());this.outputLimit=properties.getCommand().getMaxOutputBytes();}
     public void recover() {
         if(ready)return;
         for (int page=1;page<=40;page++) {
@@ -44,8 +44,8 @@ public class McpTasks {
         }
         ready = true;
     }
-    public synchronized Task start(McpCredentials.Credential credential, String command, String cwd, int timeoutSeconds, String requestId) throws IOException {
-        if(!policy.canInvoke(credentials.requireValid(credential),"command_execute"))throw new McpException(403,"无 command_execute 权限");
+    public synchronized Task start(McpPrincipal principal, String command, String cwd, int timeoutSeconds, String requestId) throws IOException {
+        if(!policy.canInvoke(authentication.refreshTool(principal,"command_execute",false),"command_execute"))throw new McpException(403,"无 command_execute 权限");
         if (!ready || stopping) throw new McpException(503, "任务服务尚未就绪");
 
         if (command == null || command.isBlank() || command.indexOf('\0') >= 0
@@ -57,7 +57,7 @@ public class McpTasks {
         directory = directory.toRealPath();
         command = command.replace("\r\n", "\n");
         if (requestId != null && !requestId.matches("[A-Za-z0-9_-]{1,128}")) throw new IllegalArgumentException("requestId 限 1–128 位字母、数字、下划线或短横线");
-        String id = requestId == null ? McpStore.id() : UUID.nameUUIDFromBytes((credential.id()+":"+requestId).getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+        String id = requestId == null ? McpStore.id() : UUID.nameUUIDFromBytes((principal.credentialId()+":"+requestId).getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
         if (requestId != null) {
             var existing = store.get("task-"+id, Task.class);
             if (existing != null) {
@@ -67,14 +67,14 @@ public class McpTasks {
             }
         }
         if (!slots.tryAcquire()) throw new McpException(429, "MCP 并发任务已满");
-        var task = new Task(id, credential.id(), command, directory.toString(), "queued", System.currentTimeMillis(),
+        var task = new Task(id, principal.credentialId(), command, directory.toString(), "queued", System.currentTimeMillis(),
                 null, null, null, null, timeoutSeconds, null, false, properties.getInstanceId(), runId);
         var item = new Running(task); running.put(id, item);
         boolean created=false;
         try {
             if (store.count("task") >= 2000) throw new McpException(429, "任务记录已满，请清理完成的任务");
             store.create("task-"+id,"task",task);created=true;
-            workers.submit(() -> execute(item, credential));
+            workers.submit(() -> execute(item, principal));
         } catch (RuntimeException error) {
             running.remove(id); slots.release();
             // If the worker was never dispatched, a retained queued row would incorrectly look runnable.
@@ -86,12 +86,12 @@ public class McpTasks {
         }
         return task;
     }
-    private void execute(Running item, McpCredentials.Credential credential) {
+    private void execute(Running item, McpPrincipal principal) {
         Future<?> reader = null;
         String state = "failed", message = null; Integer exit = null;
         try {
             synchronized (item) {
-                if (!policy.canInvoke(credentials.requireValid(credential), "command_execute"))
+                if (!policy.canInvoke(authentication.refreshTool(principal,"command_execute",false), "command_execute"))
                     throw new McpException(403, "无 command_execute 权限");
                 if (item.cancel) { state = "cancelled"; return; }
                 Path output = outputPath(item.task.id()); Files.createDirectories(output.getParent());

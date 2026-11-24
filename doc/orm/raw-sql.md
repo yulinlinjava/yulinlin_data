@@ -13,6 +13,7 @@ QueryRequest 和 ExecuteRequest 的参数化原始 SQL。
 - [自定义写入](#自定义写入)
 - [JSON 字段与原生 SQL](#json-字段与原生-sql)
 - [占位符与安全](#占位符与安全)
+- [Elasticsearch 原生命令](#elasticsearch-原生命令)
 
 ## 自定义 SQL 执行
 
@@ -41,6 +42,33 @@ DemoUser user = userRequest.selectOne();
 ```
 
 QueryRequest.newInstance(sql, params, clazz) 的 Map.class 返回按列标签组织的行 Map；对象结果按字段映射解码。selectOne 不检查“恰好一条”。多组时用 setSession 指定组；这是 void setter，不是可继续 selectList 的链式返回。
+
+需要保留数据库原始类型时，结果类型用 `TypedRow`（`com.yulinlin.data.core.request.TypedRow`，一个 `LinkedHashMap<String, Object>`）：
+
+```java
+import com.yulinlin.data.core.request.TypedRow;
+
+List<TypedRow> rows = QueryRequest.newInstance(
+        "select id, amount, created_at from orders where id=#{id}", Map.of("id", 1L), TypedRow.class)
+        .cache(false).selectList();
+```
+
+| 结果类型 | 值的读取方式 | NULL 列 | 列顺序 |
+| --- | --- | --- | --- |
+| `Map.class` | 方言 `readColumn` 规则（多数为字符串） | 不放入行 | 不保证 |
+| `TypedRow.class` | `ResultSet.getObject`（数字、日期、布尔等原始类型） | 保留键，值为 null | 与 SELECT 一致 |
+
+`TypedRow` 同样适用于 `selectEach`。Elasticsearch 原生命令本来就返回原始类型，结果相同。
+
+限制读取行数时，直接构造 `CommandNode` 并调用 `maxRows(n)`：JDBC 用 `Statement.setMaxRows` 在驱动层截断，不会把多余的行读进内存；Elasticsearch 忽略它，请在命令里写 `size`。参数值可以是 null，按 SQL NULL 绑定。
+
+```java
+import com.yulinlin.data.core.node.CommandNode;
+import com.yulinlin.data.core.parse.ParseType;
+
+var command = new CommandNode<>("select id, amount from orders order by id", Map.of(), ParseType.select).maxRows(1000);
+List<TypedRow> rows = QueryRequest.newInstance(TypedRow.class, command).cache(false).selectList();
+```
 
 自定义 SQL 不触发建表，`setFromClass` 也不再承担 Schema 初始化。MySQL/PostgreSQL/SQLite/H2 的结构只由启动扫描处理；原始 SQL 涉及但没有扫描实体的表，应由迁移脚本创建。`entityClass` 仅决定查询结果如何解码。
 
@@ -75,7 +103,7 @@ JDBC ORM 的职责是字段映射、参数编解码、SQL 执行和结果映射�
 - 自定义方言若覆盖过 `NameParse.resolve(name, params, comparisonValue)`，应改为 `resolve(name, params)`；字段解析不再根据比较值推断 JSON 类型。使用过已删除基类的扩展应改为普通 Wrapper / 节点。
 - 所有模块使用同一版本，调用方重新编译；升级时清理旧构建产物，避免已删除的类残留在 JAR。没有依赖旧 API 的普通 CRUD 调用方式不变。
 
-JDBC 自动 JSON 翻译层与通用 nested 入口均已移除；ES 专属的 `NestedNode`、`NestedParse` 和解析器注册也已删除，不保留另一套框架 nested 入口。普通条件与 AND/OR/NOT 分组仍保留；MongoDB 原生点路径查询/更新不变。确需 ES nested 查询时，由业务直接使用 Elasticsearch 原生客户端，框架不提供统一封装，也不会把点路径条件自动改写成 nested 查询。详见 [ES 查询能力边界](../datasources/elasticsearch.md#查询能力边界)。PG 数字区间和时间精度修复保留。
+JDBC 自动 JSON 翻译层与通用 nested 入口均已移除；ES 专属的 `NestedNode`、`NestedParse` 和解析器注册也已删除，不保留另一套框架 nested 入口。普通条件与 AND/OR/NOT 分组仍保留。确需 ES nested 查询时，可以使用 [ES 原生查询命令](../datasources/elasticsearch.md#原生查询命令)，或直接使用 Elasticsearch 原生客户端；框架不会把点路径条件自动改写成 nested 查询。详见 [ES 查询能力边界](../datasources/elasticsearch.md#查询能力边界)。PG 数字区间和时间精度修复保留。
 
 数据库自身的 JSON 操作仍可通过 `QueryRequest` / `ExecuteRequest` 执行。以下是 **PG 专用**示例，表和实体沿用 [PG JSON 整字段存储](../datasources/postgresql.md#json-整字段存储)：
 
@@ -116,9 +144,23 @@ SQL Node：where id=?，绑定列表：[7]
 
 正则匹配 SQL 文本中的占位符，截取内部的裸键从 Map 取值；不要把参数键写成 "#{id}"。多个或重复占位符按 SQL 出现顺序绑定，Map 的迭代顺序不决定 JDBC 参数顺序。
 
+- 匹配不区分字符串和注释：写在 `'...'` 或 `-- ...` 里的 `#{x}` 也会被替换成 `?`。
+- 集合参数**不会**展开：`in (#{ids})` 传 List 只绑定一个值。需要 IN 列表时自己生成 `#{id0}, #{id1}, ...` 和对应参数。
+
 `#{value}` 用于 PreparedStatement 绑定；`${identifier}` 是直接文本替换，仅用于业务预先校验的可信表名、列名或表达式，不用于用户数据。WHERE 必须明确限制写入目标。
 
-当前编码缓冲区不承诺 null 参数值可正常 put：Map.of 本身也不接受 null。查询 NULL 用 IS NULL，清列可用固定的 SET column=NULL SQL；需要可空动态参数应先核对并验证对应编码路径。缺少键可能被绑定成 null，不当作可靠的参数校验。
+参数值可以是 null，按 SQL NULL 绑定（注意 Map.of 不接受 null，需要用 HashMap）。比较 NULL 仍要用 IS NULL / IS NOT DISTINCT FROM。缺少键可能被绑定成 null，不当作可靠的参数校验。
+
+## Elasticsearch 原生命令
+
+`CommandNode` 的表达式按数据源类型解释：JDBC 是 SQL 文本，Elasticsearch 是 JSON 命令，都通过 `QueryRequest` 执行，用 `setSession` 选择数据源组。
+
+| 数据源 | 表达式 | 说明 |
+| --- | --- | --- |
+| JDBC | SQL 字符串 | 见上文 |
+| Elasticsearch | JSON 字符串、`Map` 或 `JsonNode` | 只支持查询，见 [ES 原生查询命令](../datasources/elasticsearch.md#原生查询命令) |
+
+ES 命令的参数：值恰好是 `"#{名称}"` 的字符串节点会被替换成参数值。替换发生在 JSON 节点上，不做文本拼接，参数里的引号不会改变命令结构。缺少参数，或传入了命令中没有用到的参数，都会报错。
 
 ---
 

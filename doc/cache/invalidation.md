@@ -30,7 +30,7 @@ MurmurHash3-x64-128(
 
 元数据直接流入128位哈希器，不构建完整中间字符串。`CacheKey` 在内存中只保存两个 `long`；Caffeine 直接使用该对象作为 Key，Ehcache/Redis 持久化或日志输出时才按需生成 `v2:` 开头的32位十六进制文本。实体反射字段通过 `ClassValue` 缓存，不会在每次查询时重新扫描、排序。
 
-`CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、MongoDB、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
+`CommandNode` 的 SQL、参数名、参数类型和值都属于 INode 元数据。因此相同 SQL 的不同参数不会共用结果；MySQL、PostgreSQL、SQLite、H2、Elasticsearch 以及第三方 `AbstractSession` 实现都使用同一规则。Map 参数按键排序，参数插入顺序不会造成无意义的 Key 差异。
 
 缓存命中时不会访问数据源，因此数据库模块的 `log=true` 不会打印 SQL。排障时可将 `com.yulinlin.data.cache.QueryCache` 调整为 DEBUG，查看 `HIT`、`MISS`、`REFRESH`、等待后命中以及事务/行锁绕过等事件；日志只记录哈希 Key，不记录缓存值。需要确认物理 SQL 时使用 `CacheMode.REFRESH` 或暂时关闭该次查询缓存。
 

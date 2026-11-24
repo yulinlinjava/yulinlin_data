@@ -25,14 +25,23 @@ public final class TransactionContext {
     public boolean committed;
     public boolean completed;
     public Throwable failure;
-    public EntitySession session;
+    /**
+     * 已登记到本事务的会话，按第一次访问的顺序排列，每个数据源组一个 master 节点。
+     * 提交按此顺序依次进行，回滚按相反顺序；不是两阶段提交，见 doc/relations/transactions.md。
+     * 不支持事务的会话（Elasticsearch 等）不登记，请求直接执行。
+     */
+    public final List<EntitySession> sessions = new ArrayList<>();
     public final Deque<Frame> frames = new ArrayDeque<>();
     private ProxyChanges proxyChanges;
 
     public static final class Frame {
-        public Object savepoint;
+        /** 本层开始时各会话的保存点；外层（第一层）不需要保存点。 */
+        public final Map<EntitySession, Object> savepoints = new IdentityHashMap<>();
         public ProxyChanges.Snapshot proxySnapshot;
         public boolean rollbackOnly;
+        /** 本层设置了超时时的截止时间（System.nanoTime）；timed 为 false 表示本层未设置。 */
+        public boolean timed;
+        public long deadlineNanos;
         public final Map<QueryCache, CacheInvalidation> invalidations = new IdentityHashMap<>();
         public final List<Runnable> afterCommitTasks = new ArrayList<>();
         public void merge(Frame child) {
@@ -51,7 +60,29 @@ public final class TransactionContext {
     public TransactionLog transactionLog() { return transactionLog; }
 
     public int depth() { return frames.size(); }
+
+    /**
+     * 距离事务超时的剩余毫秒数，取所有活动层中最早的截止时间；没有任何一层设置超时时返回 {@link Long#MAX_VALUE}。
+     * 内层设置的较短超时只在内层范围内生效，内层结束后恢复外层的截止时间。
+     */
+    public long remainingMillis() {
+        boolean timed = false;
+        long earliest = 0;
+        for (Frame frame : frames) {
+            if (!frame.timed) continue;
+            if (!timed || frame.deadlineNanos - earliest < 0) earliest = frame.deadlineNanos;
+            timed = true;
+        }
+        if (!timed) return Long.MAX_VALUE;
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(earliest - System.nanoTime());
+    }
     public Frame frame() { return frames.getLast(); }
+
+    /** 本事务中该数据源组已登记的会话；没有时返回 null。 */
+    public EntitySession session(String group) {
+        for (EntitySession s : sessions) if (java.util.Objects.equals(s.group(), group)) return s;
+        return null;
+    }
     public ProxyChanges proxyChanges() { return proxyChanges; }
     public void proxyChanges(ProxyChanges changes) {
         Objects.requireNonNull(changes, "changes");

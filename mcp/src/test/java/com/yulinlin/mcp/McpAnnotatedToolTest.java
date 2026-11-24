@@ -21,11 +21,11 @@ class McpAnnotatedToolTest extends McpTestSupport {
     ApplicationContextRunner runner(Class<?> tools,java.util.function.Supplier<?> supplier) {
         return new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(McpAutoConfiguration.class))
             .withPropertyValues("yulinlin.mcp.enabled=true","yulinlin.mcp.application-id=test")
-            .withBean(ObjectMapper.class,()->JSON).withBean(McpStore.class,MemoryStore::new)
+            .withBean(ObjectMapper.class,()->JSON).withBean(McpStore.class,MemoryStore::new).withBean(com.yulinlin.mcp.token.McpTokenStore.class,MemoryTokenStore::new)
             .withBean(McpAccessPolicy.class,Policy::new).withBean(McpIdentityProvider.class,()->id->ADMIN)
             .withBean("businessTools",Object.class,supplier::get);
     }
-    static McpCallContext context(){return new McpCallContext("test","credential",ADMIN,"request","");}
+    static McpCallContext context(){return ctx("credential");}
     public record Item(@NotBlank @Schema(description="商品编号",example="item-1") String id){}
     public record Request(
         @NotBlank @JsonProperty("order_id") @Schema(description="业务订单编号",example="order-1") String id,
@@ -78,6 +78,25 @@ class McpAnnotatedToolTest extends McpTestSupport {
                 assertEquals(before+1,advice.get());
             });
         }
+    }
+    public static class ContextTools {
+        @McpTool(name="whoami",description="读取调用方与令牌属性",readOnly=true)
+        public String whoami(McpCallContext context,Item item){return context.credentialId()+":"+item.id()+":"+(McpCallContext.current()==context);}
+        @McpTool(name="context_only",description="只要上下文",readOnly=true)
+        public String contextOnly(McpCallContext context){return context.user().getUserId();}
+    }
+    public static class TwoContexts {
+        @McpTool(name="two",description="两个上下文参数")public String result(McpCallContext a,McpCallContext b){return "";}
+    }
+    @Test void callContextCanBeInjectedNextToTheRequestDto() {
+        runner(ContextTools.class,ContextTools::new).run(c->{
+            assertThat(c).hasNotFailed();var r=c.getBean(McpToolRegistry.class);
+            assertEquals("credential:i:true",r.call(context(),"whoami",JSON.readTree("{\"id\":\"i\"}")));
+            assertEquals("admin",r.call(context(),"context_only",JSON.createObjectNode()));
+            assertFalse(r.list(context()).toString().contains("McpCallContext"));
+            assertNull(McpCallContext.current());
+        });
+        runner(TwoContexts.class,TwoContexts::new).run(c->assertThat(c).hasFailed());
     }
     public static class Duplicate {
         @McpTool(name="same",description="a")public String first(){return "a";}

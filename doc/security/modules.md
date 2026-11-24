@@ -11,7 +11,7 @@
 
 ## 引入模块
 
-一个项目只选一种登录实现，不混用 `security-jwt`、`security-sa-token`、`security-spring`。这些模块已经包含公共 `security` 的能力。
+一个项目只选一种登录实现，不混用 `security-jwt`、`security-sa-token`。这些模块已经包含公共 `security` 的能力。
 
 统一业务接口不等于屏蔽原生框架能力。配置归属、冲突规则及可复制的 YAML/Bean 案例见[原生配置与统一策略](native-config.md)。
 
@@ -22,8 +22,7 @@
 | 仅加密、限流或权限注解 | `security` | 不要求实现登录；未登录用户不能访问受保护方法 |
 | 无状态 Token 登录 | `security-jwt` | 配置签名密钥，提供 UserStore 和所需 LoginAuthenticator |
 | 有状态 Token 登录 | `security-sa-token` | 提供 UserStore 和所需 LoginAuthenticator |
-| 复用已有 Spring Security 登录 | `security-spring` | 项目已有可用认证配置；统一登录需完成项目认证适配 |
-| 完全自定义登录实现 | `security` | 提供 ISecurityManager，按需提供 LoginInterceptor |
+| 完全自定义登录实现（含已有 Spring Security、OAuth2 / SSO） | `security` | 提供 ISecurityManager，按需提供 LoginInterceptor，见[自定义安全实现](extension.md) |
 
 仅使用公共能力时：
 
@@ -60,7 +59,7 @@
 | 刷新资料 | `refresh()`，不重新签发 Token | `refresh()`，不等于重新登录 |
 | 多实例部署 | 各实例使用一致的签名配置和用户数据 | 各实例需要共享有效的登录状态 |
 
-只需要简单 Token 登录可选 JWT；需要注销、踢人、会话查询及数量限制可选有状态登录。Sa-Token/Spring 默认开启[统一会话管理](user.md#会话管理与数量限制)，数量默认不限，可通过 `session.enabled=false` 关闭；JWT 保持无状态，默认不参与，显式开启才报不支持。Spring 仍须显式接入原生过滤器链。
+只需要简单 Token 登录可选 JWT；需要注销、踢人、会话查询及数量限制可选有状态登录。Sa-Token 默认开启[统一会话管理](user.md#会话管理与数量限制)，数量默认不限，可通过 `session.enabled=false` 关闭；JWT 保持无状态，默认不参与，显式开启才报不支持。
 
 JWT 用户重新启用后，其尚未过期的旧 Token 可能继续使用。删除用户后不要复用旧 userId。需要更严格的凭证撤销规则，使用有状态方案或[自定义管理器](extension.md#自定义有状态登录)。
 

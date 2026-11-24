@@ -73,6 +73,9 @@ public class ElasticSearchParseManager extends SimpParseManager  {
 
         this.register(new EsUpdateWrapperParse());
 
+        // 原生查询命令：CommandNode 的 JSON（search / aggregate / count）
+        this.register(new EsCommandParse());
+
     }
 
 }

@@ -23,7 +23,7 @@
 
 ### Session 日志与执行监听
 
-见[Session 日志与执行监听](logging.md#session-日志与执行监听)，包括 JdbcExecutionLog/EsExecutionLog/MongoExecutionLog、监控扩展及耗时口径。
+见[Session 日志与执行监听](logging.md#session-日志与执行监听)，包括 JdbcExecutionLog/EsExecutionLog、监控扩展及耗时口径。
 
 ### 过滤器边界
 

@@ -80,7 +80,7 @@ public LoginInterceptor loginInterceptor(ISecurityManager manager) {
 }
 ```
 
-这是替换整个请求身份恢复行为，不只是新增一个请求头。manager.resolveSession 必须完成真实凭证验证；此示例不能直接替换 Sa-Token、Spring 或其他同时维护外部身份的请求处理。它们应保留模块默认凭证约定，或通过完整自定义接入统一管理两侧身份。不要将客户端传入的 userId 直接写入上下文。
+这是替换整个请求身份恢复行为，不只是新增一个请求头。manager.resolveSession 必须完成真实凭证验证；此示例不能直接替换 Sa-Token 或其他同时维护外部身份的请求处理。它们应保留模块默认凭证约定，或通过完整自定义接入统一管理两侧身份。不要将客户端传入的 userId 直接写入上下文。
 
 框架负责自动注册和清理 SecurityContext，包括拒绝请求、异常、请求完成及异步切换。自定义实现若还维护其他请求状态，必须自行清理；基础设施异常正常传播，不能伪装成验证成功。
 
@@ -94,7 +94,7 @@ MVC 静态资源由框架统一放行，不调用自定义 LoginInterceptor 的 
 
 ## 接入外部安全框架
 
-已有 [Sa-Token](sa-token.md) 或 [Spring Security](spring.md) 项目可选择对应模块。其他认证体系只需引入公共 security，提供 ISecurityManager；如果已有请求身份恢复机制，再提供 LoginInterceptor 对接已验证身份。不要同时引入多个登录模块。
+已有 Sa-Token 的项目可直接用 [security-sa-token](sa-token.md)。其他认证体系（包括项目自己的 Spring Security、OAuth2 / SSO 等）只需引入公共 security，提供 ISecurityManager；如果已有请求身份恢复机制，再提供 LoginInterceptor 对接已验证身份。框架不再内置 Spring Security 适配模块。不要同时引入多个登录模块。
 
 业务侧继续使用 SecurityUtil、ISecurityManager 和 ApiLogin/ApiRole/ApiPerm，不依赖具体登录实现。需要实现的公开行为如下：
 

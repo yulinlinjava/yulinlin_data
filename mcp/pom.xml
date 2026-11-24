@@ -27,6 +27,13 @@
             <artifactId>starter</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- 数据工具读取 JDBC 元数据时使用；只用 ES 的应用不会引入 -->
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>jdbc</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.networknt</groupId>
             <artifactId>json-schema-validator</artifactId>

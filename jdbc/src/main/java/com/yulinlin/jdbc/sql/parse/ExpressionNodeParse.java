@@ -19,6 +19,8 @@ public class ExpressionNodeParse implements IParse<CommandNode<String>> {
 
 
         SqlNode node =  new SqlNode(condition.getExpression(),  params.getDataBuffer());
+        node.setTypedRow(params.getSourceClass() == com.yulinlin.data.core.request.TypedRow.class);
+        if (condition.getMaxRows() != null) node.setMaxRows(condition.getMaxRows());
 
         return new ParseResult(condition.getType(),node,params);
 

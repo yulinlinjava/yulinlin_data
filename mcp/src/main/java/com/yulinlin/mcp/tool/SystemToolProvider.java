@@ -8,10 +8,10 @@ import java.util.*;
 import java.nio.file.*;
 import java.lang.management.ManagementFactory;
 public class SystemToolProvider implements McpToolProvider {
- private final McpProperties properties;private final McpTasks tasks;private final McpCredentials credentials;private final McpAccessPolicy policy;
+ private final McpProperties properties;private final McpTasks tasks;private final McpAccessPolicy policy;
  private final ProcessOverviewService processes;private final ProcessControlService controls;private final ObjectMapper json;
  private final List<McpToolDefinition> definitions=new ArrayList<>();
- public SystemToolProvider(McpProperties p,McpTasks tasks,McpCredentials credentials,McpAccessPolicy policy,ProcessOverviewService processes,ProcessControlService controls,ObjectMapper json){this.properties=p;this.tasks=tasks;this.credentials=credentials;this.policy=policy;this.processes=processes;this.controls=controls;this.json=json;register();}
+ public SystemToolProvider(McpProperties p,McpTasks tasks,McpAccessPolicy policy,ProcessOverviewService processes,ProcessControlService controls,ObjectMapper json){this.properties=p;this.tasks=tasks;this.policy=policy;this.processes=processes;this.controls=controls;this.json=json;register();}
  public Collection<McpToolDefinition> tools(){return List.copyOf(definitions);}
  private void register(){
         add("server_info", "当前服务器/容器的操作系统、Java、CPU、内存、磁盘及网卡。不是远程宿主机代理。", true, Map.of(), List.of());
@@ -51,7 +51,7 @@ public class SystemToolProvider implements McpToolProvider {
   if(name.startsWith("task_")&&!name.equals("task_list"))authorizeTask(context,s(a,"id"));
   return switch(name){
    case "server_info" -> serverInfo();
-   case "command_execute" -> tasks.start(credentials.byId(context.credentialId()),s(a,"command"),s(a,"cwd"),n(a,"timeoutSeconds",properties.getCommand().getDefaultTimeoutSeconds()),s(a,"requestId"));
+   case "command_execute" -> tasks.start(context.principal(),s(a,"command"),s(a,"cwd"),n(a,"timeoutSeconds",properties.getCommand().getDefaultTimeoutSeconds()),s(a,"requestId"));
    case "task_list" -> tasks.list(n(a,"page",1)).stream().filter(t->context.credentialId().equals(t.credentialId())||policy.canManage(context.user())).toList();
    case "task_get" -> tasks.get(s(a,"id"));
    case "task_output" -> tasks.output(s(a,"id"),l(a,"offset",0),n(a,"limit",16384));

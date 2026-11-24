@@ -18,7 +18,8 @@
 - **可选缓存**：Caffeine、Ehcache、Redis 可共存；统一 CacheMode、TTL、多数据源 Key 与条件分区失效。
 - **高频写入**：受控多连接批量、`.queue()` 延迟执行、EntityCounter 聚合自增和按维度聚合插入。
 - **搜索与结构初始化**：显式自动建表/索引，PostgreSQL 与 ES 的 `match()`、`highlight()`。
-- **配套能力**：轻量数据同步、慢操作监控、接口加密限流、无状态 JWT、有状态 Sa-Token 或现有 Spring Security 接入；统一 [login(LoginRequest)](doc/security/user.md#安全管理器)，支持密码、密钥、可信 ID 和自定义认证方式，由 LoginAuthenticator.name 记录 authType。
+- **外部 AI 接入（MCP）**：令牌签发与管理、`@McpTool` 业务工具；按配置开放项目数据的查询（JDBC / ES）、事务内写入（JDBC）和服务端 JavaScript 分析。
+- **配套能力**：轻量数据同步、慢操作监控、接口加密限流、无状态 JWT 或有状态 Sa-Token（其他认证体系可自定义接入）；统一 [login(LoginRequest)](doc/security/user.md#安全管理器)，支持密码、密钥、可信 ID 和自定义认证方式，由 LoginAuthenticator.name 记录 authType。
 
 技术选型看[功能、开发成本与评分说明](doc/start/comparison.md)。比较的是交付同一业务能力需要的工作量，不是运行性能或通用排名。
 
@@ -34,8 +35,8 @@
 | [关联与事务](doc/relations/README.md) | [关联查询](doc/relations/query.md)、[懒加载](doc/relations/lazy.md)、[自动更新](doc/relations/auto-update.md)、[事务](doc/relations/transactions.md) |
 | [批量与同步](doc/write-sync/README.md) | [批量](doc/write-sync/batch.md)、[延迟队列](doc/write-sync/queue.md)、[EntityCounter](doc/write-sync/counter.md)、增量/全量同步 |
 | [缓存](doc/cache/README.md) | [ORM 缓存](doc/cache/query.md)、[失效规则](doc/cache/invalidation.md)、Caffeine/Ehcache/Redis、[CacheClient](doc/cache/client.md) |
-| [接口安全](doc/security/README.md) | [JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[Spring Security](doc/security/spring.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md) |
-| [MCP 接入](doc/mcp/README.md) | [工具与权限](doc/mcp/integration.md)、[配置与后台任务](doc/mcp/configuration.md)、[网盘迁移约定](doc/mcp/netdisk.md) |
+| [接口安全](doc/security/README.md) | [JWT](doc/security/jwt.md)、[Sa-Token](doc/security/sa-token.md)、[权限](doc/security/authorization.md)、[加密](doc/security/crypto.md)、[限流](doc/security/rate-limit.md) |
+| [MCP 接入](doc/mcp/README.md) | [快速接入](doc/mcp/integration.md)、[业务工具](doc/mcp/tools.md)、[令牌管理](doc/mcp/tokens.md)、[数据工具](doc/mcp/data.md)、[配置与系统工具](doc/mcp/configuration.md)、[扩展点](doc/mcp/extension.md) |
 | [常用工具](doc/tools/README.md) | [HTTP](doc/tools/http.md)、[反射与克隆](doc/tools/reflection.md)、JSON、日期、线程与调度 |
 | [项目实践](doc/practice/README.md) | [公共模型](doc/practice/models.md)、[通用 Service](doc/practice/service.md)、[完整 CRUD](doc/practice/crud-example.md)、[RBAC 登录](doc/practice/rbac.md) |
 | [监控与排障](doc/operations/README.md) | [监控页面](doc/operations/monitor.md)、[SQL/事务日志](doc/operations/sql-log.md)、[SQLite/H2 性能报告](doc/operations/local-benchmark.md) |
@@ -43,7 +44,7 @@
 
 ## 使用边界
 
-- ORM 事务固定一个 JDBC 数据源和一条连接，嵌套使用保存点；事务外 batch 允许部分成功。写操作先确认主键与条件，框架不默认阻止全表操作。
+- ORM 事务可以跨多个 JDBC 数据源（每组一条连接，逐个提交，不是两阶段提交），嵌套使用保存点，支持超时；ES 在事务内直接执行。事务外 batch 允许部分成功。写操作先确认主键与条件，框架不默认阻止全表操作。
 - 自动 Schema 需显式声明结构拥有者；改列类型需人工确认并开启配置，不负责字段改名和数据搬迁。
 - data-sync 是轻量同步，不是 CDC。人工全量要求业务停写并排空队列；内存增量队列不保证崩溃后可靠交付。
 - JWT 是纯无状态：注销不撤销已签发 Token；需要服务端会话管理时选择 Sa-Token 或自定义实现。

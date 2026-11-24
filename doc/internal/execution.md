@@ -27,7 +27,7 @@ ManualGuard 对本进程所有写向目标 group 的规则提供维护保护：�
 
 **查询缓存与代理的位置：** 缓存读取、Key/TTL 处理、并发回源锁位于 `AbstractSession.getCacheValue`，不是 RouteSession。缓存未命中时，Session 执行得到 IDataBuffer，再由本 Session 的 CoderManager 解码；select/group 随后调用 `enhanceQueryResults`。缓存保存代理增强前的实体结果；缓存路径返回前复制对象，再增强关联与代理，不缓存事务绑定的代理。事务内查询和行锁查询绕过全局缓存，CACHE_ONLY 在这些场景拒绝执行。分页由 Session 分别 count 和 select，各自有缓存与实际执行边界。
 
-**多缓存选择边界：** CacheCoreAutoConfiguration 收集 QueryCache Bean，创建唯一 CacheRegistry，并绑定 yulinlin.cache.default。无实现/无默认使用 NoOp；单实现自动选中；多实现必须指定默认，显式名称不存在及重名均报错。三个 Provider 的固定名称是 caffeine/ehcache/redis，无 group 配置。RouteSession、JDBC/ES/Mongo 工厂统一注入 registry.defaultCache，保证查询和失效使用同一实现；请求、Wrapper、JoinCache 不携带缓存选择参数，ORM 写后失效不广播其他实现。
+**多缓存选择边界：** CacheCoreAutoConfiguration 收集 QueryCache Bean，创建唯一 CacheRegistry，并绑定 yulinlin.cache.default。无实现/无默认使用 NoOp；单实现自动选中；多实现必须指定默认，显式名称不存在及重名均报错。三个 Provider 的固定名称是 caffeine/ehcache/redis，无 group 配置。RouteSession、JDBC/ES 工厂统一注入 registry.defaultCache，保证查询和失效使用同一实现；请求、Wrapper、JoinCache 不携带缓存选择参数，ORM 写后失效不广播其他实现。
 
 RoutingCacheClient 仅管理缓存选择与只读清单：getCache()、getCache(name)、defaultName()、contains(name)、names()、caches()。每个实现复用一个 DefaultCache（实现 Cache），提供业务读写、泛型回源、批量操作和清理；默认与显式选择同一实现共享缓存对象及加载锁。业务 namespace 与 ORM namespace 始终隔离。Cache.clear(namespace) / clear() 不调用 ORM invalidateAll，也不清其他缓存或 Redis 整库。批量方法默认循环复用 Provider，不保证原子性，不新增线程/队列。无 Provider 时默认返回空缓存，ORM 直查数据库。注册表和客户端不接管 Provider 关闭生命周期；Redis 自带 L1 不作为独立 Provider 注册。公共 TTL 配置由各实现复用，配置只在启动时选择，不提供运行时热切换默认缓存。
 
@@ -45,7 +45,7 @@ CacheClient 不提供 ORM 表/实体清理入口，不依赖 ORM 注解解析或
 
 **算术参数边界：** EntityCounter 链式 inc(x) 表示加 x、dec(x) 表示减 x，都接受正负整数、小数及现有原子数字类型。每次调用通过 CounterNumbers.snapshot 固定 BigDecimal 快照，拒绝 null/非有限浮点数/不支持的 Number 类型；Builder 和聚合器均使用 BigDecimal 合并，不再先转 long，dec 在 BigDecimal 上取负。终结时复制增量 Map，抵消为零不生成字段更新。输出参数能精确表示为 long 时保持整数，否则保留 BigDecimal；最终范围、精度由目标数据库列决定。JDBC UpdateFieldsParse 对 inc/dec 的数字使用 IParamsContext.putNumberGetKey，SimpParamsContext 保存原生数字、SqlParamsContext 负责委托，防止 BigDecimal 存储编码变成字符串后无法执行 PostgreSQL 数字加减。普通存储字段仍走原编码器，不改变表结构和数字文本存储约定；目标列必须能进行算术运算。
 
-**事务与 sync 代理：** RouteSession 的 TransactionContext 保存单个 Session 及保存点帧栈。嵌套前刷新外层代理，内层成功前刷新并合并回调/缓存记录，内层回滚恢复代理快照并丢弃该帧记录。最外层物理提交并解绑后通知成功。一次事务拒绝跨组；MongoDB/ES 普通 CRUD 不包虚假事务，显式事务访问拒绝。
+**事务与 sync 代理：** RouteSession 的 TransactionContext 保存已登记的 Session 列表（每组一个 master 节点）及保存点帧栈，每帧按 Session 记录保存点。嵌套前刷新外层代理，内层成功前刷新并合并回调/缓存记录，内层回滚恢复代理快照并丢弃该帧记录。最外层按登记顺序逐个物理提交（非两阶段提交），解绑后通知成功。ES 等不支持事务的 Session 不登记，请求直接执行。
 
 维护定位：
 

@@ -9,6 +9,7 @@
 - [Elasticsearch 结构初始化](#elasticsearch-结构初始化)
 - [普通查询计数与分页](#普通查询计数与分页)
 - [查询能力边界](#查询能力边界)
+- [原生查询命令](#原生查询命令)
 
 ## Elasticsearch 结构初始化
 
@@ -69,7 +70,47 @@ var page = request.selectPage();   // 内部自行调用 count，再按原查询
 
 点路径字段仍作为普通字段解析，例如 `.eq("profile.name", "Alice")` 生成普通 term 条件，不会自动包装为 nested 查询，也不能作为旧 `NestedNode` 的等价替代。条件分组只表示布尔组合，不表示数组元素的关联匹配。
 
-确需 nested 查询时，业务直接使用 Elasticsearch 原生客户端并自行维护相应 Mapping 和查询语义；自动配置提供的 `ElasticsearchClient` 仍保留。这类调用直接访问 ES，不经过 ORM 的路由、结果编解码或查询缓存，不能假定享有 Wrapper 的执行行为。本次删除不修改已有索引、Mapping 或文档数据。
+确需 nested 查询时，可以使用下文的[原生查询命令](#原生查询命令)（经过 ORM 路由和结果编解码），或直接使用 Elasticsearch 原生客户端并自行维护相应 Mapping 和查询语义；自动配置提供的 `ElasticsearchClient` 仍保留。这类调用直接访问 ES，不经过 ORM 的路由、结果编解码或查询缓存，不能假定享有 Wrapper 的执行行为。本次删除不修改已有索引、Mapping 或文档数据。
+
+## 原生查询命令
+
+需要 Wrapper 表达不了的查询（nested、复杂 bool、原生聚合等）时，可以把 ES 请求体写成 JSON，通过 `CommandNode` 交给 ES 会话执行。和 JDBC 的原生 SQL 一样走 `QueryRequest`，经过 ORM 路由、执行日志和结果编解码：
+
+```java
+import com.yulinlin.data.core.node.CommandNode;
+import com.yulinlin.data.core.parse.ParseType;
+import com.yulinlin.data.core.request.QueryRequest;
+import java.util.List;
+import java.util.Map;
+
+var request = QueryRequest.newInstance(Map.class, CommandNode.of("""
+        {"search": "orders-*", "size": 20, "_source": ["id", "status", "amount"],
+         "query": {"bool": {"filter": [{"term": {"status": "#{status}"}}, {"terms": {"id": "#{ids}"}}]}},
+         "sort": [{"created_at": "desc"}]}""",
+        Map.of("status", "paid", "ids", List.of("a1", "a2")), ParseType.select));
+request.setSession("elasticsearch");
+List<Map> rows = request.selectList();
+```
+
+命令是一个 JSON 对象，**必须且只能有一个**操作键，它的值是索引；其余内容原样作为 ES 请求体：
+
+| 操作键 | 请求 | 返回 |
+| --- | --- | --- |
+| `search` | `/{index}/_search` | 每条命中一行：`_source` 字段，加上 `_id`、`_index`、`_score`，以及 `fields`、高亮（如果请求了） |
+| `aggregate` | `/{index}/_search`（一般写 `"size": 0` 和 `aggs`） | 一行：`total`（命中总数）、`aggregations`（ES 原样返回的聚合结果，按聚合名称组织） |
+| `count` | `/{index}/_count` | 一行：`count` |
+| `mapping` | `/{index}/_mapping` | 每个索引一行：`index`、`mappings`（字段映射）。只读元数据，允许用 `*` 列出全部索引，命令里不能有其他键 |
+
+规则：
+
+- **索引必须写明**，可以是逗号分隔的多个索引或带前缀的通配符（如 `orders-*`）。除 `mapping` 外，不允许 `*`、`_all` 或以 `-` 开头的排除写法。
+- **参数**：值恰好是 `"#{名称}"` 的字符串会被替换成参数值。替换发生在 JSON 节点上，而不是文本拼接，所以参数里的引号、括号不会改变查询结构。参数可以是字符串、数字、布尔、null、数组或对象。缺少参数，或传入了命令中没有用到的参数，都会报错。
+- **表达式**可以是 JSON 字符串、`Map` 或 Jackson `JsonNode`。
+- **只支持查询**。以 `insert`、`update`、`delete` 类型执行会直接拒绝，写入请使用 Wrapper。
+- 请求体通过 `elasticsearch-java` 的 `withJson` 解析成类型化请求。字段写错、查询类型不存在时，在发送前报 `ParseException`。
+- `QueryRequest.count()` 不支持原生命令，需要计数请使用 `count` 操作键。原生命令不会自动补分页，需要时在请求体里写 `from`、`size`。
+
+[ES 原生命令测试](../../elasticsearch/src/test/java/com/yulinlin/elasticsearch/EsCommandTest.java)同样使用内存模拟传输层，覆盖解析、参数替换、注入防护、三种操作和错误输入。
 
 ---
 

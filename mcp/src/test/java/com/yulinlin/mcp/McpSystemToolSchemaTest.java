@@ -1,7 +1,6 @@
 package com.yulinlin.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.yulinlin.mcp.auth.McpCredentials;
 import com.yulinlin.mcp.process.*;
 import com.yulinlin.mcp.store.McpAudit;
 import com.yulinlin.mcp.task.McpTasks;
@@ -19,7 +18,7 @@ class McpSystemToolSchemaTest extends McpTestSupport {
     final McpProperties p=properties();
     final MemoryStore store=new MemoryStore();
     final Policy policy=new Policy();
-    final McpCredentials credentials=new McpCredentials(store,id->ADMIN,policy);
+    final TokenEnv env=new TokenEnv(policy,id->ADMIN,null);
     final McpTasks tasks=mock(McpTasks.class);
     final ProcessOverviewService processes=mock(ProcessOverviewService.class);
     final ProcessControlService controls=mock(ProcessControlService.class);
@@ -30,13 +29,13 @@ class McpSystemToolSchemaTest extends McpTestSupport {
     void setup() {
         p.getCommand().setEnabled(true);p.getProcess().setEnabled(true);p.getMonitor().setEnabled(true);
         p.getCommand().setDefaultTimeoutSeconds(17);
-        credentials.enable(true);var created=credentials.create(ADMIN,"client");token=created.token();
-        context=new McpCallContext("test",created.credential().id(),ADMIN,"request","");
-        registry=new McpToolRegistry(List.of(new SystemToolProvider(p,tasks,credentials,policy,processes,controls,JSON)),policy);
+        var created=env.issue(ADMIN,"client",null);token=created.token();
+        context=ctx(created.credential().id());
+        registry=new McpToolRegistry(List.of(new SystemToolProvider(p,tasks,policy,processes,controls,JSON)),policy);
     }
     @Test void actualToolsListPublishesDescriptionsResultsAndConfiguredDefaults() throws Exception {
         setup();
-        var mvc=MockMvcBuilders.standaloneSetup(new McpTransport(JSON,registry,credentials,new McpAudit(store,p),p,new McpHttpGuard(p)))
+        var mvc=MockMvcBuilders.standaloneSetup(new McpTransport(JSON,registry,env.auth,new McpAudit(store,p),p,new McpHttpGuard(p)))
             .setControllerAdvice(new McpExceptionAdvice()).build();
         var result=mvc.perform(post("/mcp").contentType("application/json").header("Authorization","Bearer "+token)
             .content("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"))

@@ -15,8 +15,7 @@ import org.springframework.context.annotation.Bean;
 @EnableConfigurationProperties({JwtProperties.class, SessionManagementProperties.class})
 @ConditionalOnMissingBean(value = ISecurityManager.class, ignoredType = {
         "com.yulinlin.security.jwt.JwtSecurityManager",
-        "com.yulinlin.security.satoken.SaTokenSecurityManager",
-        "com.yulinlin.security.spring.SpringSecurityManager"
+        "com.yulinlin.security.satoken.SaTokenSecurityManager"
 })
 public class JwtAutoConfiguration {
     @Bean

@@ -108,13 +108,39 @@ public abstract class AbstractJdbcSession extends AbstractSession implements Ent
 
 
     protected List<IDataBuffer> resultSetToBuffer(ResultSet resultSet ) throws Exception {
+        return resultSetToBuffer(resultSet, false);
+    }
+
+    protected List<IDataBuffer> resultSetToBuffer(ResultSet resultSet, boolean typedRow) throws Exception {
         var list = new ArrayList<IDataBuffer>();
-        consumeResultSet(resultSet, list::add);
+        consumeResultSet(resultSet, list::add, typedRow);
         return list;
     }
 
     /** Shared forward reader: metadata once per query, a fresh decoder buffer for every row. */
     protected final long consumeResultSet(ResultSet resultSet, Consumer<IDataBuffer> consumer) throws Exception {
+        return consumeResultSet(resultSet, consumer, false);
+    }
+
+    /**
+     * typedRow 为 true（结果类型 TypedRow）时按 getObject 读取原始类型、保留 NULL 列并保持列顺序；
+     * 否则沿用 readColumn 的方言读取规则，NULL 列不放入行中。
+     */
+    protected final long consumeResultSet(ResultSet resultSet, Consumer<IDataBuffer> consumer, boolean typedRow) throws Exception {
+        if (typedRow) {
+            long consumed = 0;
+            ResultSetMetaData metaData = resultSet.getMetaData();
+            int columnTotal = metaData.getColumnCount();
+            String[] labels = new String[columnTotal];
+            for (int i = 0; i < columnTotal; i++) labels[i] = metaData.getColumnLabel(i + 1);
+            while (resultSet.next()) {
+                IDataBuffer buffer = new com.yulinlin.data.core.coder.MapDataBuffer(false, getCoderManager(), new java.util.LinkedHashMap<>());
+                for (int i = 0; i < columnTotal; i++) buffer.put(labels[i], resultSet.getObject(i + 1));
+                consumer.accept(buffer);
+                consumed++;
+            }
+            return consumed;
+        }
         long consumed = 0;
         ResultSetMetaData metaData = resultSet.getMetaData();
         int columnTotal = metaData.getColumnCount();

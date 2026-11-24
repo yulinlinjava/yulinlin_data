@@ -15,7 +15,7 @@
 
 解析器根结果用 ParseResult 携带 SDK 请求；子节点返回后端需要的对象，不强行套 SQL。客户端地址和凭据来自配置，不硬编码 localhost，不引入 jdbc 只为加入路由。Elasticsearch 模块当前基于 Java Client 9.5.4，使用默认 Rest5Client；新代码不要重新引入已弃用的 Apache HttpClient 4 RestClientTransport。
 
-EntitySession.supportsTransactions 默认 false；接口本身不提供后端物理事务。当前 MongoDB、ES 普通 CRUD 无事务直接执行，显式 ORM 事务访问会在 SQL/SDK 操作前拒绝。
+EntitySession.supportsTransactions 默认 false；接口本身不提供后端物理事务。当前 ES 普通 CRUD 无事务直接执行；在 ORM 事务内访问时不登记到事务，请求立即执行，事务回滚不会撤销。
 
 有真实事务的扩展才可声明 supportsTransactions=true，并管理本 Session 的资源、回滚标记和清理；嵌套还须实现保存点操作。业务范围由 RouteSession 协调，不支持的能力明确拒绝。
 

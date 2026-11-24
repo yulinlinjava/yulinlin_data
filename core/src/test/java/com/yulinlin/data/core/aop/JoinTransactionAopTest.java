@@ -82,19 +82,54 @@ class JoinTransactionAopTest {
         assertEquals(1, listener.commits);
     }
 
-    public static class Unsupported {
-        @Transactional(propagation = Propagation.REQUIRES_NEW) public void propagation() { }
-        @Transactional(isolation = Isolation.SERIALIZABLE) public void isolation() { }
-        @Transactional(readOnly = true) public void readOnly() { }
-        @Transactional(timeout = 3) public void timeout() { }
-        @Transactional(timeoutString = "3") public void timeoutString() { }
-        @Transactional(transactionManager = "other") public void manager() { }
-        @Transactional(label = "tag") public void label() { }
+    /** 不生效的 Spring 选项：忽略并打日志，照常在 ORM 事务里执行。 */
+    public static class Ignored {
+        @Transactional(propagation = Propagation.REQUIRES_NEW) public int propagation() { return TransactionContext.current().depth(); }
+        @Transactional(isolation = Isolation.SERIALIZABLE) public int isolation() { return TransactionContext.current().depth(); }
+        @Transactional(transactionManager = "other") public int manager() { return TransactionContext.current().depth(); }
+        @Transactional(label = "tag") public int label() { return TransactionContext.current().depth(); }
+        @JoinTransaction({"mysql"}) public int groups() { return TransactionContext.current().depth(); }
     }
-    @Test void unsupportedSpringOptionsAreRejectedBeforeBusinessInvocation() {
+    @Test void ignoredSpringOptionsStillRunInOrmTransaction() {
+        var advisor = new JoinTransactionAop();
+        for (Method method : Ignored.class.getDeclaredMethods())
+            assertTrue(advisor.matches(method, Ignored.class), method.getName());
+        Ignored service = proxy(new Ignored(), RouteSession.builder().build(), true);
+        assertEquals(1, service.propagation());
+        assertEquals(1, service.isolation());
+        assertEquals(1, service.manager());
+        assertEquals(1, service.label());
+        assertEquals(1, service.groups());
+        assertNull(TransactionContext.current());
+    }
+
+    /** 写错的超时仍然在启动时报错。 */
+    public static class Unsupported {
+        @Transactional(timeoutString = "soon") public void badTimeoutString() { }
+        @Transactional(timeout = 0) public void zeroTimeout() { }
+        @JoinTransaction(timeout = 0) public void zeroJoinTimeout() { }
+    }
+    @Test void invalidTimeoutsAreRejectedBeforeBusinessInvocation() {
         var advisor = new JoinTransactionAop();
         for (Method method : Unsupported.class.getDeclaredMethods())
             assertThrows(OrmException.class, () -> advisor.matches(method, Unsupported.class), method.getName());
+    }
+
+    public static class Timed {
+        @Transactional(timeout = 3) public long spring() { return TransactionContext.current().remainingMillis(); }
+        @Transactional(timeoutString = "4") public long springString() { return TransactionContext.current().remainingMillis(); }
+        @JoinTransaction(timeout = 5) public long join() { return TransactionContext.current().remainingMillis(); }
+        @JoinTransaction(timeout = 5) @Transactional(timeout = 2) public long both() { return TransactionContext.current().remainingMillis(); }
+        @Transactional(readOnly = true) public long readOnly() { return TransactionContext.current().remainingMillis(); }
+    }
+    @Test void timeoutsAreAppliedAndReadOnlyIsIgnored() {
+        Timed service = proxy(new Timed(), RouteSession.builder().build(), true);
+        assertTrue(service.spring() > 0 && service.spring() <= 3000);
+        assertTrue(service.springString() > 3000 && service.springString() <= 4000);
+        assertTrue(service.join() > 4000 && service.join() <= 5000);
+        assertTrue(service.both() > 0 && service.both() <= 2000, "@Transactional 的超时优先");
+        assertEquals(Long.MAX_VALUE, service.readOnly(), "readOnly 忽略，也没有超时");
+        assertNull(TransactionContext.current());
     }
 
     @Configuration(proxyBeanMethods = false) @EnableAspectJAutoProxy

@@ -30,9 +30,8 @@
 | --- | --- | --- |
 | JDBC | [JdbcExecutionLog](../../jdbc/src/main/java/com/yulinlin/jdbc/log/JdbcExecutionLog.java) | JdbcSession，MySQL/PostgreSQL/H2/SQLite 复用 |
 | Elasticsearch | [EsExecutionLog](../../elasticsearch/src/main/java/com/yulinlin/elasticsearch/log/EsExecutionLog.java) | ElasticsearchSession |
-| MongoDB | [MongoExecutionLog](../../mongodb/src/main/java/com/yulinlin/mongodb/log/MongoExecutionLog.java) | MongoSession |
 
-这些类都不是 Bean，没有管理器和自动分发。SqlNodeLog、EsRequestLog、MongoRequestLog 旧名称已移除，不保留空转发兼容类；外部直接引用须更新 import。Lombok 生成的 logger 名称也跟随类名改变，使用完整旧类名配置日志级别或采集过滤的项目需要迁移；按包配置的规则不变。事务日志 TransactionLog 与执行监听接口名称不变。
+这些类都不是 Bean，没有管理器和自动分发。SqlNodeLog、EsRequestLog 旧名称已移除，不保留空转发兼容类；外部直接引用须更新 import。Lombok 生成的 logger 名称也跟随类名改变，使用完整旧类名配置日志级别或采集过滤的项目需要迁移；按包配置的规则不变。事务日志 TransactionLog 与执行监听接口名称不变。
 
 内部架构任务可提供[组件边界](architecture.md)、[执行链](execution.md)和本文给 AI；需要实现新模块时再提供[扩展流程](extension.md)。业务 AI 指南只合并清单中标记导出的主题，不混入内部架构正文。本文没有运行时验证结论；修改后核对实际源码，不凭文档推断已编译或测试通过。
 

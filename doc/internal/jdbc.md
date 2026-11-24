@@ -94,7 +94,7 @@ SqliteSession、H2Session、MysqlSession 和 PostgresqlSession 分别接收扫�
 
 EntitySession 统一声明 `createTableSql(Class<?>)` 与 `initializeSchema(Collection<Class<?>>)`。AbstractSession 为不管理结构的后端提供空实现；MySQL/PostgreSQL/H2/SQLite Session 返回并执行 DDL，ElasticsearchSession 返回索引 Mapping 预览并创建或校验索引。JDBC `initializeSchema` 持有连接与 Statement，通过 JdbcSession 的受保护执行函数逐条打印 `[group][schema]` 后执行。方言 SchemaManager 只描述、校验结构并请求 Session 执行 SQL，不再自行创建 Statement，因此自动初始化和外部预览使用同一组 DDL 生成函数。
 
-通用配置分两层：core 的 `EntitySessionProperties` 提供 `log`、`mapUnderscoreToCamelCase`、`schemaMode`、`schemaPackages` 和公共 `highlight`（标签、片段数、片段分隔符），可被 JDBC、Elasticsearch、MongoDB 等后端继承；jdbc 的 `JdbcSessionProperties` 再增加 `parallelConnections`、`executeBatchSize` 与默认关闭的 `alterColumnType`。数据库专属的分词器、摘要长度或 highlighter 类型留在具体模块。具体模块配置类才声明 `@ConfigurationProperties`，公共父类不绑定全局前缀。旧 `JdbcProperties` 仅是弃用兼容桥，新扩展不要继续引用。
+通用配置分两层：core 的 `EntitySessionProperties` 提供 `log`、`mapUnderscoreToCamelCase`、`schemaMode`、`schemaPackages` 和公共 `highlight`（标签、片段数、片段分隔符），可被 JDBC、Elasticsearch 等后端继承；jdbc 的 `JdbcSessionProperties` 再增加 `parallelConnections`、`executeBatchSize` 与默认关闭的 `alterColumnType`。数据库专属的分词器、摘要长度或 highlighter 类型留在具体模块。具体模块配置类才声明 `@ConfigurationProperties`，公共父类不绑定全局前缀。旧 `JdbcProperties` 仅是弃用兼容桥，新扩展不要继续引用。
 
 JoinIndex 是 core 中的可重复类注解，只有 fields 和 unique。jdbc.schema.EntityIndexResolver 统一把结构拥有者上的 Java 属性解析成持久化列，生成 `idx_<table>_<columns>` 或 `uk_<table>_<columns>`；超长名称使用 63 字符上限和 SHA-256 前 8 位稳定后缀。MySQL/PostgreSQL/H2/SQLite SchemaManager 只负责各自的元数据读取、DDL 和兼容性校验，不复制命名规则。各模块均保留未声明的额外索引，不自动删除或改名。
 

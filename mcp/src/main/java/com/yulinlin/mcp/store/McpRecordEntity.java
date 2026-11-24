@@ -3,7 +3,7 @@ package com.yulinlin.mcp.store;
 import com.yulinlin.common.domain.IdEntity;
 import com.yulinlin.data.core.anno.*;
 
-/** Local MCP credentials (hashes only), settings, tasks and audit records. */
+/** MCP settings, tasks and audit records. Tokens are stored in yulinlin_mcp_token. */
 @JoinTable(value = "yulinlin_mcp_record", autoSchema = true)
 @JoinIndex(fields = {"recordKey"}, unique = true)
 @JoinIndex(fields = {"kind", "updatedAt"})

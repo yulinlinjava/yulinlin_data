@@ -11,7 +11,10 @@ import org.springframework.core.annotation.AnnotatedElementUtils;
 import java.lang.reflect.*;
 import java.util.*;
 
-/** Discovers managed methods after all normal singletons and their AOP proxies are ready. */
+/**
+ * Discovers managed methods after all normal singletons and their AOP proxies are ready.
+ * 方法参数：至多一个请求 DTO，另可声明一个 {@link McpCallContext} 参数（读取调用方和令牌属性）。
+ */
 public final class AnnotatedMcpTools implements SmartInitializingSingleton {
     private final ConfigurableListableBeanFactory beans;
     private final ObjectMapper json;
@@ -32,21 +35,29 @@ public final class AnnotatedMcpTools implements SmartInitializingSingleton {
         }
     }
     private void register(Object bean,Class<?> target,Method method,McpTool annotation) {
-        if(!Modifier.isPublic(method.getModifiers())||Modifier.isStatic(method.getModifiers())||method.getParameterCount()>1)
-            throw new IllegalArgumentException("@McpTool requires a public instance method with zero arguments or one DTO: "+method);
+        int contextIndex=-1,inputIndex=-1;
+        for(int i=0;i<method.getParameterCount();i++){
+            if(method.getParameterTypes()[i]==McpCallContext.class){if(contextIndex>=0)inputIndex=-2;contextIndex=i;}
+            else{if(inputIndex!=-1)inputIndex=-2;else inputIndex=i;}
+        }
+        if(!Modifier.isPublic(method.getModifiers())||Modifier.isStatic(method.getModifiers())||method.getParameterCount()>2||inputIndex==-2)
+            throw new IllegalArgumentException("@McpTool requires a public instance method with at most one DTO and one McpCallContext: "+method);
         if(annotation.description().isBlank())throw new IllegalArgumentException("@McpTool description is required: "+method);
         Method callable=AopUtils.selectInvocableMethod(method,bean.getClass());
         org.springframework.util.ReflectionUtils.makeAccessible(callable);
-        JavaType input=method.getParameterCount()==0?null:type(ResolvableType.forMethodParameter(method,0,target));
+        final int dtoIndex=inputIndex,ctxIndex=contextIndex,count=method.getParameterCount();
+        JavaType input=dtoIndex<0?null:type(ResolvableType.forMethodParameter(method,dtoIndex,target));
         JavaType output=type(ResolvableType.forMethodReturnType(method,target));
-        var generator=new JavaToolSchemas(json);
-        var inputSchema=generator.input(input);
+        var inputSchema=new JavaToolSchemas(json).input(input);
         var outputSchema=new JavaToolSchemas(json).output(output);
         registry.register(new McpToolDefinition(annotation.name(),annotation.description(),inputSchema,outputSchema,annotation.readOnly(),(context,args)->{
-            Object[] values;
-            try { values=input==null?new Object[0]:new Object[]{json.readerFor(input).with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(args)}; }
-            catch(com.fasterxml.jackson.core.JsonProcessingException error){throw new IllegalArgumentException("工具参数无法转换为请求对象");}
-            if(values.length==1&&!validator.validate(values[0]).isEmpty())throw new IllegalArgumentException("工具参数未通过 Bean Validation 校验");
+            Object[] values=new Object[count];
+            if(ctxIndex>=0)values[ctxIndex]=context;
+            if(dtoIndex>=0){
+                try { values[dtoIndex]=json.readerFor(input).with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(args); }
+                catch(com.fasterxml.jackson.core.JsonProcessingException error){throw new IllegalArgumentException("工具参数无法转换为请求对象");}
+                if(!validator.validate(values[dtoIndex]).isEmpty())throw new IllegalArgumentException("工具参数未通过 Bean Validation 校验");
+            }
             if(!validator.forExecutables().validateParameters(bean,callable,values).isEmpty())throw new IllegalArgumentException("工具方法参数校验失败");
             Object value;
             try { value=callable.invoke(bean,values); }

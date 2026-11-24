@@ -27,6 +27,7 @@ import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -92,7 +93,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     @Override public boolean isRollbackOnly() {
         var context = context();
         return context != null && (context.rollbackOnly || context.frame().rollbackOnly
-                || (context.session != null && context.session.isRollbackOnly()));
+                || context.sessions.stream().anyMatch(EntitySession::isRollbackOnly));
     }
 
     @Override @SneakyThrows
@@ -115,7 +116,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
         if (context.proxyChanges() != null) context.proxyChanges().flush();
         Frame frame = new Frame();
         if (context.proxyChanges() != null) frame.proxySnapshot = context.proxyChanges().snapshot();
-        if (context.session != null) frame.savepoint = context.session.createSavepoint();
+        for (EntitySession session : context.sessions) frame.savepoints.put(session, session.createSavepoint());
         context.frames.addLast(frame);
         txLog(context, "嵌套事务开启");
     }
@@ -124,22 +125,23 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     protected EntitySession enlist(EntitySession session) {
         TransactionContext context = context();
         if (context == null) return session;
-        if (context.session != null) {
-            if (context.session != session) throw new OrmException("一次 ORM 事务只能使用一个数据源和节点");
-            return session;
-        }
-        if (!session.supportsTransactions()) throw new OrmException("当前数据源不支持 ORM 本地事务：" + session.group());
+        // Elasticsearch 等没有事务：不登记，请求立即执行，事务回滚时不会撤销
+        if (!session.supportsTransactions()) return session;
+        if (context.sessions.contains(session)) return session;
+        EntitySession bound = context.session(session.group());
+        if (bound != null) throw new OrmException("同一事务中数据源组 " + session.group() + " 只能使用一个节点");
         if (session.cluster() != JoinCluster.master) throw new OrmException("ORM 事务只能绑定 master 节点");
         if (session.isOpenTransaction()) throw new OrmException("Session 已有独立资源事务，请统一使用 RouteSession.transaction");
-        context.session = session;
+        if (context.closing) throw new OrmException("事务正在结束，不能再登记数据源：" + session.group());
+        context.sessions.add(session);
         try {
             session.startTransaction();
             boolean first = true;
             for (Frame frame : context.frames) {
                 if (first) first = false;
-                else frame.savepoint = session.createSavepoint();
+                else frame.savepoints.put(session, session.createSavepoint());
             }
-            txLog(context, "事务绑定数据源");
+            txLog(context, "事务登记数据源 " + com.yulinlin.data.core.transaction.TransactionLog.token(session.group()));
             return session;
         } catch (Throwable error) {
             context.rollbackOnly = true;
@@ -149,8 +151,9 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     @Override protected EntitySession resolveSession(String group, JoinCluster cluster) {
         var context = context();
-        if (context != null && context.session != null && Objects.equals(group, context.session.group())) {
-            return context.session;
+        if (context != null) {
+            EntitySession bound = context.session(group);
+            if (bound != null) return bound;
         }
         return super.resolveSession(group, context == null ? cluster : JoinCluster.master);
     }
@@ -167,7 +170,7 @@ public class RouteSession extends RegisterSession implements TransactionSession 
             if (isRollbackOnly()) throw new OrmException("当前嵌套范围只能回滚");
             if (context.proxyChanges() != null) context.proxyChanges().flush();
             if (isRollbackOnly()) throw new OrmException("当前嵌套范围只能回滚");
-            if (frame.savepoint != null) context.session.releaseSavepoint(frame.savepoint);
+            for (var e : frame.savepoints.entrySet()) e.getKey().releaseSavepoint(e.getValue());
         } catch (Throwable error) {
             try { rollbackNested(context, frame); }
             catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
@@ -190,8 +193,15 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     private void rollbackNested(TransactionContext context, Frame frame) {
         Throwable failure = null;
         try {
-            if (frame.savepoint != null) context.session.rollbackToSavepoint(frame.savepoint);
-        } catch (Throwable error) { failure = error; context.rollbackOnly = true; }
+            var entries = new ArrayList<>(frame.savepoints.entrySet());
+            for (int i = entries.size() - 1; i >= 0; i--) {
+                try { entries.get(i).getKey().rollbackToSavepoint(entries.get(i).getValue()); }
+                catch (Throwable error) {
+                    context.rollbackOnly = true;
+                    if (failure == null) failure = error; else if (failure != error) failure.addSuppressed(error);
+                }
+            }
+        } catch (Throwable error) { if (failure == null) failure = error; context.rollbackOnly = true; }
         try {
             if (context.proxyChanges() != null) context.proxyChanges().restore(frame.proxySnapshot);
         } catch (Throwable error) {
@@ -222,7 +232,19 @@ public class RouteSession extends RegisterSession implements TransactionSession 
                 rollbackResources(context);
             } else {
                 context.commitAttempted = true;
-                if (context.session != null) context.session.commitTransaction();
+                // 按登记顺序依次提交；某个提交失败时，之后未提交的会话由 rollbackResources 回滚
+                var committedGroups = new ArrayList<String>();
+                for (EntitySession session : context.sessions) {
+                    try {
+                        session.commitTransaction();
+                        committedGroups.add(session.group());
+                    } catch (Throwable error) {
+                        if (!committedGroups.isEmpty())
+                            error.addSuppressed(new OrmException("数据源 " + committedGroups + " 已提交，无法撤销；"
+                                    + session.group() + " 及之后登记的数据源将回滚"));
+                        throw error;
+                    }
+                }
                 context.committed = true;
                 txLog(context, "事务提交完成");
             }
@@ -248,7 +270,10 @@ public class RouteSession extends RegisterSession implements TransactionSession 
     private void rollbackResources(TransactionContext context) {
         for (var listener : transactionListeners) context.attempt(listener::rollbackTransaction);
         if (context.proxyChanges() != null) context.attempt(context.proxyChanges()::rollback);
-        if (context.session != null && context.session.isOpenTransaction()) context.attempt(context.session::rollbackTransaction);
+        for (int i = context.sessions.size() - 1; i >= 0; i--) {
+            EntitySession session = context.sessions.get(i);
+            if (session.isOpenTransaction()) context.attempt(session::rollbackTransaction);
+        }
         txLog(context, "事务回滚处理结束");
     }
 
@@ -260,7 +285,8 @@ public class RouteSession extends RegisterSession implements TransactionSession 
 
     private static void txLog(TransactionContext context, String message) {
         context.transactionLog().info(message, "depth=" + context.depth() + " group="
-                + (context.session == null ? "unbound" : com.yulinlin.data.core.transaction.TransactionLog.token(context.session.group()))
+                + (context.sessions.isEmpty() ? "unbound" : String.join(",", context.sessions.stream()
+                        .map(s -> com.yulinlin.data.core.transaction.TransactionLog.token(s.group())).toList()))
                 + " rollbackOnly=" + context.rollbackOnly);
     }
 
@@ -696,14 +722,32 @@ public class RouteSession extends RegisterSession implements TransactionSession 
         return transaction(callable, error -> true);
     }
 
+    /**
+     * 带超时的事务。事务内每条 JDBC 语句执行前按剩余时间设置查询超时；时间用完后的语句直接失败，事务回滚。
+     * 嵌套使用时取所有层中最早的截止时间，内层结束后恢复外层的截止时间。
+     */
+    public <V> V transaction(Callable<V> callable, java.time.Duration timeout){
+        return transaction(callable, error -> true, timeout);
+    }
+
     /** 注解兼容层复用同一事务执行器，仅传入显式异常回滚规则。 */
-    @SneakyThrows
     public <V> V transaction(Callable<V> callable, Predicate<Throwable> rollbackRule) {
+        return transaction(callable, rollbackRule, null);
+    }
+
+    @SneakyThrows
+    public <V> V transaction(Callable<V> callable, Predicate<Throwable> rollbackRule, java.time.Duration timeout) {
         Objects.requireNonNull(callable, "callable");
         Objects.requireNonNull(rollbackRule, "rollbackRule");
+        if (timeout != null && (timeout.isNegative() || timeout.isZero()))
+            throw new IllegalArgumentException("事务超时必须大于 0");
         startTransaction();
         TransactionContext context = context();
         Frame frame = context.frame();
+        if (timeout != null) {
+            frame.timed = true;
+            frame.deadlineNanos = System.nanoTime() + timeout.toNanos();
+        }
         int depth = context.depth();
         V value;
         try {

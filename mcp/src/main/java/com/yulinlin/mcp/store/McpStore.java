@@ -1,6 +1,6 @@
 package com.yulinlin.mcp.store;
 import java.util.*;
-/** Persistent, application-scoped storage. create must atomically reject existing keys across instances. */
+/** Persistent, application-scoped key-value storage for settings, tasks and audit records. create must atomically reject existing keys across instances. Tokens live in McpTokenStore. */
 public interface McpStore {
  default void initialize() { }
  <T> T get(String key,Class<T> type);

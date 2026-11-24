@@ -1,6 +1,7 @@
 package com.yulinlin.mcp;
 
-import com.yulinlin.mcp.auth.McpCredentials;
+import com.yulinlin.mcp.auth.McpPrincipal;
+import com.yulinlin.mcp.token.McpTokenService.*;
 import com.yulinlin.mcp.task.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
@@ -14,34 +15,52 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 class McpTaskTest extends McpTestSupport {
+    static UpdateRequest scope(List<String> scope){return new UpdateRequest(null,null,null,scope,null,null,null);}
+    @Test void restrictedTokenCannotStartCommandDirectly() {
+        var restricted=env.login(env.issue(ADMIN,"read only",List.of("server_info")).token());
+        service((command,cwd)->{fail("restricted token must not start a process");return null;});
+        assertThrows(McpException.class,()->tasks.start(restricted,"command",directory.toString(),0,null));
+    }
+    @Test void workerRechecksPersistedScopeBeforeStartingProcess() throws Exception {
+        var starts=new AtomicInteger();
+        credential=env.login(env.issue(ADMIN,"command",List.of("command_execute")).token());
+        store=new MemoryStore(){
+            @Override public void create(String key,String kind,Object value){
+                super.create(key,kind,value);
+                if(kind.equals("task"))env.service.update(env.actor(ADMIN),credential.credentialId(),scope(List.of("server_info")));
+            }
+        };
+        service((command,cwd)->{starts.incrementAndGet();return new FakeProcess("");});
+        var task=tasks.start(credential,"command",directory.toString(),0,null);
+        awaitFinished(tasks,task.id());assertEquals("failed",tasks.get(task.id()).state());assertEquals(0,starts.get());
+    }
     @TempDir Path directory;
-    MemoryStore store; McpCredentials credentials; McpCredentials.Credential credential;
+    MemoryStore store; TokenEnv env; McpPrincipal credential;
     Policy policy; McpProperties properties; McpTasks tasks;
 
     @BeforeEach void setup() {
         store = new MemoryStore(); policy = new Policy(); properties = properties();
         properties.setDataDirectory(directory); properties.getCommand().setMaxOutputBytes(8);
-        credentials = new McpCredentials(store, id -> ADMIN, policy); credentials.enable(true);
-        credential = credentials.byId(credentials.create(ADMIN, "test").credential().id());
+        env = new TokenEnv(policy, id -> ADMIN, null);
+        credential = env.login(env.issue(ADMIN, "test", null).token());
     }
     @AfterEach void close() { if (tasks != null) tasks.shutdown(); }
     @Test void credentialsExpiringAfterAdmissionCannotLaunchAProcess() throws Exception {
-        var time=new McpExpirationTest.Time();var starts=new AtomicInteger();
+        var starts=new AtomicInteger();
         store=new MemoryStore(){
             @Override public void create(String key,String kind,Object value){
                 super.create(key,kind,value);
-                if(kind.equals("task"))time.now=2000;
+                if(kind.equals("task"))env.time.now=2000;
             }
         };
-        credentials=new McpCredentials(store,id->ADMIN,policy,time);credentials.enable(true);
-        credential=credentials.byId(credentials.create(ADMIN,"temporary",2000L).credential().id());
+        credential=env.login(env.service.issue(env.actor(ADMIN),new IssueRequest("temporary",null,null,2000L,null,null,null,null)).token());
         service((command,cwd)->{starts.incrementAndGet();return new FakeProcess("");});
         var task=tasks.start(credential,"never start",directory.toString(),0,null);
         awaitFinished(tasks,task.id());assertEquals("failed",tasks.get(task.id()).state());assertEquals(0,starts.get());
         assertThrows(McpException.class,()->tasks.start(credential,"expired",directory.toString(),0,null));
     }
     McpTasks service(CommandExecutor executor) {
-        tasks = new McpTasks(store, credentials, properties, executor, policy); tasks.recover(); return tasks;
+        tasks = new McpTasks(store, env.auth, properties, executor, policy); tasks.recover(); return tasks;
     }
     @Test void persistBeforeDispatchAndRequestIdIsIdempotentAcrossServiceInstances() throws Exception {
         var starts = new AtomicInteger(); var process = new FakeProcess("0123456789abcdefghijklmnopqrstuvwxyz");
@@ -58,7 +77,7 @@ class McpTaskTest extends McpTestSupport {
         assertEquals(409, assertThrows(McpException.class,
             () -> service.start(credential, "other", directory.toString(), 0, "request-1")).status());
         try {
-            var another = new McpTasks(store, credentials, properties, (command, cwd) -> {
+            var another = new McpTasks(store, env.auth, properties, (command, cwd) -> {
                 fail("retry must never execute again"); return null;
             }, policy);
             another.recover();
@@ -74,7 +93,7 @@ class McpTaskTest extends McpTestSupport {
                 super.create(key, kind, value);
             }
         };
-        tasks = new McpTasks(broken, credentials, properties, (command, cwd) -> {
+        tasks = new McpTasks(broken, env.auth, properties, (command, cwd) -> {
             starts.incrementAndGet(); return new FakeProcess("");
         }, policy); tasks.recover();
         assertThrows(IllegalStateException.class, () -> tasks.start(credential,"x",directory.toString(),1,null));
@@ -83,7 +102,7 @@ class McpTaskTest extends McpTestSupport {
     @Test void failedOutputFileStillDrainsTheProcess() throws Exception {
         var process=new FakeProcess("x".repeat(1000));
         Path outputIsDirectory=Files.createDirectory(directory.resolve("output-is-a-directory"));
-        tasks=new McpTasks(store,credentials,properties,(command,cwd)->process,policy,id->outputIsDirectory);
+        tasks=new McpTasks(store,env.auth,properties,(command,cwd)->process,policy,id->outputIsDirectory);
         tasks.recover();var task=tasks.start(credential,"output",directory.toString(),0,null);
         process.finish();awaitFinished(tasks,task.id());
         assertEquals("succeeded",tasks.get(task.id()).state());
@@ -93,7 +112,7 @@ class McpTaskTest extends McpTestSupport {
         var process=new FakeProcess("output");var starts=new AtomicInteger();
         CommandExecutor executor=(command,cwd)->{starts.incrementAndGet();return process;};
         var first=service(executor);var secondProperties=properties();secondProperties.setInstanceId("second");secondProperties.setDataDirectory(directory);
-        var second=new McpTasks(store,credentials,secondProperties,executor,policy);second.recover();
+        var second=new McpTasks(store,env.auth,secondProperties,executor,policy);second.recover();
         try(var pool=Executors.newVirtualThreadPerTaskExecutor()) {
             var barrier=new CountDownLatch(1);
             var a=pool.submit(()->{barrier.await();return first.start(credential,"same",directory.toString(),0,"retry");});
@@ -107,7 +126,7 @@ class McpTaskTest extends McpTestSupport {
     @Test void customResolverCanReadLegacyOutputWithoutMovingFiles() throws Exception {
         String id="c".repeat(32);Path legacy=directory.resolve(id+".log");Files.writeString(legacy,"legacy output");
         store.create("task-"+id,"task",old(id,"local"));
-        tasks=new McpTasks(store,credentials,properties,(command,cwd)->{fail("must not restart");return null;},policy,key->directory.resolve(key+".log"));
+        tasks=new McpTasks(store,env.auth,properties,(command,cwd)->{fail("must not restart");return null;},policy,key->directory.resolve(key+".log"));
         tasks.recover();assertEquals("legacy output",tasks.output(id,0,100).text());
     }
     @Test void timeoutsAndCancellationAreTrackedWithoutKillingUnrelatedProcesses() throws Exception {
@@ -131,7 +150,7 @@ class McpTaskTest extends McpTestSupport {
         assertEquals(409,assertThrows(McpException.class,()->service.output(remote,0,10)).status());
     }
     McpTasks.Task old(String id,String instance) {
-        return new McpTasks.Task(id,credential.id(),"old",directory.toString(),"running",1L,2L,null,
+        return new McpTasks.Task(id,credential.credentialId(),"old",directory.toString(),"running",1L,2L,null,
             12345L,null,0,null,false,instance,"previous-run");
     }
     static void awaitFinished(McpTasks service,String id) throws Exception {

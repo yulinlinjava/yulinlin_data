@@ -22,6 +22,20 @@ public class SqlNode  {
 
     private Integer hash;
 
+    /** 结果类型为 TypedRow：按 getObject 读取原始类型并保留 NULL 列。 */
+    private boolean typedRow;
+
+    public boolean isTypedRow() { return typedRow; }
+
+    public void setTypedRow(boolean typedRow) { this.typedRow = typedRow; }
+
+    /** 最多读取的行数，0 表示不限；来自 CommandNode.maxRows。 */
+    private int maxRows;
+
+    public int getMaxRows() { return maxRows; }
+
+    public void setMaxRows(int maxRows) { this.maxRows = maxRows; }
+
 
     private static final String pattern0 = "(\\$\\{)(.*?)(})";
 

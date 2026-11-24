@@ -12,6 +12,9 @@ public class CommandNode<E> implements INode {
 
     private ParseType type;
 
+    /** 原生查询最多读取的行数，null 表示不限。JDBC 用 Statement.setMaxRows 在驱动层截断；其他数据源忽略。 */
+    private Integer maxRows;
+
     public CommandNode(E expression, ParseType type) {
         this.expression = expression;
         this.type = type;
@@ -33,6 +36,17 @@ public class CommandNode<E> implements INode {
 
     public Map<String, Object> getParams() {
         return params;
+    }
+
+    public Integer getMaxRows() {
+        return maxRows;
+    }
+
+    /** 见 {@link #getMaxRows()}；必须大于 0。返回自身便于链式调用。 */
+    public CommandNode<E> maxRows(Integer maxRows) {
+        if (maxRows != null && maxRows < 1) throw new IllegalArgumentException("maxRows 必须大于 0");
+        this.maxRows = maxRows;
+        return this;
     }
 
     public static <E> CommandNode of(E command, ParseType type){

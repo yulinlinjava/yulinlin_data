@@ -63,7 +63,6 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 | JwtTokenCodec（security-jwt） | 可替换的 Token 生成和解析协议；必须验证真实性、时间和登录信息；JWT 注销不撤销旧凭证 | 代替业务认证、保存登录记录、猜测补齐旧 Token 来源 |
 | CryptoCodec（security） | 可替换的接口文本加解密协议；业务 Bean 优先，默认支持多设备 AES；保持请求解密与响应加密协议一致 | JSON 序列化、R 包装、登录验证；对自定义密文强制执行 Base64 修正 |
 | security-sa-token | 有状态登录；统一 API 获取用户、刷新及注销当前登录 | 将内存状态当持久存储、保证多实例未配置共享状态时也一致 |
-| security-spring | 使已有认证体系使用统一用户、权限及登录 API；统一登录需项目先完成接入，外部身份无可信来源时 authType 为 null | 自动创建完整业务认证方案、编造来源、把密码或会话标识当返回 Token |
 | LoginInterceptor / 权限注解（security） | 自定义 LoginInterceptor Bean 自动替换并注册；有效凭证恢复身份；明确认证失败时按最终注解策略决定公开入口匿名继续或受保护入口 401；请求结束清理 SecurityContext | 替自定义拦截器验证凭证、吞掉基础设施异常、覆盖已写出的错误响应、自动清理业务另行维护的上下文、替代登录状态管理 |
 | core/http | 独立 HTTP 客户端工具 | 参与 ORM 路由、事务或数据库监听链 |
 
@@ -85,7 +84,7 @@ core 是统一的数据访问与执行协调层。业务入口是 `RouteSession`
 - 保留 `IEvent` 的默认事件发布、`LoginInterceptor` 的替换协议、`INode` 等标记接口，以及 MySQL 解析兼容类和 `AbstractAnnotationBeanPostProcessor` 继承桥。这些类型不能按“空壳”处理。
 - 抽象执行协议中尚未完善的方法不等于废弃方法。例如 ES `executeCount` 属于会话协议，不能按无用方法删除；现已通过 CountWrapper 解析器和原生 Count API 补齐普通文档计数。分组计数仍明确不支持，边界与回归说明见 [ES 普通查询计数与分页](../datasources/elasticsearch.md#普通查询计数与分页)。
 
-清理回归覆盖：[core API 与扩展保留](../../core/src/test/java/com/yulinlin/data/core/wrapper/CoreApiCleanupTest.java)、[ES 入口边界](../../elasticsearch/src/test/java/com/yulinlin/elasticsearch/EsQueryBoundaryTest.java)、[MongoDB 原生文档条件与更新](../../mongodb/src/test/java/com/yulinlin/mongodb/MongoDocumentCompatibilityTest.java)。构建时应清理已删除类型对应的旧 class 文件，避免被重新打包。
+清理回归覆盖：[core API 与扩展保留](../../core/src/test/java/com/yulinlin/data/core/wrapper/CoreApiCleanupTest.java)、[ES 入口边界](../../elasticsearch/src/test/java/com/yulinlin/elasticsearch/EsQueryBoundaryTest.java)。构建时应清理已删除类型对应的旧 class 文件，避免被重新打包。
 
 ---
 

@@ -79,7 +79,6 @@ token: 用户的Token
 
 - `security-jwt` 和使用默认 Token 拦截器的自定义安全管理器直接使用这组配置。
 - `security-sa-token` 优先使用 `sa-token.*` 配置的凭证；没有原生凭证时才读取上述备用请求头。原生凭证无效时不尝试另一份身份。通常只维护原生约定，见[配置案例](native-config.md#sa-token-请求头登录案例)。
-- `security-spring` 沿用项目自己的认证入口配置，此配置不会修改外部认证规则。
 - 自定义 `LoginInterceptor` Bean 仍优先，由其决定如何读取凭证；代码中写死的请求头不会被 YAML 自动替换。只需要改请求头时，可移除自定义拦截器，使用默认实现与这组配置。
 
 ## 公开接口的可选登录

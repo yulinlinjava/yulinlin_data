@@ -59,7 +59,7 @@
 
 - 单数据源也必须等待容器初始化，不在静态初始化块里查询。所有模块只有配置扫描包并启用相应模式时才处理结构；SQLite/H2 默认模式为 CREATE，MySQL/PostgreSQL/Elasticsearch 默认为 NONE。未扫描的结构由业务迁移工具准备。
 - 不把独立库无意注册为同组节点；同组是负载均衡，不是覆盖注册。
-- 一次 ORM 事务只支持一个 JDBC 数据源和一条连接，跨组访问拒绝；详细规则见 [ORM 开发](../relations/transactions.md#事务使用)。
+- 一次 ORM 事务可以访问多个 JDBC 数据源组，每组固定一个 master 节点、一条连接，提交逐个进行（不是两阶段提交）；ES 在事务内直接执行。详细规则见[多数据源事务](../relations/transactions.md#多数据源)。
 - 未发现会话：检查数据库模块、自动配置 imports、DataSource 候选、Session Bean 和 group。
 - 表或字段不存在：核对实际建表、JoinField 映射和实体基类继承字段。
 - PostgreSQL 报 MySQL 函数错误：检查是否使用了 mysqlSessionFactory 或原始 MySQL SQL。

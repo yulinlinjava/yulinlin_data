@@ -16,7 +16,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
-import java.net.URI;
 import java.util.*;
 
 /** Stateless MCP Streamable HTTP (2025 revisions), JSON responses; GET SSE is intentionally unsupported. */
@@ -26,15 +25,15 @@ import java.util.*;
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(prefix="yulinlin.mcp",name="enabled",havingValue="true")
 public class McpTransport {
     private static final Set<String> VERSIONS=Set.of("2025-03-26","2025-06-18","2025-11-25");
-    private final ObjectMapper json;private final McpToolRegistry tools;private final McpCredentials credentials;private final McpAudit audit;private final McpProperties properties;private final McpHttpGuard guard;
-    public McpTransport(ObjectMapper json,McpToolRegistry tools,McpCredentials credentials,McpAudit audit,McpProperties properties,McpHttpGuard guard){this.json=json;this.tools=tools;this.credentials=credentials;this.audit=audit;this.properties=properties;this.guard=guard;}
+    private final ObjectMapper json;private final McpToolRegistry tools;private final McpAuthentication authentication;private final McpAuditService audit;private final McpProperties properties;private final McpHttpGuard guard;
+    public McpTransport(ObjectMapper json,McpToolRegistry tools,McpAuthentication authentication,McpAuditService audit,McpProperties properties,McpHttpGuard guard){this.json=json;this.tools=tools;this.authentication=authentication;this.audit=audit;this.properties=properties;this.guard=guard;}
     @PostMapping
     @ApiLimit(count=180,interval="1m",by=LimitBy.IP)
     public ResponseEntity<?> post(HttpServletRequest request,HttpServletResponse response) throws IOException {
         response.setHeader("Cache-Control","no-store"); guard.check(request);
-        var credential=credentials.authenticate(request);
-        var user=credentials.requireValid(credential);
-        var context=new McpCallContext(properties.getApplicationId(),credential.id(),user,McpStore.id(),request.getContextPath());
+        var principal=authentication.authenticate(request);
+        var user=authentication.requireUser(principal);
+        var context=new McpCallContext(properties.getApplicationId(),principal,user,McpStore.id(),request.getContextPath());
         if(request.getContentType()==null || !request.getContentType().split(";",2)[0].trim().equalsIgnoreCase("application/json"))
             return ResponseEntity.status(415).build();
         String accept=request.getHeader("Accept");
@@ -67,11 +66,11 @@ public class McpTransport {
             case "tools/list":
                 if(params.has("cursor")) return rpcError(id,-32602,"This tool list has no pagination cursor",200);
                 return result(id,Map.of("tools",tools.list(context)));
-            case "tools/call": return call(id,params,credential,context);
+            case "tools/call": return call(id,params,context);
             default: return rpcError(id,-32601,"Method not found",200);
         }
     }
-    private ResponseEntity<?> call(JsonNode id,JsonNode params,McpCredentials.Credential credential,McpCallContext context) {
+    private ResponseEntity<?> call(JsonNode id,JsonNode params,McpCallContext context) {
         if(!params.path("name").isTextual()) return rpcError(id,-32602,"Tool name required",200);
         String name=params.path("name").asText();
         if(!tools.contains(name)) return rpcError(id,-32602,"Unknown tool",200);
@@ -79,7 +78,7 @@ public class McpTransport {
         try { tools.validate(context,name,args); } catch(McpException e){return rpcError(id,-32003,e.getMessage(),403);} catch(IllegalArgumentException e){return rpcError(id,-32602,e.getMessage(),200);}
         // Audit starts before side effects. Database failure must not silently permit an unrecorded operation.
         McpAudit.Entry entry;
-        try { entry=audit.begin(credential,name,args); }
+        try { entry=Objects.requireNonNull(audit.begin(context.principal(),name,args),"Audit entry required"); }
         catch(RuntimeException unavailable) { return rpcError(id,-32603,"审计存储不可用，未执行工具",500); }
         Object value;
         try { value=SecurityContext.callAs(new LoginSession(null,null,context.user(),"mcp"),()->tools.call(context,name,args)); }

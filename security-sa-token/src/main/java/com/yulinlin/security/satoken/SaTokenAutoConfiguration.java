@@ -29,8 +29,7 @@ import org.springframework.core.env.Environment;
 @EnableConfigurationProperties({SessionManagementProperties.class, SecurityAuthProperties.class})
 @ConditionalOnMissingBean(value = ISecurityManager.class, ignoredType = {
         "com.yulinlin.security.jwt.JwtSecurityManager",
-        "com.yulinlin.security.satoken.SaTokenSecurityManager",
-        "com.yulinlin.security.spring.SpringSecurityManager"
+        "com.yulinlin.security.satoken.SaTokenSecurityManager"
 })
 public class SaTokenAutoConfiguration {
     @Bean

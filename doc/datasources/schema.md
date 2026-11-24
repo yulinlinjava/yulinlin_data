@@ -78,7 +78,7 @@ private String content;
 - `Date` 读取无时区日期时间时按 JVM 默认时区还原；写入、查询条件、读取使用对称规则。例如 JVM 本地 `2026-10-23 21:12:38` 写入 MySQL `DATETIME` 后仍为 `2026-10-23 21:12:38`，不会因连接使用 UTC 而变成 `13:12:38`。`LocalDate` 仍编码为 `java.sql.Date`。MySQL / H2 的 `LocalTime` 编码为秒级 `java.sql.Time`；PostgreSQL 则直接绑定 `LocalTime`，保留目标 `time(p)` 列允许的小数秒。
 - SQLite 自己的编码器直接输出 TEXT：`DateTime` / `LocalDateTime` / `Date` 为 `yyyy-MM-dd HH:mm:ss`，`LocalDate` 为 `yyyy-MM-dd`，`LocalTime` 为 `HH:mm:ss`。格式器也定义在 SQLite 模块，保留旧数据的空格分隔、秒级精度；写入和查询条件使用相同规则，日期范围比较不混用带 `T` 的格式。原始参数绑定中的时间对象也调用 SQLite 自己的编码器。
 - JDBC 解码支持 `LocalDateTime`、旧驱动返回的 `Timestamp`，以及空格或 `T` 分隔、可带 1～9 位小数秒的日期时间文本。`DateTime` / `LocalDateTime` 的文本直接解析为本地时间，不经 `Timestamp` 中转；还原为 `Date` 时再按 JVM 本地时区转换。MySQL/PostgreSQL/H2 实际保存的小数秒精度仍由列定义与驱动决定，SQLite 保持秒级存储。
-- core 的 `DateTimeCoder`、JSON 展示，以及 MongoDB/Elasticsearch 的原有时间规则不变。扩展数据库时定义自己的 `CoderManager` 并在内部注册编码器，自行声明工厂时例如传入 `new H2CoderManager()`，参见 [编解码扩展](../internal/jdbc.md#编解码)。`SqlParseManager` 仍只负责 SQL 解析，字段编解码沿用 `ICoderManager`。
+- core 的 `DateTimeCoder`、JSON 展示，以及 Elasticsearch 的原有时间规则不变。扩展数据库时定义自己的 `CoderManager` 并在内部注册编码器，自行声明工厂时例如传入 `new H2CoderManager()`，参见 [编解码扩展](../internal/jdbc.md#编解码)。`SqlParseManager` 仍只负责 SQL 解析，字段编解码沿用 `ICoderManager`。
 
 上述规则优先保证“日期时间数字不变”，不修改 JVM 或数据库时区，也不硬编码加减 8 小时。`DateTime.now()` 仍取 JVM 本地时间。`java.util.Date` 本身只有时间点，没有独立时区，因此这里以 JVM 默认时区解释它；多实例应统一 JVM 时区，且不要在运行中切换，否则同一数据库日期时间还原的 epoch 毫秒数可能不同。无时区列也无法保留夏令时回拨时重复时刻的原始偏移；需要跨时区保留绝对时间点的字段应另行定义存储和编码规则。
 

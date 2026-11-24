@@ -17,9 +17,9 @@
 | 提升查询效率 | [启用 ORM 缓存](cache/query.md) → [选择缓存与 TTL](cache/config.md) → [Key 和失效规则](cache/invalidation.md) |
 | 点击量聚合、延迟批量落库 | [EntityCounter](write-sync/counter.md) · [延迟写队列](write-sync/queue.md) · [多连接批量](write-sync/batch.md) |
 | 数据源同步与历史补齐 | [增量同步](write-sync/incremental.md) → [人工全量与续传](write-sync/full.md) |
-| 接入登录、权限或接口加密 | [模块选型](security/modules.md) → [统一登录与自定义认证](security/user.md#安全管理器) → [JWT](security/jwt.md) / [Sa-Token](security/sa-token.md) / [Spring](security/spring.md)；按需读[权限](security/authorization.md)、[加密](security/crypto.md)、[限流](security/rate-limit.md) |
+| 接入登录、权限或接口加密 | [模块选型](security/modules.md) → [统一登录与自定义认证](security/user.md#安全管理器) → [JWT](security/jwt.md) / [Sa-Token](security/sa-token.md)；按需读[权限](security/authorization.md)、[加密](security/crypto.md)、[限流](security/rate-limit.md) |
 | 替换 Token 或接入外部安全框架 | [Token 编解码](security/token-codec.md) · [自定义管理器与拦截器](security/extension.md) |
-| 给外部 AI 开放业务或服务器工具 | [MCP 权限与工具注册](mcp/integration.md) · [配置与后台任务](mcp/configuration.md) |
+| 给外部 AI 开放业务或服务器工具 | [MCP 快速接入](mcp/integration.md) → [业务工具](mcp/tools.md) → [令牌管理](mcp/tokens.md)；让 AI 读取项目数据或做分析读 [数据工具](mcp/data.md)；按需读[配置与系统工具](mcp/configuration.md)、[扩展点](mcp/extension.md) |
 | 查工具类使用方式 | [HTTP](tools/http.md) · [反射复制与深克隆](tools/reflection.md) · [lang 类型目录](tools/catalog.md) |
 | 找最佳实践案例 | [完整 CRUD](practice/crud-example.md) · [Admin RBAC 与 JWT](practice/rbac.md) · [开发规范](practice/conventions.md) |
 | 排查慢 SQL、事务或选本地库 | [日志](operations/sql-log.md) · [监控页面](operations/monitor.md) · [SQLite/H2 性能报告](operations/local-benchmark.md) |
@@ -36,7 +36,7 @@
 | [批量与同步](write-sync/README.md) | 批量、队列、计数聚合、全量与增量同步 |
 | [缓存](cache/README.md) | 默认缓存、实现配置、查询缓存、业务 API 与失效 |
 | [接口安全](security/README.md) | 登录、权限、加密、限流、自定义扩展 |
-| [MCP 接入](mcp/README.md) | 外部 AI、工具权限、长期凭证、后台命令任务 |
+| [MCP 接入](mcp/README.md) | 外部 AI、工具注册、令牌管理、数据查询（JDBC / ES）与分析、后台命令任务、扩展点 |
 | [常用工具](tools/README.md) | HTTP、反射、JSON、日期、并发、事件等 |
 | [项目实践](practice/README.md) | 公共模型、Service、CRUD 与 RBAC 案例 |
 | [监控与排障](operations/README.md) | 慢操作页面、日志、问题排查和历史性能报告 |

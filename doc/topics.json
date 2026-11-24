@@ -239,10 +239,6 @@
         "title": "有状态 Sa-Token 登录"
       },
       {
-        "file": "security/spring.md",
-        "title": "Spring Security 接入"
-      },
-      {
         "file": "security/context.md",
         "title": "登录上下文生命周期"
       },
@@ -259,15 +255,27 @@
     "pages": [
       {
         "file": "mcp/integration.md",
-        "title": "MCP 权限与工具扩展"
+        "title": "MCP 快速接入"
+      },
+      {
+        "file": "mcp/tools.md",
+        "title": "MCP 业务工具"
+      },
+      {
+        "file": "mcp/tokens.md",
+        "title": "MCP 令牌管理"
+      },
+      {
+        "file": "mcp/data.md",
+        "title": "MCP 数据工具"
       },
       {
         "file": "mcp/configuration.md",
-        "title": "MCP 配置与后台任务"
+        "title": "MCP 配置与系统工具"
       },
       {
-        "file": "mcp/netdisk.md",
-        "title": "现有网盘 MCP 迁移"
+        "file": "mcp/extension.md",
+        "title": "MCP 扩展点"
       }
     ]
   },

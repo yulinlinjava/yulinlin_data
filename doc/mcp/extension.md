@@ -15,7 +15,7 @@
 | `McpTokenStore` | 令牌持久化 | `OrmMcpTokenStore` |
 | `McpStore` | 运行开关、任务、审计的持久化 | `OrmMcpStore` |
 | `McpAuditService` | 调用审计与管理审计 | `McpAudit` |
-| `McpAuditTargetProvider` | 从参数中挑出允许写入审计的目标字段 | `DataAuditTargets::of`：只处理 `data.*` 工具（数据源组、SQL / 命令开头），其他工具返回空 |
+| `McpAuditTargetProvider` | 给默认审计**追加**目标字段，可以有多个 | 无。数据工具（`data.*`）的字段由默认审计固定记录，不依赖这个 Bean |
 | `McpTaskOutputResolver` | 任务输出文件路径 | `data-directory/application-id/instance-id/output/{id}.log` |
 | `CommandExecutor` | 本机命令启动方式 | `LocalCommandExecutor` |
 | `McpManagementGuard` | 管理写请求的来源和请求头校验 | Origin / HTTPS 校验 + `X-MCP-Action` |
@@ -127,7 +127,7 @@ public final class BusinessMcpAudit implements McpAuditService {
 - 异步写日志时，要说明返回前是可靠入队还是只放进内存。队列满时应抛异常，不能静默丢弃。
 - `clean()` 由模块每小时调用一次。外部日志平台自己管理保留期的，可以实现成空方法。
 
-只想往默认审计里增加可展示的目标字段，用 `McpAuditTargetProvider` 即可。替换后默认的数据工具字段不再记录，需要的话在实现里调用 `DataAuditTargets.of(tool, args)` 合并：
+只想往默认审计里增加可展示的目标字段，注册 `McpAuditTargetProvider` 即可。它是**追加**，不是替换：默认审计总是先记录数据工具的字段（数据源组、SQL / 命令开头、dryRun、expectAffectedRows、requestId），再按 `@Order` 依次追加各个 Provider 的字段，同名时后者覆盖。不需要在自己的实现里转发 `DataAuditTargets`：
 
 ```java
 @Bean
@@ -137,7 +137,9 @@ McpAuditTargetProvider auditTargets() {
 }
 ```
 
-每条审计最多 16 个目标字段；字段名最多 128 字符，值最多 512 字符。不要放入密码、令牌或文件内容。
+每条审计最多 16 个目标字段（数据工具字段在前）；字段名最多 128 字符，值最多 512 字符。不要放入密码、令牌或文件内容。
+
+自己实现整个 `McpAuditService` 时，框架不会替你记录数据工具字段；需要的话调用 `DataAuditTargets.of(tool, args)` 得到同样的字段。
 
 ## 其他
 

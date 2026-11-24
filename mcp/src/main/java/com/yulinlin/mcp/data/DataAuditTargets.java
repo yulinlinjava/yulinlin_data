@@ -5,7 +5,8 @@ import java.util.*;
 
 /**
  * 数据工具（data.*）调用审计的目标字段：数据源组、命令（或脚本）开头、预演和预期行数。参数值不记录。
- * 不依赖任何数据源模块，默认的 McpAuditTargetProvider 直接调用。
+ * 不依赖任何数据源模块。默认审计 {@link com.yulinlin.mcp.store.McpAudit} 总是先记录这些字段，再追加业务 McpAuditTargetProvider 的字段；
+ * 自己实现整个 McpAuditService 时可以调用本方法得到同样的字段。
  */
 public final class DataAuditTargets {
     private DataAuditTargets() { }

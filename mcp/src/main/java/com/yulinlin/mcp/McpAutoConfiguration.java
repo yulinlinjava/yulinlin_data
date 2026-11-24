@@ -27,8 +27,11 @@ public class McpAutoConfiguration {
  @Bean @ConditionalOnMissingBean public McpTokenService mcpTokenService(McpTokenStore store,McpIdentityProvider identities,McpAccessPolicy policy,ObjectProvider<McpToolRegistry> tools,McpProperties p,ApplicationEventPublisher events){return new McpTokenService(store,identities,policy,tools::getIfAvailable,p.getToken(),events::publishEvent,java.time.Clock.systemUTC());}
  @Bean @ConditionalOnMissingBean(TokenAuthenticator.class) public TokenAuthenticator mcpTokenAuthenticator(McpTokenService tokens){return new TokenAuthenticator(tokens);}
  @Bean @ConditionalOnMissingBean public McpAuthentication mcpAuthentication(ObjectProvider<McpAuthenticator> authenticators,McpStore store,McpIdentityProvider identities,McpAccessPolicy policy){return new McpAuthentication(authenticators.orderedStream().toList(),store,identities,policy);}
- @Bean @ConditionalOnMissingBean public McpAuditTargetProvider mcpAuditTargetProvider(){return com.yulinlin.mcp.data.DataAuditTargets::of;}
- @Bean @ConditionalOnMissingBean(McpAuditService.class) public McpAudit mcpAudit(McpStore store,McpProperties p,McpAuditTargetProvider targets){return new McpAudit(store,p,targets);}
+ /** 业务可以注册任意多个 McpAuditTargetProvider，按 @Order 依次追加字段；数据工具字段由 McpAudit 固定记录，不会被替换掉。 */
+ @Bean @ConditionalOnMissingBean(McpAuditService.class) public McpAudit mcpAudit(McpStore store,McpProperties p,ObjectProvider<McpAuditTargetProvider> targets){
+  var providers=targets.orderedStream().toList();
+  return new McpAudit(store,p,(tool,args)->{var all=new java.util.LinkedHashMap<String,String>();for(var provider:providers){var m=provider.target(tool,args);if(m!=null)all.putAll(m);}return all;});
+ }
  @Bean @ConditionalOnMissingBean public McpTokenAuditListener mcpTokenAuditListener(McpAuditService audit){return new McpTokenAuditListener(audit);}
  @Bean @ConditionalOnMissingBean public McpToolRegistry mcpToolRegistry(ObjectProvider<McpToolProvider> providers,McpAccessPolicy policy){return new McpToolRegistry(providers.orderedStream().toList(),policy);}
  @Bean @ConditionalOnMissingBean(jakarta.validation.Validator.class) public org.springframework.validation.beanvalidation.LocalValidatorFactoryBean mcpValidator(){return new org.springframework.validation.beanvalidation.LocalValidatorFactoryBean();}

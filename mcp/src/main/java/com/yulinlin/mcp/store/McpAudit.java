@@ -10,13 +10,20 @@ public class McpAudit implements McpAuditService {
     private final McpStore store; private final McpProperties properties;
     private final McpAuditTargetProvider targets;
     public McpAudit(McpStore store,McpProperties properties) { this(store, properties, (tool, args) -> Map.of()); }
+    /**
+     * @param targets 业务追加的目标字段。框架内置的数据工具字段（{@link com.yulinlin.mcp.data.DataAuditTargets}）总是先记录，
+     *                业务字段追加在后面，同名时以业务为准；提供业务 Provider 不会让数据工具的审计字段消失。
+     */
     public McpAudit(McpStore store,McpProperties properties,McpAuditTargetProvider targets) {
         this.store=store;this.properties=properties;this.targets=targets;
     }
     public Entry begin(McpPrincipal principal, String tool, JsonNode args) {
         var target = new LinkedHashMap<String,String>();
         // Do not copy command text, file content, base64 uploads, tokens or tool output into the audit table.
-        targets.target(tool, args.deepCopy()).entrySet().stream().limit(16).forEach(entry -> {
+        var fields = new LinkedHashMap<String,String>(com.yulinlin.mcp.data.DataAuditTargets.of(tool, args));
+        var extra = targets.target(tool, args.deepCopy());
+        if (extra != null) fields.putAll(extra);
+        fields.entrySet().stream().limit(16).forEach(entry -> {
             String key=Objects.requireNonNull(entry.getKey()), value=Objects.requireNonNull(entry.getValue());
             target.put(key.substring(0,Math.min(key.length(),128)),value.substring(0,Math.min(value.length(),512)));
         });

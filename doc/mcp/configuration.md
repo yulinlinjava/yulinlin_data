@@ -121,6 +121,19 @@ MCP-Protocol-Version: 2025-06-18
 | `command.enabled` | `command_execute`、`task_list`、`task_get`、`task_output`、`task_cancel` |
 | `process.enabled` | `process_list`、`process_stop` |
 
+以上工具会通过 `tools/list` 发布完整 `inputSchema` 和 `outputSchema`：参数及返回字段均包含 `description`，包括嵌套对象/数组、单位、空值含义、状态枚举和参数默认值。AI 无需访问项目文档即可读取这些定义。自定义工具的写法见[工具字段说明](integration.md#ai-如何获取字段说明)。
+
+| 工具 | `structuredContent.data` 的结构 |
+| --- | --- |
+| `server_info` | 系统状态对象，含 CPU、内存、磁盘数组、网卡数组；不可用扩展指标可省略 |
+| `command_execute` / `task_get` / `task_cancel` | 任务对象，含任务 ID、状态、时间、PID、退出码、实例归属及输出截断标识 |
+| `task_list` | 有权访问的任务对象数组 |
+| `task_output` | `text`、`base64`、`nextOffset`、`hasMore`、`truncated` |
+| `process_list` | `items` 进程数组及 `page`、`totalPages`、`total`、`sampledAt`、`truncated` |
+| `process_stop` | `pid`、`state`（requested/exited）、`force` |
+
+完整逐字段说明以运行时发布的 Schema 为准；这些定义同时用于返回结果校验。返回错误时检查 `isError` 和 `content`，不能假定存在成功结果中的 `data`。
+
 默认命令执行器仅支持 Linux，普通业务工具可在 Windows 使用；命令通过配置的 shell `-c` 执行，工作目录必须是已有绝对路径，stdin 关闭，不提供 PTY。执行权限等于应用进程权限，不是文件沙箱，也不限制为业务网盘目录。
 
 ```json

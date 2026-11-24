@@ -10,10 +10,13 @@ public class McpToolRegistry {
  private final Map<String,Schema> inputs=new HashMap<>(),outputs=new HashMap<>();
  private final SchemaRegistry schemas=SchemaRegistry.withDialect(Dialects.getDraft202012());
  private final McpAccessPolicy policy;
- public McpToolRegistry(Collection<McpToolProvider> providers,McpAccessPolicy policy){this.policy=policy;for(var provider:providers)for(var tool:provider.tools()){
-  if(tools.putIfAbsent(tool.name(),tool)!=null)throw new IllegalArgumentException("Duplicate MCP tool: "+tool.name());
+ public McpToolRegistry(Collection<McpToolProvider> providers,McpAccessPolicy policy){this.policy=policy;for(var provider:providers)for(var tool:provider.tools())register(tool);}
+ // Startup registration only; annotation discovery runs after Spring has created its proxies.
+ void register(McpToolDefinition tool){
+  if(tools.containsKey(tool.name()))throw new IllegalArgumentException("Duplicate MCP tool: "+tool.name());
   inputs.put(tool.name(),compile(tool.inputSchema()));if(tool.outputSchema()!=null)outputs.put(tool.name(),compile(tool.outputSchema()));
- }}
+  tools.put(tool.name(),tool);
+ }
  private Schema compile(JsonNode node){var meta=schemas.getSchema(SchemaLocation.of(Dialects.getDraft202012().getId()));if(!meta.validate(node.toString(),InputFormat.JSON).isEmpty())throw new IllegalArgumentException("Invalid MCP JSON Schema");return schemas.getSchema(node.toString(),InputFormat.JSON);}
  public List<Map<String,Object>> list(McpCallContext context){return tools.values().stream().filter(t->policy.canUse(context.user())&&policy.canInvoke(context.user(),t.name())).map(McpToolDefinition::descriptor).toList();}
  public boolean contains(String name){return tools.containsKey(name);}

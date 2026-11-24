@@ -14,7 +14,7 @@ import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-@AutoConfiguration(after=JacksonAutoConfiguration.class)
+@AutoConfiguration(after={JacksonAutoConfiguration.class,org.springframework.boot.autoconfigure.validation.ValidationAutoConfiguration.class})
 @ConditionalOnProperty(prefix="yulinlin.mcp",name="enabled",havingValue="true")
 @EnableConfigurationProperties(McpProperties.class)
 public class McpAutoConfiguration {
@@ -24,6 +24,8 @@ public class McpAutoConfiguration {
  @Bean @ConditionalOnMissingBean public McpAuditTargetProvider mcpAuditTargetProvider(){return (tool,args)->java.util.Map.of();}
  @Bean @ConditionalOnMissingBean public McpAudit mcpAudit(McpStore store,McpProperties p,McpAuditTargetProvider targets){return new McpAudit(store,p,targets);}
  @Bean @ConditionalOnMissingBean public McpToolRegistry mcpToolRegistry(ObjectProvider<McpToolProvider> providers,McpAccessPolicy policy){return new McpToolRegistry(providers.orderedStream().toList(),policy);}
+ @Bean @ConditionalOnMissingBean(jakarta.validation.Validator.class) public org.springframework.validation.beanvalidation.LocalValidatorFactoryBean mcpValidator(){return new org.springframework.validation.beanvalidation.LocalValidatorFactoryBean();}
+ @Bean public AnnotatedMcpTools annotatedMcpTools(org.springframework.beans.factory.config.ConfigurableListableBeanFactory beans,ObjectMapper json,jakarta.validation.Validator validator,McpToolRegistry registry){return new AnnotatedMcpTools(beans,json,validator,registry);}
  @Bean @ConditionalOnMissingBean public McpHttpGuard mcpHttpGuard(McpProperties p){return new McpHttpGuard(p);}
  @Bean @ConditionalOnMissingBean(McpManagementGuard.class) public McpManagementGuard mcpManagementGuard(McpHttpGuard guard){return request->{guard.check(request);if(!"mcp-management".equals(request.getHeader("X-MCP-Action")))throw new McpException(403,"缺少 MCP 管理请求标识");};}
  @Bean @ConditionalOnMissingBean(CommandExecutor.class) @ConditionalOnProperty(prefix="yulinlin.mcp.command",name="enabled",havingValue="true") public CommandExecutor mcpCommandExecutor(McpProperties p){return new LocalCommandExecutor(p);}

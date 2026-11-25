@@ -36,6 +36,17 @@ public class DataToolProvider implements McpToolProvider {
               其余内容就是 ES 请求体。参数写成值恰好为 "#{名称}" 的字符串，例如 {"term": {"status": "#{status}"}}。Elasticsearch 只读。
             """;
 
+    /** 只讲当前令牌能用的数据工具；一个都不可见时不补充说明。 */
+    @Override
+    public String instructions(Set<String> visible) {
+        if (visible.stream().noneMatch(t -> t.startsWith("data.") && !t.equals("data.analyze"))) return null;
+        var text = new StringBuilder("数据工具：先调用 data.sources 查看可用数据源、类型和数据库方言，再用 data.schema 确认表 / 索引和字段含义，不要猜测；"
+                + "data.query 结果 truncated=true 时改用聚合或加条件，不要基于截断的数据下结论。");
+        if (visible.contains("data.execute"))
+            text.append("修改数据时先 dryRun=true 预演，把影响行数告诉用户并确认，再 dryRun=false 并带上 expectAffectedRows 正式执行。");
+        return text.toString();
+    }
+
     @Override
     public Collection<McpToolDefinition> tools() {
         var tools = new ArrayList<McpToolDefinition>();

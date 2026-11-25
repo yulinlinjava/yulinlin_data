@@ -52,6 +52,12 @@ public class AnalyzeToolProvider implements McpToolProvider {
         return List.of(new McpToolDefinition(NAME, description(writable), json.valueToTree(schema), !writable, this::call));
     }
 
+    @Override
+    public String instructions(Set<String> visible) {
+        if (!visible.contains(NAME)) return null;
+        return "数据量大或需要跨表、跨数据源多步计算时，用 data.analyze 在服务端执行 JavaScript，只把结论返回，不要把大量原始行拉回来自己算。";
+    }
+
     private Object call(McpCallContext context, JsonNode args) {
         String writeGroup = text(args, "writeGroup");
         boolean dryRun = false;

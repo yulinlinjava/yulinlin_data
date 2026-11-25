@@ -23,7 +23,7 @@
 - **批量与同步**：[增量同步](#ai-write-sync-incremental) · [人工全量同步与续传](#ai-write-sync-full) · [批量与多连接写入](#ai-write-sync-batch) · [EntityCounter 聚合插入与更新](#ai-write-sync-counter) · [延迟写队列](#ai-write-sync-queue)
 - **缓存**：[缓存选择与公共配置](#ai-cache-config) · [Caffeine 内存缓存](#ai-cache-caffeine) · [Ehcache 持久化缓存](#ai-cache-ehcache) · [Redis 与可选本地缓存](#ai-cache-redis) · [缓存序列化](#ai-cache-serialization) · [ORM 查询缓存](#ai-cache-query) · [CacheClient 业务缓存](#ai-cache-client) · [缓存 Key、失效与一致性](#ai-cache-invalidation)
 - **接口安全**：[安全模块选型](#ai-security-modules) · [原生配置与统一策略](#ai-security-native-config) · [接口加密与前端对接](#ai-security-crypto) · [自定义接口加解密](#ai-security-crypto-codec) · [限流与 IP 黑名单](#ai-security-rate-limit) · [行为风控与异步存储](#ai-security-risk) · [用户模型与安全管理器](#ai-security-user) · [无状态 JWT 登录](#ai-security-jwt) · [自定义 Token 生成与解析](#ai-security-token-codec) · [自定义安全实现与拦截器](#ai-security-extension) · [有状态 Sa-Token 登录](#ai-security-sa-token) · [登录上下文生命周期](#ai-security-context) · [登录、角色与权限注解](#ai-security-authorization)
-- **MCP 接入**：[MCP 快速接入](#ai-mcp-integration) · [MCP 业务工具](#ai-mcp-tools) · [MCP 令牌管理](#ai-mcp-tokens) · [MCP 数据工具](#ai-mcp-data) · [MCP 配置与系统工具](#ai-mcp-configuration) · [MCP 扩展点](#ai-mcp-extension)
+- **MCP 接入**：[MCP 快速接入](#ai-mcp-integration) · [MCP 业务工具](#ai-mcp-tools) · [MCP 令牌管理](#ai-mcp-tokens) · [MCP AI 运维](#ai-mcp-ops) · [MCP 数据工具](#ai-mcp-data) · [MCP 配置与系统工具](#ai-mcp-configuration) · [MCP 扩展点](#ai-mcp-extension)
 - **常用工具**：[lang 定位与类型目录](#ai-tools-catalog) · [HTTP 请求、上传与下载](#ai-tools-http) · [HTTP 执行器规范与替换](#ai-tools-http-executor) · [反射复制与深克隆](#ai-tools-reflection) · [JSON 转换](#ai-tools-json) · [日期、数字与字符串工具](#ai-tools-value) · [轻量缓存与资源池](#ai-tools-local-cache) · [线程、调度与事件](#ai-tools-concurrency) · [Lambda、泛型与包扫描](#ai-tools-types) · [序列化、元组与扩展 SPI](#ai-tools-serialization)
 - **项目实践**：[项目开发规范](#ai-practice-conventions) · [公共实体与页面参数](#ai-practice-models) · [通用 Service 与树服务](#ai-practice-service) · [完整 CRUD 分层案例](#ai-practice-crud-example) · [Admin RBAC 与 JWT 登录案例](#ai-practice-rbac)
 
@@ -58,8 +58,10 @@
 | JSON 接口请求/响应加密、限流、权限协议 | security；Web 能力需要 Spring MVC，独立于 ORM 数据库模块 |
 | 用户登录与请求身份恢复 | security-jwt（无状态）或 security-sa-token（有状态）二选一，自动依赖 security；业务提供 UserStore，见[安全选型与扩展](#ai-security-modules-jwt-与-sa-token-如何选择) |
 | 慢数据库操作与内置管理页面 | monitor；依赖公共 JDBC 执行入口和 Spring MVC |
-| 外部 AI 调用业务工具、可选服务器命令 | mcp；复用 security 和 starter，默认关闭，见 [MCP 接入](#ai-mcp-integration) |
-| 外部 AI 读取项目数据（JDBC / ES）、做服务端数据分析 | mcp 的数据工具（配置 `yulinlin.mcp.data.read`）；服务端 JavaScript 分析再加 mcp-script，见 [数据工具](#ai-mcp-data) |
+| 外部 AI 调用业务工具（`@McpTool`）、令牌管理 | mcp；复用 security 和 starter，默认关闭，本身不带工具，见 [MCP 接入](#ai-mcp-integration) |
+| 外部 AI 运维服务器（命令、sh 脚本、进程、服务器信息） | mcp + mcp-ops；引入后仍需打开 `yulinlin.mcp.command.enabled` 等开关，见 [AI 运维](#ai-mcp-ops) |
+| 外部 AI 读取项目数据（JDBC / ES）、修改数据 | mcp + mcp-data；配置 `yulinlin.mcp.data.read`，见 [数据工具](#ai-mcp-data) |
+| 外部 AI 在服务端做 JavaScript 数据分析 | 再加 mcp-script（依赖 mcp-data，带 GraalJS），见 [数据工具](#ai-mcp-data-dataanalyzemcp-script) |
 | 增量同步 / MySQL、PostgreSQL 全量续传 | data-sync + 源/目标数据库模块；默认关闭，依赖公共 jdbc，不自带数据库驱动和 Web 页面 |
 | 缓存公共协议与 `CacheClient` | cache-core；由 core 和具体缓存 Provider 传递引入，业务通常不需要单独声明 |
 | 可选查询缓存 | cache-caffeine、cache-ehcache、cache-redis 可共存；单实现自动选择，多个实现用 yulinlin.cache.default 指定 ORM 默认缓存，客户端可指定名称 |
@@ -7339,7 +7341,18 @@ public class UserApi {
 
 [文档首页](README.md) / [MCP](mcp/README.md)
 
-按顺序完成以下 8 步。前 6 步是代码和配置，后 2 步是运行时操作。
+业务项目引入 MCP、做一些配置，外部 AI 就能通过 MCP 调用这个应用。先选场景：
+
+| 想让 AI 做什么 | 引入 | 读完本页后再读 |
+| --- | --- | --- |
+| 调用业务方法（查订单、改状态等） | `mcp` | [业务工具](#ai-mcp-tools) |
+| 运维这台服务器：执行命令和 sh 脚本、看进程、看服务器信息 | `mcp` + `mcp-ops` | [AI 运维](#ai-mcp-ops) |
+| 读取项目数据（JDBC / ES）、修改数据 | `mcp` + `mcp-data` | [数据工具](#ai-mcp-data) |
+| 在服务端做大数据量、跨表跨库的分析 | `mcp` + `mcp-data` + `mcp-script` | [数据工具](#ai-mcp-data-dataanalyzemcp-script) |
+
+三类能力可以同时引入。核心模块 `mcp` 本身不带任何工具，工具都来自你写的 `@McpTool` 或上面的可选模块。
+
+无论哪个场景，都先按顺序完成以下 8 步。前 6 步是代码和配置，后 2 步是运行时操作。
 
 <a id="ai-mcp-integration-前提"></a>
 ### 前提
@@ -7360,6 +7373,8 @@ public class UserApi {
 ```
 
 模块依赖公共的 `security` 和 `starter`，不会选择具体的登录实现。
+
+按场景再加 `mcp-ops`、`mcp-data`、`mcp-script`（同一版本），各自的配置见对应文档。
 
 <a id="ai-mcp-integration-2-最小配置"></a>
 ### 2. 最小配置
@@ -7522,7 +7537,7 @@ Authorization: Bearer ylmcp_xxxxxxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 - [ ] 用户 ID 不稳定时提供了 `McpIdentityProvider`
 - [ ] 只放行了 `/mcp`，`/api/mcp/**` 仍然需要登录和 CSRF
 - [ ] 每个工具内部都做了数据权限判断
-- [ ] 命令和进程工具保持关闭，除非确实需要（见[系统工具](#ai-mcp-configuration-可选系统工具)）
+- [ ] 只引入需要的可选模块；引入 `mcp-ops` 时只在需要的机器上打开命令开关，并按[安全建议](#ai-mcp-ops-安全建议)使用专门的系统账号和运维令牌
 - [ ] 运行开关已打开，令牌已签发，客户端已配置
 
 ---
@@ -7721,6 +7736,7 @@ McpToolProvider orderTools(ObjectMapper json, OrderService orders) throws Except
 - 是否拒绝未知字段由 `additionalProperties` 决定。
 - `outputSchema` 描述的是**完整的** `{"data": ..., "warning": ...}` 对象，不只是 data 部分。输出校验发生在业务执行之后，校验失败不代表业务已回滚，客户端不应自动重试写操作。
 - 也可以使用不带 outputSchema 的构造器，但 AI 就无法知道返回字段的含义。
+- 可以覆盖 `instructions(Set<String> visibleTools)`，给连接时的 [instructions](#ai-mcp-configuration-服务说明instructions) 补充一段使用说明。参数是当前令牌能看到的工具名；本 Provider 的工具一个都不可见时返回 null，避免 AI 读到讲自己用不了的工具的说明。mcp-ops、mcp-data 就是这样提供各自说明的。
 
 <a id="ai-mcp-tools-调用结果"></a>
 ### 调用结果
@@ -7946,6 +7962,187 @@ tokens.revoke(actor, issued.credential().id());
 
 ---
 
+<a id="ai-mcp-ops"></a>
+<!-- source: doc/mcp/ops.md -->
+<a id="ai-mcp-ops-mcp-ai-运维命令脚本与进程"></a>
+## MCP AI 运维：命令、脚本与进程
+
+[文档首页](README.md) / [MCP](mcp/README.md)
+
+业务项目引入 `mcp-ops`，打开开关并签发令牌后，外部 AI（Claude、Cursor 等）就能通过 MCP 在这台服务器上执行命令和 sh 脚本、跟进后台任务、查看和停止进程、查看服务器信息，帮你排查和运维。
+
+**执行权限等同于应用进程的系统账号，不是沙箱。** 拿到带 `command_execute` 的令牌，就等于拿到了这台机器上这个账号的 shell。开启前请先看完[安全建议](#ai-mcp-ops-安全建议)。
+
+<a id="ai-mcp-ops-能做什么"></a>
+### 能做什么
+
+| 开关 | 工具 | 用途 |
+| --- | --- | --- |
+| `command.enabled` | `command_execute` | 用 shell 执行命令或多行脚本（如 `bash /opt/scripts/deploy.sh`），立即返回后台任务 |
+| | `task_list`、`task_get`、`task_output`、`task_cancel` | 查看任务、读取输出、取消任务 |
+| `process.enabled` | `process_list`、`process_stop` | 查看进程的 CPU、内存、启动参数；按身份停止进程 |
+| `monitor.enabled` | `server_info` | 当前服务器 / 容器的系统、Java、CPU、内存、磁盘、网卡 |
+
+这些工具都通过 `tools/list` 发布了完整的输入输出 Schema 和逐字段说明，连接时的 [instructions](#ai-mcp-configuration-服务说明instructions) 里也会按令牌能用的工具自动加上使用要点，AI 不需要读本文档就能用。
+
+<a id="ai-mcp-ops-接入"></a>
+### 接入
+
+前提：已按[快速接入](#ai-mcp-integration)完成核心模块的接入（权限策略、放行 `/mcp`、管理接口可用）。
+
+1. 引入依赖：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>mcp-ops</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+2. 打开需要的开关。引入模块后仍需显式打开，默认全部关闭：
+
+```yaml
+yulinlin:
+  mcp:
+    enabled: true
+    application-id: order-service
+    instance-id: server-01          # 每台服务器必须不同，审计和任务按它区分机器
+    command:
+      enabled: true
+      shell: /bin/bash
+      default-timeout-seconds: 3600 # 0 不限时，最大 604800
+      max-concurrent: 4             # 本机同时运行的命令数
+      max-output-bytes: 8388608     # 每个任务最多保存 8 MiB 输出
+      audit-command: true           # 审计记录命令原文（默认开）
+    process:
+      enabled: true
+    monitor:
+      enabled: true
+    data-directory: ./mcp-data      # 命令输出文件目录
+```
+
+3. 在 `McpAccessPolicy.canInvoke` 中给运维账号开放这些工具，签发一个运维专用令牌，建议同时设置 IP 白名单：
+
+```json
+POST /api/mcp/credentials
+{"name": "运维助手", "scope": ["command_execute", "task_*", "process_*", "server_info"], "allowedIps": ["10.0.0.0/8"]}
+```
+
+令牌范围写法见[令牌管理](#ai-mcp-tokens-范围scope)。`task_*` 是前缀通配，等价于 `task_list`、`task_get`、`task_output`、`task_cancel`。
+
+4. 在 AI 客户端里配置这台服务器：地址 `https://<这台服务器>/mcp`，请求头 `Authorization: Bearer ylmcp_...`。
+
+<a id="ai-mcp-ops-多台服务器"></a>
+### 多台服务器
+
+**每台服务器单独配置一个 MCP 连接，直连机器，不要走负载均衡。**
+
+- 命令在接到请求的那台机器上执行。连负载均衡地址时，AI 每次调用可能落到不同机器，它不知道自己在操作哪台。
+- 任务输出只保存在执行它的机器上，`task_get` / `task_output` / `task_cancel` 必须打到同一台。
+
+在 AI 客户端里按机器命名，例如 `order-01`、`order-02`，各自指向机器的 IP 或内网域名。
+
+令牌有两种管理方式：
+
+| 方式 | 配置 | 特点 |
+| --- | --- | --- |
+| 各自独立（默认） | MCP 数据存在每台服务器自己的数据源里 | 开箱即用；但每台都要单独签发和撤销令牌，审计分散在各台 |
+| 共享一个 MCP 小库（推荐，多台时） | 每台服务器另配一个数据源指向同一个小库，`yulinlin.mcp.group` 指向它，所有服务器用**同一个** `application-id`、**不同的** `instance-id` | 签发一次所有机器可用，撤销一次全部失效（其他实例最多延迟 `token.cache-seconds`）；审计集中，并带 `instance` 字段区分机器。业务库不受影响；这个小库不可用时各机器的 MCP 都不可用 |
+
+```yaml
+# 共享 MCP 小库：每台服务器的配置（业务数据源保持原样）
+yulinlin:
+  mcp:
+    application-id: ops          # 所有服务器相同，共享令牌、开关和审计
+    instance-id: order-01        # 每台不同
+    group: mcp                   # MCP 数据写到名为 mcp 的数据源
+# 再声明一个名为 mcp 的数据源，所有服务器指向同一个 MySQL / PostgreSQL 库，见数据源文档
+```
+
+数据源的声明方式见[多数据源与默认组](#ai-datasources-routing)。
+
+<a id="ai-mcp-ops-后台命令"></a>
+### 后台命令
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"command_execute","arguments":{"command":"date; uptime","cwd":"/tmp","timeoutSeconds":30,"requestId":"inspect-001"}}}
+```
+
+- 默认执行器只支持 Linux，通过配置的 shell `-c` 执行，多行脚本、管道、`&&` 都可以用。工作目录必须是已存在的绝对路径，stdin 关闭，没有 PTY：交互式命令（`top`、`vim`、要求输入密码的 `sudo`）用不了，请用非交互写法，例如 `top -b -n 1`、`sudo -n`。
+- 调用会立即返回任务，从 `data.id` 获取任务 ID，再用 `task_get` / `task_output` 跟进。HTTP 断开不会取消任务。不需要加 `&` 或 `nohup`；长期运行的服务应交给 systemd。
+- `requestId` 在同一应用、同一令牌内唯一。相同编号且参数相同会返回已有任务，参数不同会返回 409 冲突。任务记录先落库再启动进程，多个实例并发提交也不会重复执行。
+- 任务提交时和进程启动前都会重新检查令牌和权限。令牌在这期间被撤销、过期或缩小范围，任务会失败，不会启动进程。已经在运行的进程不会因为令牌失效被终止。
+- 状态：`queued`、`running`、`cancelling`、`succeeded`、`failed`、`cancelled`、`timed_out`、`unknown`。应用重启后，本实例原来活跃的任务会被标为 `unknown`，不会重跑，也不会按旧 PID 杀进程。
+- 输出保存在 `data-directory/application-id/instance-id/output`。超过上限后会继续读取并丢弃，同时标记 `truncated`。`offset` 是字节偏移，要无损拼接请使用 `base64`。
+- 非管理员只能看到自己令牌提交的任务。读取输出、取消、删除必须访问任务所在的实例。
+
+| 工具 | `structuredContent.data` |
+| --- | --- |
+| `command_execute` / `task_get` / `task_cancel` | 任务对象：id、状态、时间、PID、退出码、实例、输出是否截断 |
+| `task_list` | 有权访问的任务数组 |
+| `task_output` | `text`、`base64`、`nextOffset`、`hasMore`、`truncated` |
+| `process_list` | `items` 进程数组，以及 `page`、`totalPages`、`total`、`sampledAt`、`truncated` |
+| `process_stop` | `pid`、`state`（requested / exited）、`force` |
+| `server_info` | CPU、内存、磁盘数组、网卡数组。只反映当前 JVM 所在的服务器或容器，没有实时带宽 |
+
+<a id="ai-mcp-ops-进程"></a>
+### 进程
+
+- `process_stop` 必须原样传入 `process_list` 返回的 `stopIdentity` 作为 `identity`，并且 `confirm: true`。这样可以防止 PID 被复用后误杀其他进程。PID 1、当前进程及其祖先进程受保护。
+- 取消任务会尝试终止可见的子进程；脱离进程树的服务需要单独处理。systemd / Docker 管理的服务会被自动拉起，应使用 `systemctl` / `docker` 命令停止。
+
+<a id="ai-mcp-ops-审计"></a>
+### 审计
+
+每次调用都会写入调用审计（`/api/mcp/audit?type=call`），运维工具额外记录：
+
+| 工具 | 记录的字段 |
+| --- | --- |
+| 全部运维工具 | `instance`（`instance-id`，区分是哪台机器） |
+| `command_execute` | `command`（命令原文，最多 512 字符）、`cwd`、`timeoutSeconds`、`requestId` |
+| `task_get` / `task_output` / `task_cancel` | `taskId` |
+| `process_stop` | `pid`、`force` |
+
+命令里不要写明文密码，改用环境变量、配置文件或凭证管理工具。确实不能让命令原文进入审计时，配置 `command.audit-command: false`，审计里只记录命令长度。
+
+业务注册的 `McpAuditTargetProvider` 与这些字段互相追加，不会把它们替换掉，见[扩展点](#ai-mcp-extension-审计mcpauditservice)。
+
+<a id="ai-mcp-ops-管理接口"></a>
+### 管理接口
+
+开启命令工具后，`mcp-ops` 在管理接口前缀下注册任务接口（网页登录，返回 `R` 包装，写请求需要 `X-MCP-Action: mcp-management`）：
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/mcp/tasks?page=1` | canManage | 全部任务，每页 30 条 |
+| GET | `/api/mcp/tasks/{id}` | canManage | 任务详情 |
+| GET | `/api/mcp/tasks/{id}/output?offset=0` | canManage | 按字节偏移读取输出，每次最多 64 KiB |
+| POST | `/api/mcp/tasks/{id}/cancel` | canManage + `canInvoke(user,"task_cancel")` | 取消任务 |
+| DELETE | `/api/mcp/tasks/{id}` | canManage | 删除已结束的任务及其输出 |
+
+没开命令工具时这些接口不存在（404）。
+
+<a id="ai-mcp-ops-安全建议"></a>
+### 安全建议
+
+- **用专门的系统账号运行应用**，不要用 root。需要提权的操作在 sudoers 里按命令白名单放开，并加 `NOPASSWD`，AI 用 `sudo -n` 调用。
+- **令牌单独签发、范围最小**：运维令牌和业务令牌分开；只需要看日志、看状态时，不要给 `command_execute`，只给 `server_info`、`process_list`、`task_*`。
+- **加 IP 白名单**（`allowedIps`），并设置过期时间，定期轮换。
+- **只在需要的机器上打开开关**：引入了 `mcp-ops` 但没打开 `command.enabled` 的机器不会注册命令工具。
+- 让 AI 执行变更前先说明要做什么并等你确认；工具说明里已经要求变更类命令带 `requestId` 防止重复执行。
+
+<a id="ai-mcp-ops-常见问题"></a>
+### 常见问题
+
+**AI 说找不到 `command_execute`**：检查是否引入了 `mcp-ops`、是否打开 `command.enabled`、令牌 scope 和 `canInvoke` 是否包含它。
+
+**`task_get` 说任务不存在**：任务只能在执行它的机器上查看，确认 AI 连接的是同一台机器，没有经过负载均衡。
+
+**命令一直卡住**：多半是在等交互输入（如 `sudo` 要密码、`apt` 等确认）。改用非交互参数（`sudo -n`、`apt-get -y`），并设置 `timeoutSeconds`。
+
+---
+
 <a id="ai-mcp-data"></a>
 <!-- source: doc/mcp/data.md -->
 <a id="ai-mcp-data-mcp-数据工具查询写入与服务端分析"></a>
@@ -7986,8 +8183,20 @@ tokens.revoke(actor, issued.credential().id());
 <a id="ai-mcp-data-接入"></a>
 ### 接入
 
-1. 准备数据源。**强烈建议给 AI 读的数据源使用只读账号**，这是唯一可靠的数据保护手段，模块的语句检查只是兜底。数据源配置见[多数据源](#ai-datasources-routing)。
-2. 配置：
+前提：已按[快速接入](#ai-mcp-integration)完成核心模块的接入。
+
+1. 引入依赖：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>mcp-data</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+2. 准备数据源。**强烈建议给 AI 读的数据源使用只读账号**，这是唯一可靠的数据保护手段，模块的语句检查只是兜底。数据源配置见[多数据源](#ai-datasources-routing)。
+3. 配置：
 
 ```yaml
 yulinlin:
@@ -8004,7 +8213,7 @@ yulinlin:
 
 只开放部分数据源时写组名：`read: [report, search-es]`。
 
-3. 需要服务端分析时，再引入可选模块（引入即启用 `data.analyze`）：
+4. 需要服务端分析时，再引入可选模块（引入即启用 `data.analyze`，它依赖 `mcp-data`）：
 
 ```xml
 <dependency>
@@ -8014,7 +8223,7 @@ yulinlin:
 </dependency>
 ```
 
-4. 在 `McpAccessPolicy.canInvoke` 中给对应账号开放这些工具名，并签发带相应范围的令牌，例如：
+5. 在 `McpAccessPolicy.canInvoke` 中给对应账号开放这些工具名，并签发带相应范围的令牌，例如：
 
 | 使用者 | 令牌范围 |
 | --- | --- |
@@ -8025,7 +8234,7 @@ yulinlin:
 
 - `read`、`write` 中写明的组必须存在，类型必须是 JDBC（MySQL、PostgreSQL、H2、SQLite 等）或 Elasticsearch，否则启动失败。`"*"` 会跳过不支持的数据源类型。
 - `write` 只能写 JDBC 组，不支持 `*`。
-- 没有配置 `read` 和 `write` 时，不注册任何数据工具。
+- 引入了 `mcp-data` 但没有配置 `read` 和 `write` 时，不注册任何数据工具。
 
 <a id="ai-mcp-data-安全机制"></a>
 ### 安全机制
@@ -8295,19 +8504,20 @@ yulinlin:
       max-per-owner: 50            # 每个账号未撤销令牌的上限，0 不限
       cache-seconds: 10            # 令牌全量内存缓存刷新间隔，0 关闭，最大 300
       max-rotate-grace-seconds: 604800  # 轮换宽限期上限，最大 30 天
-    data:                          # 数据工具，配置了 read 或 write 才启用，见 data.md
+    data:                          # 数据工具，需要引入 mcp-data，配置了 read 或 write 才启用，见 data.md
       read: ["*"]                  # 可读的数据源组，"*" 为全部 JDBC / ES 数据源
       write: []                    # 可写的 JDBC 组，开放 data.execute
       max-rows: 1000               # 单次查询返回给 AI 的最大行数，最大 100000
       timeout-seconds: 30          # 单次调用总时长（JDBC 事务超时 / ES 服务端超时），最大 3600
       script-row-budget: 200000    # data.analyze 脚本内所有查询合计最多读取的行数，调大前评估内存
-    command:
+    command:                       # 以下 command / process / monitor 需要引入 mcp-ops，见 ops.md
       enabled: false
       shell: /bin/bash
       max-concurrent: 4            # 每个实例的并发命令数
       max-command-bytes: 65536
       default-timeout-seconds: 3600 # 0 不限时，最大 604800
       max-output-bytes: 8388608    # 每个任务最多保存 8 MiB 输出
+      audit-command: true          # 审计记录命令原文（最多 512 字符）；false 时只记录长度
     process:
       enabled: false
     monitor:
@@ -8338,16 +8548,11 @@ yulinlin:
 | GET | `/api/mcp` | 登录 | 返回 `enabled`、`manager`、`canUse` |
 | PUT | `/api/mcp` | canManage | `{"enabled":true}` 启用或暂停 MCP |
 | GET | `/api/mcp/tools` | 登录 | 当前账号有权限的工具目录 |
-| GET | `/api/mcp/tasks?page=1` | canManage | 全部任务，每页 30 条 |
-| GET | `/api/mcp/tasks/{id}` | canManage | 任务详情 |
-| GET | `/api/mcp/tasks/{id}/output?offset=0` | canManage | 按字节偏移读取输出，每次最多 64 KiB |
-| POST | `/api/mcp/tasks/{id}/cancel` | canManage + `canInvoke(user,"task_cancel")` | 取消任务 |
-| DELETE | `/api/mcp/tasks/{id}` | canManage | 删除已结束的任务及其输出 |
 | GET | `/api/mcp/audit?type=call&page=1` | canManage | `call` 为工具调用审计，`manage` 为令牌管理审计；每页 50 条 |
 
 - 所有写请求必须带 `X-MCP-Action: mcp-management`，并通过 Origin 和 HTTPS 校验。这个请求头只是防跨站标识，不是登录凭证。
 - MCP 令牌**不能**用来访问管理接口。
-- 命令功能关闭时，任务接口返回 404。
+- 命令任务的管理接口（`/api/mcp/tasks`）由 `mcp-ops` 提供，见 [AI 运维](#ai-mcp-ops-管理接口)。
 - Origin 被拒绝时会记录一条 WARN 日志，包含 `Origin`、`serverName`、`serverPort`、`scheme`，用来排查代理配置。日志不会记录 Authorization。
 
 <a id="ai-mcp-configuration-服务说明instructions"></a>
@@ -8355,7 +8560,7 @@ yulinlin:
 
 客户端连接时会先调用 `initialize`，返回里的 `instructions` 会被客户端放进模型上下文，是 AI 最先看到的一段说明，不需要 AI 知道任何额外接口。
 
-- **不配置**：按当前令牌在 `tools/list` 里能看到的工具自动生成，只会提到实际可用的工具组。例如令牌能用 `data.*` 时，会说明先调 `data.sources` 再调 `data.schema`；能用 `data.execute` 时，会说明先预演再执行；能用命令工具时，会说明用 `task_get` 跟进后台任务。
+- **不配置**：由三部分自动拼成：通用开头（应用名、可用工具数、参数以 `tools/list` 为准）、各工具模块按**当前令牌在 `tools/list` 里能看到的工具**补充的一段、通用结尾（写操作结果不确定时先查询确认）。核心模块不认识任何具体工具，只有引入了的模块、并且令牌能用它的工具时，才会出现对应段落。例如引入 `mcp-data` 且令牌能用 `data.*` 时，会说明先调 `data.sources` 再调 `data.schema`；能用 `data.execute` 时会说明先预演再执行；引入 `mcp-ops` 且令牌能用命令工具时，会说明用 `task_get` 跟进后台任务。业务的 `McpToolProvider` 也可以覆盖 `instructions(visibleTools)` 补充自己的段落，见[显式注册](#ai-mcp-tools-显式注册)。
 - **配置了**：原样返回配置的内容，不再自动生成。适合写业务背景，例如：
 
 ```yaml
@@ -8410,50 +8615,16 @@ HTTP 状态码：
 
 入口还叠加了 `@ApiLimit(count=180, interval="1m", by=IP)`。反向代理可以再加请求大小和速率限制。
 
-<a id="ai-mcp-configuration-可选系统工具"></a>
-### 可选系统工具
+<a id="ai-mcp-configuration-可选工具模块"></a>
+### 可选工具模块
 
-数据工具（`data.sources`、`data.schema`、`data.query`、`data.execute`、`data.analyze`）单独说明，见[数据工具](#ai-mcp-data)。
+核心模块 `mcp` 自己不带任何工具，工具由可选模块提供，引入后再按配置启用：
 
-以下系统工具默认全部关闭。开启前要确认风险：**命令工具的执行权限等同于应用进程**，不是沙箱。
-
-| 开关 | 工具 |
-| --- | --- |
-| `monitor.enabled` | `server_info` |
-| `command.enabled` | `command_execute`、`task_list`、`task_get`、`task_output`、`task_cancel` |
-| `process.enabled` | `process_list`、`process_stop` |
-
-这些工具都通过 `tools/list` 发布了完整的输入输出 Schema 和逐字段说明，AI 不需要读文档就能使用。它们和业务工具一样受令牌 scope 与 `canInvoke` 控制。建议只给专门的运维令牌授予 `command_execute`。
-
-| 工具 | `structuredContent.data` |
-| --- | --- |
-| `server_info` | CPU、内存、磁盘数组、网卡数组。只反映当前 JVM 所在的服务器或容器，没有实时带宽 |
-| `command_execute` / `task_get` / `task_cancel` | 任务对象：id、状态、时间、PID、退出码、实例、输出是否截断 |
-| `task_list` | 有权访问的任务数组 |
-| `task_output` | `text`、`base64`、`nextOffset`、`hasMore`、`truncated` |
-| `process_list` | `items` 进程数组，以及 `page`、`totalPages`、`total`、`sampledAt`、`truncated` |
-| `process_stop` | `pid`、`state`（requested / exited）、`force` |
-
-<a id="ai-mcp-configuration-后台命令"></a>
-#### 后台命令
-
-```json
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"command_execute","arguments":{"command":"date; uptime","cwd":"/tmp","timeoutSeconds":30,"requestId":"inspect-001"}}}
-```
-
-- 默认执行器只支持 Linux，通过配置的 shell `-c` 执行。工作目录必须是已存在的绝对路径，stdin 关闭，没有 PTY。
-- 调用会立即返回任务，从 `data.id` 获取任务 ID，再用 `task_get` / `task_output` 跟进。HTTP 断开不会取消任务。
-- `requestId` 在同一应用、同一令牌内唯一。相同编号且参数相同会返回已有任务，参数不同会返回 409 冲突。任务记录先落库再启动进程，多个实例并发提交也不会重复执行。
-- 任务提交时和进程启动前都会重新检查令牌和权限。令牌在这期间被撤销、过期或缩小范围，任务会失败，不会启动进程。已经在运行的进程不会因为令牌失效被终止。
-- 状态：`queued`、`running`、`cancelling`、`succeeded`、`failed`、`cancelled`、`timed_out`、`unknown`。应用重启后，本实例原来活跃的任务会被标为 `unknown`，不会重跑，也不会按旧 PID 杀进程。
-- 输出保存在 `data-directory/application-id/instance-id/output`。超过上限后会继续读取并丢弃，同时标记 `truncated`。`offset` 是字节偏移，要无损拼接请使用 `base64`。
-- 非管理员只能看到自己令牌提交的任务。读取输出、取消、删除必须访问任务所在的实例。
-
-<a id="ai-mcp-configuration-进程"></a>
-#### 进程
-
-- `process_stop` 必须原样传入 `process_list` 返回的 `stopIdentity` 作为 `identity`，并且 `confirm: true`。这样可以防止 PID 被复用后误杀其他进程。PID 1、当前进程及其祖先进程受保护。
-- 取消任务会尝试终止可见的子进程；脱离进程树的服务需要单独处理。
+| 模块 | 工具 | 启用配置 | 说明 |
+| --- | --- | --- | --- |
+| `mcp-ops` | `command_execute`、`task_*`、`process_*`、`server_info` | `command.enabled`、`process.enabled`、`monitor.enabled` | [AI 运维](#ai-mcp-ops) |
+| `mcp-data` | `data.sources`、`data.schema`、`data.query`、`data.execute` | `data.read` / `data.write` | [数据工具](#ai-mcp-data) |
+| `mcp-script` | `data.analyze` | 引入即启用（需要 `mcp-data` 已启用） | [数据工具](#ai-mcp-data-dataanalyzemcp-script) |
 
 <a id="ai-mcp-configuration-保留与容量"></a>
 ### 保留与容量
@@ -8482,17 +8653,17 @@ HTTP 状态码：
 | --- | --- | --- |
 | `McpAccessPolicy` | 使用、管理、工具调用权限 | **无，必须提供** |
 | `McpIdentityProvider` | 稳定账号 ID 与当前用户加载 | `UserStore::load` |
-| `McpToolProvider` | 显式注册工具，可以有多个 | 无（见[显式注册](#ai-mcp-tools-显式注册)） |
+| `McpToolProvider` | 显式注册工具，可以有多个；可选模块也通过它提供工具和 instructions 段落 | 无（见[显式注册](#ai-mcp-tools-显式注册)） |
 | `McpAuthenticator` | 增加认证方式，可以有多个 | `TokenAuthenticator` |
 | `McpTokenStore` | 令牌持久化 | `OrmMcpTokenStore` |
 | `McpStore` | 运行开关、任务、审计的持久化 | `OrmMcpStore` |
 | `McpAuditService` | 调用审计与管理审计 | `McpAudit` |
-| `McpAuditTargetProvider` | 给默认审计**追加**目标字段，可以有多个 | 无。数据工具（`data.*`）的字段由默认审计固定记录，不依赖这个 Bean |
-| `McpTaskOutputResolver` | 任务输出文件路径 | `data-directory/application-id/instance-id/output/{id}.log` |
-| `CommandExecutor` | 本机命令启动方式 | `LocalCommandExecutor` |
+| `McpAuditTargetProvider` | 给默认审计**追加**目标字段，可以有多个 | 核心无；mcp-ops 注册运维字段（命令原文、实例），mcp-data 注册数据字段（数据源组、SQL 开头） |
+| `McpTaskOutputResolver`（mcp-ops） | 任务输出文件路径 | `data-directory/application-id/instance-id/output/{id}.log` |
+| `CommandExecutor`（mcp-ops） | 本机命令启动方式 | `LocalCommandExecutor` |
 | `McpManagementGuard` | 管理写请求的来源和请求头校验 | Origin / HTTPS 校验 + `X-MCP-Action` |
-| `McpLifecycle` | 可选功能参与启动校验（`initialize`）和每小时清理（`clean`），可以有多个 | 数据工具使用 |
-| `McpDataService` | 数据工具的执行引擎，见 [数据工具](#ai-mcp-data) | 配置了 `yulinlin.mcp.data.read` 或 `write` 时注册 |
+| `McpLifecycle` | 可选模块参与启动（`initialize`）和每小时清理（`clean`），可以有多个 | mcp-ops 用它恢复和清理命令任务，mcp-data 用它校验数据源、清理幂等记录 |
+| `McpDataService`（mcp-data） | 数据工具的执行引擎，见 [数据工具](#ai-mcp-data) | 配置了 `yulinlin.mcp.data.read` 或 `write` 时注册 |
 
 要完全不用 ORM 数据源，需要同时提供 `McpStore` 和 `McpTokenStore`。
 
@@ -8604,7 +8775,7 @@ public final class BusinessMcpAudit implements McpAuditService {
 - 异步写日志时，要说明返回前是可靠入队还是只放进内存。队列满时应抛异常，不能静默丢弃。
 - `clean()` 由模块每小时调用一次。外部日志平台自己管理保留期的，可以实现成空方法。
 
-只想往默认审计里增加可展示的目标字段，注册 `McpAuditTargetProvider` 即可。它是**追加**，不是替换：默认审计总是先记录数据工具的字段（数据源组、SQL / 命令开头、dryRun、expectAffectedRows、requestId），再按 `@Order` 依次追加各个 Provider 的字段，同名时后者覆盖。不需要在自己的实现里转发 `DataAuditTargets`：
+只想往默认审计里增加可展示的目标字段，注册 `McpAuditTargetProvider` 即可。所有 Provider 按 `@Order` 依次合并，同名时后者覆盖，**互相追加、不互相替换**：mcp-ops、mcp-data 各自注册了一个 Provider（记录命令原文、数据源组、SQL 开头等），业务再注册自己的，也不会让它们记录的字段消失，不需要转发：
 
 ```java
 @Bean
@@ -8616,7 +8787,7 @@ McpAuditTargetProvider auditTargets() {
 
 每条审计最多 16 个目标字段（数据工具字段在前）；字段名最多 128 字符，值最多 512 字符。不要放入密码、令牌或文件内容。
 
-自己实现整个 `McpAuditService` 时，框架不会替你记录数据工具字段；需要的话调用 `DataAuditTargets.of(tool, args)` 得到同样的字段。
+自己实现整个 `McpAuditService` 时，框架不会替你调用这些 Provider；需要的话注入 `ObjectProvider<McpAuditTargetProvider>` 自己合并，或直接调用 `DataAuditTargets.of(tool, args)`。
 
 <a id="ai-mcp-extension-其他"></a>
 ### 其他

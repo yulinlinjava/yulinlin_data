@@ -10,17 +10,17 @@
 | --- | --- | --- |
 | `McpAccessPolicy` | 使用、管理、工具调用权限 | **无，必须提供** |
 | `McpIdentityProvider` | 稳定账号 ID 与当前用户加载 | `UserStore::load` |
-| `McpToolProvider` | 显式注册工具，可以有多个 | 无（见[显式注册](tools.md#显式注册)） |
+| `McpToolProvider` | 显式注册工具，可以有多个；可选模块也通过它提供工具和 instructions 段落 | 无（见[显式注册](tools.md#显式注册)） |
 | `McpAuthenticator` | 增加认证方式，可以有多个 | `TokenAuthenticator` |
 | `McpTokenStore` | 令牌持久化 | `OrmMcpTokenStore` |
 | `McpStore` | 运行开关、任务、审计的持久化 | `OrmMcpStore` |
 | `McpAuditService` | 调用审计与管理审计 | `McpAudit` |
-| `McpAuditTargetProvider` | 给默认审计**追加**目标字段，可以有多个 | 无。数据工具（`data.*`）的字段由默认审计固定记录，不依赖这个 Bean |
-| `McpTaskOutputResolver` | 任务输出文件路径 | `data-directory/application-id/instance-id/output/{id}.log` |
-| `CommandExecutor` | 本机命令启动方式 | `LocalCommandExecutor` |
+| `McpAuditTargetProvider` | 给默认审计**追加**目标字段，可以有多个 | 核心无；mcp-ops 注册运维字段（命令原文、实例），mcp-data 注册数据字段（数据源组、SQL 开头） |
+| `McpTaskOutputResolver`（mcp-ops） | 任务输出文件路径 | `data-directory/application-id/instance-id/output/{id}.log` |
+| `CommandExecutor`（mcp-ops） | 本机命令启动方式 | `LocalCommandExecutor` |
 | `McpManagementGuard` | 管理写请求的来源和请求头校验 | Origin / HTTPS 校验 + `X-MCP-Action` |
-| `McpLifecycle` | 可选功能参与启动校验（`initialize`）和每小时清理（`clean`），可以有多个 | 数据工具使用 |
-| `McpDataService` | 数据工具的执行引擎，见 [数据工具](data.md) | 配置了 `yulinlin.mcp.data.read` 或 `write` 时注册 |
+| `McpLifecycle` | 可选模块参与启动（`initialize`）和每小时清理（`clean`），可以有多个 | mcp-ops 用它恢复和清理命令任务，mcp-data 用它校验数据源、清理幂等记录 |
+| `McpDataService`（mcp-data） | 数据工具的执行引擎，见 [数据工具](data.md) | 配置了 `yulinlin.mcp.data.read` 或 `write` 时注册 |
 
 要完全不用 ORM 数据源，需要同时提供 `McpStore` 和 `McpTokenStore`。
 
@@ -127,7 +127,7 @@ public final class BusinessMcpAudit implements McpAuditService {
 - 异步写日志时，要说明返回前是可靠入队还是只放进内存。队列满时应抛异常，不能静默丢弃。
 - `clean()` 由模块每小时调用一次。外部日志平台自己管理保留期的，可以实现成空方法。
 
-只想往默认审计里增加可展示的目标字段，注册 `McpAuditTargetProvider` 即可。它是**追加**，不是替换：默认审计总是先记录数据工具的字段（数据源组、SQL / 命令开头、dryRun、expectAffectedRows、requestId），再按 `@Order` 依次追加各个 Provider 的字段，同名时后者覆盖。不需要在自己的实现里转发 `DataAuditTargets`：
+只想往默认审计里增加可展示的目标字段，注册 `McpAuditTargetProvider` 即可。所有 Provider 按 `@Order` 依次合并，同名时后者覆盖，**互相追加、不互相替换**：mcp-ops、mcp-data 各自注册了一个 Provider（记录命令原文、数据源组、SQL 开头等），业务再注册自己的，也不会让它们记录的字段消失，不需要转发：
 
 ```java
 @Bean
@@ -139,7 +139,7 @@ McpAuditTargetProvider auditTargets() {
 
 每条审计最多 16 个目标字段（数据工具字段在前）；字段名最多 128 字符，值最多 512 字符。不要放入密码、令牌或文件内容。
 
-自己实现整个 `McpAuditService` 时，框架不会替你记录数据工具字段；需要的话调用 `DataAuditTargets.of(tool, args)` 得到同样的字段。
+自己实现整个 `McpAuditService` 时，框架不会替你调用这些 Provider；需要的话注入 `ObjectProvider<McpAuditTargetProvider>` 自己合并，或直接调用 `DataAuditTargets.of(tool, args)`。
 
 ## 其他
 

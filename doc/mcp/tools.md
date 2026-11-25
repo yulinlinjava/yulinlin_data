@@ -181,6 +181,7 @@ McpToolProvider orderTools(ObjectMapper json, OrderService orders) throws Except
 - 是否拒绝未知字段由 `additionalProperties` 决定。
 - `outputSchema` 描述的是**完整的** `{"data": ..., "warning": ...}` 对象，不只是 data 部分。输出校验发生在业务执行之后，校验失败不代表业务已回滚，客户端不应自动重试写操作。
 - 也可以使用不带 outputSchema 的构造器，但 AI 就无法知道返回字段的含义。
+- 可以覆盖 `instructions(Set<String> visibleTools)`，给连接时的 [instructions](configuration.md#服务说明instructions) 补充一段使用说明。参数是当前令牌能看到的工具名；本 Provider 的工具一个都不可见时返回 null，避免 AI 读到讲自己用不了的工具的说明。mcp-ops、mcp-data 就是这样提供各自说明的。
 
 ## 调用结果
 

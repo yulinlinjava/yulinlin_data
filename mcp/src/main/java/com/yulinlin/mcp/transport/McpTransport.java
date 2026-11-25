@@ -71,11 +71,11 @@ public class McpTransport {
         }
     }
     /**
-     * 只讲实际开着的东西：按当前令牌在 tools/list 中能看到的工具生成（配置了 yulinlin.mcp.instructions 时原样返回）。
-     * 命令工具默认 enabled=false，没开时文案里不会提它；开了但令牌 scope 不含命令工具时也不会提。
+     * 只讲实际开着的东西：通用说明加上各工具模块按当前令牌可见工具补充的段落（配置了 yulinlin.mcp.instructions 时原样返回）。
+     * 没引入 mcp-ops、或令牌 scope 不含命令工具时，文案里不会提命令工具。
      */
     private String instructions(McpCallContext context) {
-        return McpInstructions.of(properties, tools.list(context).stream().map(t -> String.valueOf(t.get("name"))).toList());
+        return McpInstructions.of(properties, tools.visibleNames(context), tools.instructions(context));
     }
     private ResponseEntity<?> call(JsonNode id,JsonNode params,McpCallContext context) {
         if(!params.path("name").isTextual()) return rpcError(id,-32602,"Tool name required",200);

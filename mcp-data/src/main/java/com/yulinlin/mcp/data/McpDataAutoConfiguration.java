@@ -34,6 +34,12 @@ public class McpDataAutoConfiguration {
         return new DataToolProvider(data, json);
     }
 
+    /** 数据工具的审计字段（数据源组、SQL / 命令开头、dryRun 等），与业务的 McpAuditTargetProvider 互相追加，不会被替换掉。 */
+    @Bean
+    public com.yulinlin.mcp.store.McpAuditTargetProvider mcpDataAuditTargets() {
+        return DataAuditTargets::of;
+    }
+
     static class OnDataConfigured extends SpringBootCondition {
         @Override
         public ConditionOutcome getMatchOutcome(ConditionContext context, AnnotatedTypeMetadata metadata) {

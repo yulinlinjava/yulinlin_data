@@ -266,6 +266,10 @@
         "title": "MCP 令牌管理"
       },
       {
+        "file": "mcp/ops.md",
+        "title": "MCP AI 运维"
+      },
+      {
         "file": "mcp/data.md",
         "title": "MCP 数据工具"
       },

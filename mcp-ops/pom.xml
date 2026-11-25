@@ -1,0 +1,37 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.yulinlin</groupId>
+        <artifactId>data</artifactId>
+        <version>3.0</version>
+    </parent>
+    <artifactId>mcp-ops</artifactId>
+    <description>MCP 可选模块：AI 运维。command_execute / task_* 后台命令与脚本、process_* 进程、server_info；引入后仍需按 yulinlin.mcp.command / process / monitor 开关启用。</description>
+    <dependencies>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>mcp</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>mcp</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>h2</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

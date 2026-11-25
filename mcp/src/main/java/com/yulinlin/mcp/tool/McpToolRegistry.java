@@ -11,7 +11,8 @@ public class McpToolRegistry {
  private final Map<String,Schema> inputs=new HashMap<>(),outputs=new HashMap<>();
  private final SchemaRegistry schemas=SchemaRegistry.withDialect(Dialects.getDraft202012());
  private final McpAccessPolicy policy;
- public McpToolRegistry(Collection<McpToolProvider> providers,McpAccessPolicy policy){this.policy=policy;for(var provider:providers)for(var tool:provider.tools())register(tool);}
+ private final List<McpToolProvider> providers;
+ public McpToolRegistry(Collection<McpToolProvider> providers,McpAccessPolicy policy){this.policy=policy;this.providers=List.copyOf(providers);for(var provider:this.providers)for(var tool:provider.tools())register(tool);}
  // Startup registration only; annotation discovery runs after Spring has created its proxies.
  void register(McpToolDefinition tool){
   if(tools.containsKey(tool.name()))throw new IllegalArgumentException("Duplicate MCP tool: "+tool.name());
@@ -24,6 +25,14 @@ public class McpToolRegistry {
  /** 管理端工具目录：当前账号有权限的工具，供签发令牌时选择范围。 */
  public List<Map<String,Object>> catalog(IUserDetails user){
   return tools.values().stream().filter(t->policy.canInvoke(user,t.name())).map(t->{var m=new LinkedHashMap<String,Object>();m.put("name",t.name());m.put("description",t.description());m.put("readOnly",t.readOnly());return (Map<String,Object>)m;}).toList();
+ }
+ /** 当前令牌可见的工具名。 */
+ public Set<String> visibleNames(McpCallContext context){var names=new LinkedHashSet<String>();for(var t:tools.values())if(allowed(context,t))names.add(t.name());return names;}
+ /** 各 Provider 为当前令牌补充的 instructions 段落（按注册顺序，忽略空白）。 */
+ public List<String> instructions(McpCallContext context){
+  var visible=Collections.unmodifiableSet(visibleNames(context));var parts=new ArrayList<String>();
+  for(var provider:providers){var text=provider.instructions(visible);if(text!=null&&!text.isBlank())parts.add(text.strip());}
+  return parts;
  }
  public boolean contains(String name){return tools.containsKey(name);}
  public boolean readOnly(String name){var tool=tools.get(name);return tool!=null&&tool.readOnly();}

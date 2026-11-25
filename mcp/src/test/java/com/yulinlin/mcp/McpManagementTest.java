@@ -2,7 +2,6 @@ package com.yulinlin.mcp;
 
 import com.yulinlin.mcp.management.*;
 import com.yulinlin.mcp.store.McpAudit;
-import com.yulinlin.mcp.task.McpTasks;
 import com.yulinlin.mcp.token.*;
 import com.yulinlin.mcp.token.McpTokenService.*;
 import com.yulinlin.mcp.tool.*;
@@ -10,7 +9,6 @@ import com.yulinlin.mcp.transport.McpHttpGuard;
 import com.yulinlin.security.auth.*;
 import com.yulinlin.starter.domain.R;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.mock.web.*;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -29,8 +27,7 @@ class McpManagementTest extends McpTestSupport {
         var service = new McpTokenService(env.tokens, id -> new User(id), policy, () -> registry, env.properties.getToken(), listener::on, env.time);
         var security = mock(ISecurityManager.class); when(security.requireUser()).thenReturn(ADMIN);
         var guard = new McpAutoConfiguration().mcpManagementGuard(new McpHttpGuard(properties()));
-        var controller = new McpManagementController(service, env.auth, registry,
-                new DefaultListableBeanFactory().getBeanProvider(McpTasks.class), audit, security, policy, guard);
+        var controller = new McpManagementController(service, env.auth, registry, audit, security, policy, guard);
         return new Setup(env, controller, security, audit);
     }
 

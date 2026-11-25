@@ -8,7 +8,7 @@ JDK 25、Spring Boot 3.5.16、制品 3.0 的自定义 ORM 和工具库。不是 
 
 ## 按任务定位
 
-- 外部 AI 接入（MCP）：先读[快速接入](doc/mcp/integration.md)，再按需读[业务工具](doc/mcp/tools.md)、[令牌管理](doc/mcp/tokens.md)、[数据查询/写入/服务端分析](doc/mcp/data.md)、[配置与系统工具](doc/mcp/configuration.md)、[扩展点](doc/mcp/extension.md)。
+- 外部 AI 接入（MCP）：先读[快速接入](doc/mcp/integration.md)，再按需读[业务工具](doc/mcp/tools.md)、[令牌管理](doc/mcp/tokens.md)、[AI 运维（mcp-ops）](doc/mcp/ops.md)、[数据查询/写入/服务端分析（mcp-data、mcp-script）](doc/mcp/data.md)、[配置与系统工具](doc/mcp/configuration.md)、[扩展点](doc/mcp/extension.md)。
 
 - 接入数据库：[数据源目录](doc/datasources/README.md)、[路由与默认组](doc/datasources/routing.md)、[Schema](doc/datasources/schema.md)。
 - CRUD：[实体](doc/orm/entity.md)、[增删改](doc/orm/crud.md)、[查询条件](doc/orm/query.md)、[原生 SQL](doc/orm/raw-sql.md)、[统计分析](doc/orm/analytics.md)、[全文搜索](doc/orm/search.md)、[Repository](doc/orm/repository.md)。

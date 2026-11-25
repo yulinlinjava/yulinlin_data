@@ -24,19 +24,20 @@ yulinlin:
       max-per-owner: 50            # 每个账号未撤销令牌的上限，0 不限
       cache-seconds: 10            # 令牌全量内存缓存刷新间隔，0 关闭，最大 300
       max-rotate-grace-seconds: 604800  # 轮换宽限期上限，最大 30 天
-    data:                          # 数据工具，配置了 read 或 write 才启用，见 data.md
+    data:                          # 数据工具，需要引入 mcp-data，配置了 read 或 write 才启用，见 data.md
       read: ["*"]                  # 可读的数据源组，"*" 为全部 JDBC / ES 数据源
       write: []                    # 可写的 JDBC 组，开放 data.execute
       max-rows: 1000               # 单次查询返回给 AI 的最大行数，最大 100000
       timeout-seconds: 30          # 单次调用总时长（JDBC 事务超时 / ES 服务端超时），最大 3600
       script-row-budget: 200000    # data.analyze 脚本内所有查询合计最多读取的行数，调大前评估内存
-    command:
+    command:                       # 以下 command / process / monitor 需要引入 mcp-ops，见 ops.md
       enabled: false
       shell: /bin/bash
       max-concurrent: 4            # 每个实例的并发命令数
       max-command-bytes: 65536
       default-timeout-seconds: 3600 # 0 不限时，最大 604800
       max-output-bytes: 8388608    # 每个任务最多保存 8 MiB 输出
+      audit-command: true          # 审计记录命令原文（最多 512 字符）；false 时只记录长度
     process:
       enabled: false
     monitor:
@@ -65,23 +66,18 @@ yulinlin:
 | GET | `/api/mcp` | 登录 | 返回 `enabled`、`manager`、`canUse` |
 | PUT | `/api/mcp` | canManage | `{"enabled":true}` 启用或暂停 MCP |
 | GET | `/api/mcp/tools` | 登录 | 当前账号有权限的工具目录 |
-| GET | `/api/mcp/tasks?page=1` | canManage | 全部任务，每页 30 条 |
-| GET | `/api/mcp/tasks/{id}` | canManage | 任务详情 |
-| GET | `/api/mcp/tasks/{id}/output?offset=0` | canManage | 按字节偏移读取输出，每次最多 64 KiB |
-| POST | `/api/mcp/tasks/{id}/cancel` | canManage + `canInvoke(user,"task_cancel")` | 取消任务 |
-| DELETE | `/api/mcp/tasks/{id}` | canManage | 删除已结束的任务及其输出 |
 | GET | `/api/mcp/audit?type=call&page=1` | canManage | `call` 为工具调用审计，`manage` 为令牌管理审计；每页 50 条 |
 
 - 所有写请求必须带 `X-MCP-Action: mcp-management`，并通过 Origin 和 HTTPS 校验。这个请求头只是防跨站标识，不是登录凭证。
 - MCP 令牌**不能**用来访问管理接口。
-- 命令功能关闭时，任务接口返回 404。
+- 命令任务的管理接口（`/api/mcp/tasks`）由 `mcp-ops` 提供，见 [AI 运维](ops.md#管理接口)。
 - Origin 被拒绝时会记录一条 WARN 日志，包含 `Origin`、`serverName`、`serverPort`、`scheme`，用来排查代理配置。日志不会记录 Authorization。
 
 ### 服务说明（instructions）
 
 客户端连接时会先调用 `initialize`，返回里的 `instructions` 会被客户端放进模型上下文，是 AI 最先看到的一段说明，不需要 AI 知道任何额外接口。
 
-- **不配置**：按当前令牌在 `tools/list` 里能看到的工具自动生成，只会提到实际可用的工具组。例如令牌能用 `data.*` 时，会说明先调 `data.sources` 再调 `data.schema`；能用 `data.execute` 时，会说明先预演再执行；能用命令工具时，会说明用 `task_get` 跟进后台任务。
+- **不配置**：由三部分自动拼成：通用开头（应用名、可用工具数、参数以 `tools/list` 为准）、各工具模块按**当前令牌在 `tools/list` 里能看到的工具**补充的一段、通用结尾（写操作结果不确定时先查询确认）。核心模块不认识任何具体工具，只有引入了的模块、并且令牌能用它的工具时，才会出现对应段落。例如引入 `mcp-data` 且令牌能用 `data.*` 时，会说明先调 `data.sources` 再调 `data.schema`；能用 `data.execute` 时会说明先预演再执行；引入 `mcp-ops` 且令牌能用命令工具时，会说明用 `task_get` 跟进后台任务。业务的 `McpToolProvider` 也可以覆盖 `instructions(visibleTools)` 补充自己的段落，见[显式注册](tools.md#显式注册)。
 - **配置了**：原样返回配置的内容，不再自动生成。适合写业务背景，例如：
 
 ```yaml
@@ -135,47 +131,15 @@ HTTP 状态码：
 
 入口还叠加了 `@ApiLimit(count=180, interval="1m", by=IP)`。反向代理可以再加请求大小和速率限制。
 
-## 可选系统工具
+## 可选工具模块
 
-数据工具（`data.sources`、`data.schema`、`data.query`、`data.execute`、`data.analyze`）单独说明，见[数据工具](data.md)。
+核心模块 `mcp` 自己不带任何工具，工具由可选模块提供，引入后再按配置启用：
 
-以下系统工具默认全部关闭。开启前要确认风险：**命令工具的执行权限等同于应用进程**，不是沙箱。
-
-| 开关 | 工具 |
-| --- | --- |
-| `monitor.enabled` | `server_info` |
-| `command.enabled` | `command_execute`、`task_list`、`task_get`、`task_output`、`task_cancel` |
-| `process.enabled` | `process_list`、`process_stop` |
-
-这些工具都通过 `tools/list` 发布了完整的输入输出 Schema 和逐字段说明，AI 不需要读文档就能使用。它们和业务工具一样受令牌 scope 与 `canInvoke` 控制。建议只给专门的运维令牌授予 `command_execute`。
-
-| 工具 | `structuredContent.data` |
-| --- | --- |
-| `server_info` | CPU、内存、磁盘数组、网卡数组。只反映当前 JVM 所在的服务器或容器，没有实时带宽 |
-| `command_execute` / `task_get` / `task_cancel` | 任务对象：id、状态、时间、PID、退出码、实例、输出是否截断 |
-| `task_list` | 有权访问的任务数组 |
-| `task_output` | `text`、`base64`、`nextOffset`、`hasMore`、`truncated` |
-| `process_list` | `items` 进程数组，以及 `page`、`totalPages`、`total`、`sampledAt`、`truncated` |
-| `process_stop` | `pid`、`state`（requested / exited）、`force` |
-
-### 后台命令
-
-```json
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"command_execute","arguments":{"command":"date; uptime","cwd":"/tmp","timeoutSeconds":30,"requestId":"inspect-001"}}}
-```
-
-- 默认执行器只支持 Linux，通过配置的 shell `-c` 执行。工作目录必须是已存在的绝对路径，stdin 关闭，没有 PTY。
-- 调用会立即返回任务，从 `data.id` 获取任务 ID，再用 `task_get` / `task_output` 跟进。HTTP 断开不会取消任务。
-- `requestId` 在同一应用、同一令牌内唯一。相同编号且参数相同会返回已有任务，参数不同会返回 409 冲突。任务记录先落库再启动进程，多个实例并发提交也不会重复执行。
-- 任务提交时和进程启动前都会重新检查令牌和权限。令牌在这期间被撤销、过期或缩小范围，任务会失败，不会启动进程。已经在运行的进程不会因为令牌失效被终止。
-- 状态：`queued`、`running`、`cancelling`、`succeeded`、`failed`、`cancelled`、`timed_out`、`unknown`。应用重启后，本实例原来活跃的任务会被标为 `unknown`，不会重跑，也不会按旧 PID 杀进程。
-- 输出保存在 `data-directory/application-id/instance-id/output`。超过上限后会继续读取并丢弃，同时标记 `truncated`。`offset` 是字节偏移，要无损拼接请使用 `base64`。
-- 非管理员只能看到自己令牌提交的任务。读取输出、取消、删除必须访问任务所在的实例。
-
-### 进程
-
-- `process_stop` 必须原样传入 `process_list` 返回的 `stopIdentity` 作为 `identity`，并且 `confirm: true`。这样可以防止 PID 被复用后误杀其他进程。PID 1、当前进程及其祖先进程受保护。
-- 取消任务会尝试终止可见的子进程；脱离进程树的服务需要单独处理。
+| 模块 | 工具 | 启用配置 | 说明 |
+| --- | --- | --- | --- |
+| `mcp-ops` | `command_execute`、`task_*`、`process_*`、`server_info` | `command.enabled`、`process.enabled`、`monitor.enabled` | [AI 运维](ops.md) |
+| `mcp-data` | `data.sources`、`data.schema`、`data.query`、`data.execute` | `data.read` / `data.write` | [数据工具](data.md) |
+| `mcp-script` | `data.analyze` | 引入即启用（需要 `mcp-data` 已启用） | [数据工具](data.md#dataanalyzemcp-script) |
 
 ## 保留与容量
 

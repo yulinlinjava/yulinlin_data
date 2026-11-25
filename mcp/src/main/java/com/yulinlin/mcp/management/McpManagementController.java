@@ -2,7 +2,6 @@ package com.yulinlin.mcp.management;
 import com.yulinlin.mcp.*;
 import com.yulinlin.mcp.auth.*;
 import com.yulinlin.mcp.store.*;
-import com.yulinlin.mcp.task.McpTasks;
 import com.yulinlin.mcp.token.*;
 import com.yulinlin.mcp.token.McpTokenService.*;
 import com.yulinlin.mcp.tool.McpToolRegistry;
@@ -11,9 +10,7 @@ import com.yulinlin.security.annotation.*;
 import com.yulinlin.security.limit.LimitBy;
 import com.yulinlin.starter.domain.R;
 import jakarta.servlet.http.*;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.*;
-import java.io.IOException;
 import java.util.*;
 
 /**
@@ -23,13 +20,12 @@ import java.util.*;
 @RestController @RequestMapping("${yulinlin.mcp.management-path:/api/mcp}") @ApiLogin @ApiCrypto(false)
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(prefix="yulinlin.mcp",name="enabled",havingValue="true")
 public class McpManagementController {
- private final McpTokenService tokens;private final McpAuthentication authentication;private final McpToolRegistry tools;private final McpTasks tasks;private final McpAuditService audit;private final ISecurityManager security;private final McpAccessPolicy policy;private final McpManagementGuard guard;
- public McpManagementController(McpTokenService tokens,McpAuthentication authentication,McpToolRegistry tools,ObjectProvider<McpTasks> tasks,McpAuditService audit,ISecurityManager security,McpAccessPolicy policy,McpManagementGuard guard){this.tokens=tokens;this.authentication=authentication;this.tools=tools;this.tasks=tasks.getIfAvailable();this.audit=audit;this.security=security;this.policy=policy;this.guard=guard;}
+ private final McpTokenService tokens;private final McpAuthentication authentication;private final McpToolRegistry tools;private final McpAuditService audit;private final ISecurityManager security;private final McpAccessPolicy policy;private final McpManagementGuard guard;
+ public McpManagementController(McpTokenService tokens,McpAuthentication authentication,McpToolRegistry tools,McpAuditService audit,ISecurityManager security,McpAccessPolicy policy,McpManagementGuard guard){this.tokens=tokens;this.authentication=authentication;this.tools=tools;this.audit=audit;this.security=security;this.policy=policy;this.guard=guard;}
 
  private IUserDetails manage(){var user=security.requireUser();if(!policy.canManage(user))throw new McpException(403,"无 MCP 管理权限");return user;}
  private Actor actor(HttpServletRequest request){return new Actor(security.requireUser(),request.getRemoteAddr());}
  private Actor writer(HttpServletRequest request){var actor=actor(request);guard.checkWrite(request);return actor;}
- private McpTasks tasks(){if(tasks==null)throw new McpException(404,"命令工具未开启");return tasks;}
  private static void noStore(HttpServletResponse response){response.setHeader("Cache-Control","no-store");}
 
  // ------------------------------------------------------------ 全局
@@ -72,13 +68,8 @@ public class McpManagementController {
   return R.ok(result);
  }
 
- // ------------------------------------------------------------ 任务与审计（管理员）
+ // ------------------------------------------------------------ 审计（管理员）；命令任务接口在 mcp-ops 模块
 
- @GetMapping("/tasks") public R<?> tasks(@RequestParam(defaultValue="1")int page){manage();return R.ok(tasks().list(page));}
- @GetMapping("/tasks/{id}") public R<?> task(@PathVariable String id){manage();return R.ok(tasks().get(id));}
- @GetMapping("/tasks/{id}/output") public R<?> output(@PathVariable String id,@RequestParam(defaultValue="0")long offset)throws IOException{manage();return R.ok(tasks().output(id,offset,65536));}
- @PostMapping("/tasks/{id}/cancel") public R<?> cancel(@PathVariable String id,HttpServletRequest request){var user=manage();guard.checkWrite(request);if(!policy.canInvoke(user,"task_cancel"))throw new McpException(403,"无 task_cancel 权限");return R.ok(tasks().cancel(id));}
- @DeleteMapping("/tasks/{id}") public R<?> deleteTask(@PathVariable String id,HttpServletRequest request)throws IOException{manage();guard.checkWrite(request);tasks().delete(id);return R.ok();}
  /** type=call 工具调用审计（默认），type=manage 令牌管理审计。 */
  @GetMapping("/audit") public R<?> audit(@RequestParam(defaultValue="call")String type,@RequestParam(defaultValue="1")int page){
   manage();

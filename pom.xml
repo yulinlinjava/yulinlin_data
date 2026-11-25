@@ -34,6 +34,8 @@
         <module>security-sa-token</module>
         <module>monitor</module>
         <module>mcp</module>
+        <module>mcp-ops</module>
+        <module>mcp-data</module>
         <module>mcp-script</module>
 </modules>
 

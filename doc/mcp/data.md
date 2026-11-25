@@ -32,8 +32,20 @@
 
 ## 接入
 
-1. 准备数据源。**强烈建议给 AI 读的数据源使用只读账号**，这是唯一可靠的数据保护手段，模块的语句检查只是兜底。数据源配置见[多数据源](../datasources/routing.md)。
-2. 配置：
+前提：已按[快速接入](integration.md)完成核心模块的接入。
+
+1. 引入依赖：
+
+```xml
+<dependency>
+    <groupId>com.yulinlin</groupId>
+    <artifactId>mcp-data</artifactId>
+    <version>3.0</version>
+</dependency>
+```
+
+2. 准备数据源。**强烈建议给 AI 读的数据源使用只读账号**，这是唯一可靠的数据保护手段，模块的语句检查只是兜底。数据源配置见[多数据源](../datasources/routing.md)。
+3. 配置：
 
 ```yaml
 yulinlin:
@@ -50,7 +62,7 @@ yulinlin:
 
 只开放部分数据源时写组名：`read: [report, search-es]`。
 
-3. 需要服务端分析时，再引入可选模块（引入即启用 `data.analyze`）：
+4. 需要服务端分析时，再引入可选模块（引入即启用 `data.analyze`，它依赖 `mcp-data`）：
 
 ```xml
 <dependency>
@@ -60,7 +72,7 @@ yulinlin:
 </dependency>
 ```
 
-4. 在 `McpAccessPolicy.canInvoke` 中给对应账号开放这些工具名，并签发带相应范围的令牌，例如：
+5. 在 `McpAccessPolicy.canInvoke` 中给对应账号开放这些工具名，并签发带相应范围的令牌，例如：
 
 | 使用者 | 令牌范围 |
 | --- | --- |
@@ -71,7 +83,7 @@ yulinlin:
 
 - `read`、`write` 中写明的组必须存在，类型必须是 JDBC（MySQL、PostgreSQL、H2、SQLite 等）或 Elasticsearch，否则启动失败。`"*"` 会跳过不支持的数据源类型。
 - `write` 只能写 JDBC 组，不支持 `*`。
-- 没有配置 `read` 和 `write` 时，不注册任何数据工具。
+- 引入了 `mcp-data` 但没有配置 `read` 和 `write` 时，不注册任何数据工具。
 
 ## 安全机制
 

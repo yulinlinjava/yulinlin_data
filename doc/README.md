@@ -19,7 +19,7 @@
 | 数据源同步与历史补齐 | [增量同步](write-sync/incremental.md) → [人工全量与续传](write-sync/full.md) |
 | 接入登录、权限或接口加密 | [模块选型](security/modules.md) → [统一登录与自定义认证](security/user.md#安全管理器) → [JWT](security/jwt.md) / [Sa-Token](security/sa-token.md)；按需读[权限](security/authorization.md)、[加密](security/crypto.md)、[限流](security/rate-limit.md) |
 | 替换 Token 或接入外部安全框架 | [Token 编解码](security/token-codec.md) · [自定义管理器与拦截器](security/extension.md) |
-| 给外部 AI 开放业务或服务器工具 | [MCP 快速接入](mcp/integration.md) → [业务工具](mcp/tools.md) → [令牌管理](mcp/tokens.md)；让 AI 读取项目数据或做分析读 [数据工具](mcp/data.md)；按需读[配置与系统工具](mcp/configuration.md)、[扩展点](mcp/extension.md) |
+| 给外部 AI 开放业务或服务器工具 | [MCP 快速接入](mcp/integration.md) → [业务工具](mcp/tools.md) → [令牌管理](mcp/tokens.md)；让 AI 运维服务器读 [AI 运维](mcp/ops.md)，读取项目数据或做分析读 [数据工具](mcp/data.md)；按需读[配置与系统工具](mcp/configuration.md)、[扩展点](mcp/extension.md) |
 | 查工具类使用方式 | [HTTP](tools/http.md) · [反射复制与深克隆](tools/reflection.md) · [lang 类型目录](tools/catalog.md) |
 | 找最佳实践案例 | [完整 CRUD](practice/crud-example.md) · [Admin RBAC 与 JWT](practice/rbac.md) · [开发规范](practice/conventions.md) |
 | 排查慢 SQL、事务或选本地库 | [日志](operations/sql-log.md) · [监控页面](operations/monitor.md) · [SQLite/H2 性能报告](operations/local-benchmark.md) |

@@ -8,6 +8,7 @@
         <version>3.0</version>
     </parent>
     <artifactId>mcp</artifactId>
+    <description>MCP 核心：协议入口、令牌、@McpTool 与工具注册、审计、管理接口。本身不带任何工具；运维工具见 mcp-ops，数据工具见 mcp-data。</description>
     <dependencies>
         <dependency>
             <groupId>io.swagger.core.v3</groupId>
@@ -27,13 +28,6 @@
             <artifactId>starter</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- 数据工具读取 JDBC 元数据时使用；只用 ES 的应用不会引入 -->
-        <dependency>
-            <groupId>com.yulinlin</groupId>
-            <artifactId>jdbc</artifactId>
-            <version>${project.version}</version>
-            <optional>true</optional>
-        </dependency>
         <dependency>
             <groupId>com.networknt</groupId>
             <artifactId>json-schema-validator</artifactId>
@@ -51,4 +45,18 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+    <build>
+        <plugins>
+            <!-- 测试支持类（McpTestSupport、OrmTestSupport）以 test-jar 提供给 mcp-ops、mcp-data 的测试复用 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals><goal>test-jar</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

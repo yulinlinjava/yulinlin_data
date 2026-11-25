@@ -2,7 +2,6 @@ package com.yulinlin.mcp;
 
 import com.yulinlin.mcp.auth.*;
 import com.yulinlin.mcp.store.McpStore;
-import com.yulinlin.mcp.task.CommandExecutor;
 import com.yulinlin.mcp.token.*;
 import com.yulinlin.mcp.tool.*;
 import org.junit.jupiter.api.Test;
@@ -24,11 +23,11 @@ class McpConfigurationTest extends McpTestSupport {
     }
     @Test void disabledModuleRegistersNoMcpServices() {
         base.run(c->{assertThat(c).hasNotFailed().doesNotHaveBean(McpTokenService.class).doesNotHaveBean(McpAuthentication.class)
-            .doesNotHaveBean(CommandExecutor.class).doesNotHaveBean(McpMaintenance.class);});
+            .doesNotHaveBean(McpMaintenance.class);});
     }
     @Test void customStoreIsUsedAndOptionalSystemToolsRemainOff() {
         enabled().withBean(McpAccessPolicy.class,Policy::new).run(c->{
-            assertThat(c).hasNotFailed().hasSingleBean(McpStore.class).doesNotHaveBean(CommandExecutor.class)
+            assertThat(c).hasNotFailed().hasSingleBean(McpStore.class)
                 .hasSingleBean(TokenAuthenticator.class).hasSingleBean(McpTokenAuditListener.class);
             assertThat(c.getBean(McpStore.class)).isInstanceOf(MemoryStore.class);
             assertThat(c.getBean(McpToolRegistry.class).list(ctx("id"))).isEmpty();
@@ -38,14 +37,13 @@ class McpConfigurationTest extends McpTestSupport {
     @Test void missingPolicyFailsInsteadOfGrantingAnonymousAccess() {
         enabled().run(c->assertThat(c).hasFailed());
     }
-    @Test void allOptionalToolsRegisterAndCompileSchemasWithoutStartingCommands() {
+    /** 核心模块自己不带任何工具：没引入 mcp-ops 时，即使打开命令开关也不会出现命令工具。 */
+    @Test void coreRegistersNoToolsEvenWhenOpsSwitchesAreOn() {
         enabled().withBean(McpAccessPolicy.class,Policy::new)
-            .withBean(CommandExecutor.class,()->(command,directory)->{throw new AssertionError("must not execute during startup");})
             .withPropertyValues("yulinlin.mcp.command.enabled=true","yulinlin.mcp.process.enabled=true","yulinlin.mcp.monitor.enabled=true")
             .run(c->{
                 assertThat(c).hasNotFailed();
-                assertThat(c.getBean(McpToolRegistry.class).list(ctx("id")))
-                    .extracting(t->t.get("name")).containsExactly("server_info","command_execute","task_list","task_get","task_output","task_cancel","process_list","process_stop");
+                assertThat(c.getBean(McpToolRegistry.class).list(ctx("id"))).isEmpty();
             });
     }
     @Test void invalidInstanceIdentityFailsStartup() {

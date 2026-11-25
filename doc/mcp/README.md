@@ -10,7 +10,8 @@
 | --- | --- |
 | 第一次把 MCP 接入一个 Spring Boot 应用 | [快速接入](integration.md)（必读，按步骤做） |
 | 把业务方法暴露成 AI 可调用的工具 | [业务工具](tools.md) |
-| 让 AI 读取项目数据（JDBC / ES）、修改数据、在服务端做复杂分析 | [数据工具](data.md) |
+| 让 AI 运维服务器：执行命令和 sh 脚本、看进程（`mcp-ops`） | [AI 运维](ops.md) |
+| 让 AI 读取项目数据（JDBC / ES）、修改数据、在服务端做复杂分析（`mcp-data`、`mcp-script`） | [数据工具](data.md) |
 | 签发、修改、轮换、撤销令牌，限制令牌能做什么 | [令牌管理](tokens.md) |
 | 查配置项、管理接口、客户端协议、命令和进程工具 | [配置与系统工具](configuration.md) |
 | 替换存储、审计、认证方式等默认实现 | [扩展点](extension.md) |

@@ -2,7 +2,18 @@
 
 [文档首页](../README.md) / [MCP](README.md)
 
-按顺序完成以下 8 步。前 6 步是代码和配置，后 2 步是运行时操作。
+业务项目引入 MCP、做一些配置，外部 AI 就能通过 MCP 调用这个应用。先选场景：
+
+| 想让 AI 做什么 | 引入 | 读完本页后再读 |
+| --- | --- | --- |
+| 调用业务方法（查订单、改状态等） | `mcp` | [业务工具](tools.md) |
+| 运维这台服务器：执行命令和 sh 脚本、看进程、看服务器信息 | `mcp` + `mcp-ops` | [AI 运维](ops.md) |
+| 读取项目数据（JDBC / ES）、修改数据 | `mcp` + `mcp-data` | [数据工具](data.md) |
+| 在服务端做大数据量、跨表跨库的分析 | `mcp` + `mcp-data` + `mcp-script` | [数据工具](data.md#dataanalyzemcp-script) |
+
+三类能力可以同时引入。核心模块 `mcp` 本身不带任何工具，工具都来自你写的 `@McpTool` 或上面的可选模块。
+
+无论哪个场景，都先按顺序完成以下 8 步。前 6 步是代码和配置，后 2 步是运行时操作。
 
 ## 前提
 
@@ -21,6 +32,8 @@
 ```
 
 模块依赖公共的 `security` 和 `starter`，不会选择具体的登录实现。
+
+按场景再加 `mcp-ops`、`mcp-data`、`mcp-script`（同一版本），各自的配置见对应文档。
 
 ## 2. 最小配置
 
@@ -175,5 +188,5 @@ Authorization: Bearer ylmcp_xxxxxxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 - [ ] 用户 ID 不稳定时提供了 `McpIdentityProvider`
 - [ ] 只放行了 `/mcp`，`/api/mcp/**` 仍然需要登录和 CSRF
 - [ ] 每个工具内部都做了数据权限判断
-- [ ] 命令和进程工具保持关闭，除非确实需要（见[系统工具](configuration.md#可选系统工具)）
+- [ ] 只引入需要的可选模块；引入 `mcp-ops` 时只在需要的机器上打开命令开关，并按[安全建议](ops.md#安全建议)使用专门的系统账号和运维令牌
 - [ ] 运行开关已打开，令牌已签发，客户端已配置

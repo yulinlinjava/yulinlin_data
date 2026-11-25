@@ -21,7 +21,9 @@ public class McpProperties {
  private Token token=new Token();
  private DataAccess data=new DataAccess();
  private Command command=new Command();
+ /** process_list / process_stop（mcp-ops 模块） */
  private Feature process=new Feature();
+ /** server_info（mcp-ops 模块） */
  private Feature monitor=new Feature();
  @Data public static class Feature { private boolean enabled; }
  /** 令牌策略 */
@@ -35,7 +37,7 @@ public class McpProperties {
   /** 轮换时旧令牌宽限期上限（秒） */
   private int maxRotateGraceSeconds=7*86400;
  }
- /** 数据工具（data.*）。配置了 read 或 write 才启用；见 doc/mcp/data.md */
+ /** 数据工具（mcp-data 模块，data.*）。配置了 read 或 write 才启用；见 doc/mcp/data.md */
  @Data public static class DataAccess {
   /** 可读的数据源组；"*" 表示项目中全部 JDBC / Elasticsearch 数据源。强烈建议使用只读账号 */
   private List<String> read=new ArrayList<>();
@@ -48,6 +50,7 @@ public class McpProperties {
   /** data.analyze 脚本内所有查询合计最多读取的行数，超出报错（不截断）。行数据会整批放进内存，调大前先评估堆内存 */
   private int scriptRowBudget=200_000;
  }
+ /** 命令工具（mcp-ops 模块）。引入 mcp-ops 后仍需 enabled=true 才注册 */
  @Data public static class Command {
   private boolean enabled;
   private String shell="/bin/bash";
@@ -55,6 +58,8 @@ public class McpProperties {
   private int maxCommandBytes=65536;
   private int defaultTimeoutSeconds=3600;
   private long maxOutputBytes=8388608;
+  /** 审计中记录 command_execute 的命令原文（最多 512 字符）；false 时只记录命令长度 */
+  private boolean auditCommand=true;
  }
  public void validate(){
   if(applicationId==null||!applicationId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("yulinlin.mcp.application-id must be stable and contain 1-64 letters/digits/_/-");

@@ -1,0 +1,44 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.yulinlin</groupId>
+        <artifactId>data</artifactId>
+        <version>3.0</version>
+    </parent>
+    <artifactId>mcp-data</artifactId>
+    <description>MCP 可选模块：AI 数据访问。data.sources / data.schema / data.query / data.execute，支持项目中的 JDBC 与 Elasticsearch 数据源；配置 yulinlin.mcp.data.read 或 write 后启用。</description>
+    <dependencies>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>mcp</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- 读取 JDBC 元数据时使用；只用 ES 的应用不会引入 -->
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>jdbc</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>mcp</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yulinlin</groupId>
+            <artifactId>h2</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

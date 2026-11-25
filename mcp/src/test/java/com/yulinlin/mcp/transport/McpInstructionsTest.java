@@ -15,30 +15,25 @@ class McpInstructionsTest {
     }
 
     @Test
-    void generatedTextOnlyMentionsVisibleToolGroups() {
-        String text = McpInstructions.of(properties(), List.of("order_query", "data.sources", "data.schema", "data.query"));
-        assertTrue(text.contains("demo"));
-        assertTrue(text.contains("data.sources"));
-        assertFalse(text.contains("dryRun"), "没有 data.execute 时不提写入流程");
-        assertFalse(text.contains("command_execute"));
+    void generatedTextIsGenericHeaderPlusModuleSectionsPlusFooter() {
+        String text = McpInstructions.of(properties(), List.of("order_query", "data.sources"), List.of("数据工具：先调用 data.sources。", "  "));
+        var lines = text.split("\n");
+        assertEquals(3, lines.length, "空白段落被忽略");
+        assertTrue(lines[0].contains("demo") && lines[0].contains("2 个工具"));
+        assertEquals("数据工具：先调用 data.sources。", lines[1]);
+        assertTrue(lines[2].contains("不要自动重试"));
 
-        String full = McpInstructions.of(properties(), List.of("data.sources", "data.execute", "data.analyze", "command_execute", "process_stop"));
-        assertTrue(full.contains("dryRun=true"));
-        assertTrue(full.contains("data.analyze"));
-        assertTrue(full.contains("task_get"));
-        assertTrue(full.contains("stopIdentity"));
-
-        String plain = McpInstructions.of(properties(), List.of("order_query"));
-        assertFalse(plain.contains("data."));
-        assertFalse(plain.contains("task_get"));
+        String bare = McpInstructions.of(properties(), List.of("order_query"), List.of());
+        assertFalse(bare.contains("data."));
+        assertFalse(bare.contains("command_execute"), "核心模块不提任何具体的可选工具");
     }
 
     @Test
     void configuredInstructionsReplaceGeneratedText() {
         var p = properties();
         p.setInstructions("  订单系统。金额单位为分。  ");
-        assertEquals("订单系统。金额单位为分。", McpInstructions.of(p, List.of("data.sources")));
+        assertEquals("订单系统。金额单位为分。", McpInstructions.of(p, List.of("data.sources"), List.of("数据工具")));
         p.setInstructions("   ");
-        assertTrue(McpInstructions.of(p, List.of()).contains("demo"), "空白配置按未配置处理");
+        assertTrue(McpInstructions.of(p, List.of(), List.of()).contains("demo"), "空白配置按未配置处理");
     }
 }

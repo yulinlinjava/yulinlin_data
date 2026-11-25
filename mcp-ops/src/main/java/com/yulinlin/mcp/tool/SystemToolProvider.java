@@ -13,6 +13,17 @@ public class SystemToolProvider implements McpToolProvider {
  private final List<McpToolDefinition> definitions=new ArrayList<>();
  public SystemToolProvider(McpProperties p,McpTasks tasks,McpAccessPolicy policy,ProcessOverviewService processes,ProcessControlService controls,ObjectMapper json){this.properties=p;this.tasks=tasks;this.policy=policy;this.processes=processes;this.controls=controls;this.json=json;register();}
  public Collection<McpToolDefinition> tools(){return List.copyOf(definitions);}
+ /** 只讲当前令牌能用的运维工具；一个都不可见时不补充说明。 */
+ @Override public String instructions(Set<String> visible){
+  var parts=new ArrayList<String>();
+  if(visible.contains("command_execute"))parts.add("运维命令：command_execute 在这台服务器上用 shell 执行命令或多行脚本（如 bash /opt/scripts/deploy.sh），立即返回后台任务 id，用 task_get / task_output 跟进结果；"
+    +"cwd 用服务器上的绝对路径；不支持交互式命令（用 top -b -n 1 这类非交互写法）；变更类命令重试时带同一个 requestId，避免重复执行。命令以应用进程的系统账号执行。");
+  else if(visible.stream().anyMatch(t->t.startsWith("task_")))parts.add("任务工具：用 task_get / task_output 查看后台命令任务的状态和输出。");
+  if(visible.contains("process_stop"))parts.add("进程：process_stop 必须原样使用 process_list 返回的 stopIdentity，并传 confirm=true；systemd / Docker 管理的服务请用服务管理命令停止。");
+  else if(visible.contains("process_list"))parts.add("进程：process_list 查看进程的 CPU、内存和启动参数。");
+  if(visible.contains("server_info"))parts.add("server_info 返回这台服务器 / 容器的系统、CPU、内存、磁盘和网卡信息。");
+  return parts.isEmpty()?null:String.join("\n",parts);
+ }
  private void register(){
         add("server_info", "当前服务器/容器的操作系统、Java、CPU、内存、磁盘及网卡。不是远程宿主机代理。", true, Map.of(), List.of());
         add("command_execute", "Linux 自定义命令/多行脚本，立即返回后台 taskId（id）。cwd 是服务器绝对路径，权限等同 Java 进程；不受业务文件目录限制。默认超时按配置，0 不限时。无需加 & 或 nohup；非交互安装请使用相应非交互参数。长期服务建议 systemd。建议提供唯一 requestId，重试同一命令复用同一编号以免重复启动（任务记录保留期间有效）。", false,

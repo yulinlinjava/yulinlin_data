@@ -9,21 +9,20 @@ import java.util.*;
 public class McpAudit implements McpAuditService {
     private final McpStore store; private final McpProperties properties;
     private final McpAuditTargetProvider targets;
-    public McpAudit(McpStore store,McpProperties properties) { this(store, properties, (tool, args) -> Map.of()); }
+    public McpAudit(McpStore store,McpProperties properties) { this(store, properties, List.of()); }
+    public McpAudit(McpStore store,McpProperties properties,McpAuditTargetProvider targets) { this(store, properties, List.of(targets)); }
     /**
-     * @param targets 业务追加的目标字段。框架内置的数据工具字段（{@link com.yulinlin.mcp.data.DataAuditTargets}）总是先记录，
-     *                业务字段追加在后面，同名时以业务为准；提供业务 Provider 不会让数据工具的审计字段消失。
+     * @param providers 全部目标字段提供者，按顺序合并，同名字段后者覆盖。可选模块（mcp-ops、mcp-data）和业务各自注册，
+     *                  互相追加、不互相替换：业务提供自己的 Provider 不会让模块记录的字段消失。
      */
-    public McpAudit(McpStore store,McpProperties properties,McpAuditTargetProvider targets) {
-        this.store=store;this.properties=properties;this.targets=targets;
+    public McpAudit(McpStore store,McpProperties properties,List<McpAuditTargetProvider> providers) {
+        this.store=store;this.properties=properties;var all=List.copyOf(providers);
+        this.targets=(tool,args)->{var merged=new LinkedHashMap<String,String>();for(var p:all){var m=p.target(tool,args);if(m!=null)merged.putAll(m);}return merged;};
     }
     public Entry begin(McpPrincipal principal, String tool, JsonNode args) {
         var target = new LinkedHashMap<String,String>();
         // Do not copy command text, file content, base64 uploads, tokens or tool output into the audit table.
-        var fields = new LinkedHashMap<String,String>(com.yulinlin.mcp.data.DataAuditTargets.of(tool, args));
-        var extra = targets.target(tool, args.deepCopy());
-        if (extra != null) fields.putAll(extra);
-        fields.entrySet().stream().limit(16).forEach(entry -> {
+        targets.target(tool, args.deepCopy()).entrySet().stream().limit(16).forEach(entry -> {
             String key=Objects.requireNonNull(entry.getKey()), value=Objects.requireNonNull(entry.getValue());
             target.put(key.substring(0,Math.min(key.length(),128)),value.substring(0,Math.min(value.length(),512)));
         });
